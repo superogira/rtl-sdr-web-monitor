@@ -133,6 +133,16 @@ const App = {
             }
             this.updateFreqDisplay();
         }
+        // Sync channel bandwidth button active state
+        if (data.channel_bw !== undefined) {
+            this._channelBw = data.channel_bw;
+            const bwButtons = document.getElementById('bw-buttons');
+            if (bwButtons) {
+                bwButtons.querySelectorAll('.step-btn').forEach(b =>
+                    b.classList.toggle('active', parseInt(b.dataset.bw) === data.channel_bw)
+                );
+            }
+        }
         // Sync gain slider
         if (data.gain !== undefined) {
             const gs = document.getElementById('gain-slider');
@@ -229,6 +239,7 @@ const App = {
     // === Radio Controls ===
     _stepSize: 25000,  // Default step: 25 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
+    _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
 
     setupRadioControls() {
         // Fine tune (step size)
@@ -265,6 +276,25 @@ const App = {
                 srateButtons.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.setSampleRate(newRate);
+            });
+        }
+
+        // Channel bandwidth selector
+        const bwButtons = document.getElementById('bw-buttons');
+        if (bwButtons) {
+            bwButtons.addEventListener('click', async (e) => {
+                const btn = e.target.closest('.step-btn');
+                if (!btn) return;
+                const newBw = parseInt(btn.dataset.bw);
+                bwButtons.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this._channelBw = newBw;
+                try {
+                    await API.sdr.setBandwidth(newBw);
+                    console.log(`🎛️ Channel BW set to ${newBw/1e3} kHz`);
+                } catch (err) {
+                    console.error('Set bandwidth failed:', err);
+                }
             });
         }
 

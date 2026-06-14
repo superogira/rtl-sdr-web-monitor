@@ -29,11 +29,16 @@ _DEFAULT_SDR_SETTINGS = {
     "frequency": settings.RTL_TCP_CENTER_FREQ,
     "sample_rate": settings.RTL_TCP_SAMPLE_RATE,
     "gain": settings.RTL_TCP_GAIN,
+    "freq_correction_ppm": settings.RTL_TCP_FREQ_CORRECTION_PPM,
 }
 
 
 class SDRManager:
     """Manages SDR operations: connection, streaming, demodulation, recording."""
+
+    # Channel bandwidth (Hz) — user-adjustable via /api/sdr/bandwidth.
+    # Default 12kHz = NBFM voice. Wider values for WBFM/broadcast.
+    _DEFAULT_CHANNEL_BW = 12000
 
     def __init__(self):
         persisted = self._load_persisted_settings()
@@ -42,6 +47,7 @@ class SDRManager:
         self.client._frequency = persisted["frequency"]
         self.client._sample_rate = persisted["sample_rate"]
         self.client._gain = persisted["gain"]
+        self.client._ppm = persisted["freq_correction_ppm"]
         self.mode = DemodMode.FM
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
         self.is_streaming = False
@@ -62,6 +68,7 @@ class SDRManager:
         self._spectrum_prev: Optional[np.ndarray] = None  # For exponential averaging
         self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
+        self._channel_bw: int = self._DEFAULT_CHANNEL_BW
 
     @property
     def signal_level(self) -> float:
@@ -78,6 +85,7 @@ class SDRManager:
             "squelch_level": self._squelch_level,
             "auto_record": self._auto_record,
             "fft_bins": self._fft_bins,
+            "channel_bw": self._channel_bw,
             "listeners": audio_broadcaster.listener_count,
         }
 
@@ -103,6 +111,8 @@ class SDRManager:
                     data["sample_rate"] = int(saved["sample_rate"])
                 if isinstance(saved.get("gain"), (int, str)):
                     data["gain"] = int(saved["gain"])
+                if isinstance(saved.get("freq_correction_ppm"), (int, str)):
+                    data["freq_correction_ppm"] = int(saved["freq_correction_ppm"])
         except Exception as e:
             logger.warning(f"Failed to load SDR settings file, using defaults: {e}")
         return data
@@ -117,6 +127,7 @@ class SDRManager:
                 "frequency": self.client._frequency,
                 "sample_rate": self.client._sample_rate,
                 "gain": self.client._gain,
+                "freq_correction_ppm": self.client._ppm,
             }
             with open(SDR_SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
@@ -173,6 +184,23 @@ class SDRManager:
         """Set gain."""
         await self.client.set_gain(gain_db)
         self._save_persisted_settings()
+
+    async def set_freq_correction(self, ppm: int):
+        """Set frequency correction in PPM."""
+        await self.client.set_freq_correction(ppm)
+        self._save_persisted_settings()
+
+    def set_channel_bw(self, bw_hz: int):
+        """Set channel bandwidth in Hz for signal level computation.
+
+        Higher bandwidth = wider filter (e.g. WBFM broadcast 200kHz).
+        Lower bandwidth = narrower filter (e.g. NBFM voice 6kHz).
+        Affects compute_signal_level() channel isolation.
+        """
+        if not (1000 <= bw_hz <= 500000):
+            raise ValueError(f"Invalid channel BW: {bw_hz}. Must be 1kHz–500kHz")
+        self._channel_bw = bw_hz
+        logger.info(f"Channel BW set to {bw_hz} Hz ({bw_hz/1e3:.0f} kHz)")
 
     async def set_mode(self, mode: str):
         """Set demodulation mode."""
@@ -281,6 +309,7 @@ class SDRManager:
                         iq_data,
                         sample_rate=self.client._sample_rate,
                         mode=self.mode,
+                        channel_bw=self._channel_bw,
                     )
 
                     # Demodulate FIRST (audio must stay realtime; FFT can wait)

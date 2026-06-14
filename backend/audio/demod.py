@@ -228,7 +228,8 @@ _CHANNEL_BW = {
 
 
 def compute_channel_power(iq: np.ndarray, sample_rate: float,
-                          mode: DemodMode = DemodMode.FM) -> float:
+                          mode: DemodMode = DemodMode.FM,
+                          channel_bw: int = 0) -> float:
     """Compute signal power (dB) for ONLY the tuned channel bandwidth.
 
     This isolates the signal of interest (centered at DC after IQ conversion)
@@ -242,7 +243,8 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     Args:
         iq: complex IQ samples (already normalized)
         sample_rate: IQ sample rate in Hz
-        mode: demodulation mode (determines channel bandwidth)
+        mode: demodulation mode (determines default channel bandwidth)
+        channel_bw: override channel bandwidth in Hz (0 = use mode default)
 
     Returns:
         Channel power in dB (negative value)
@@ -251,7 +253,11 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     if n < 64:
         return -120.0
 
-    bw = _CHANNEL_BW.get(mode.value if hasattr(mode, "value") else str(mode), 12000)
+    # Use override bandwidth if provided (>0), otherwise fall back to mode default
+    if channel_bw and channel_bw > 0:
+        bw = channel_bw
+    else:
+        bw = _CHANNEL_BW.get(mode.value if hasattr(mode, "value") else str(mode), 12000)
 
     # Use a power-of-2 FFT slice for speed (cap at 4096 for realtime safety)
     fft_size = 1 << int(np.floor(np.log2(min(n, 4096))))
@@ -288,13 +294,15 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
 
 
 def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
-                         mode: DemodMode = DemodMode.FM) -> float:
+                         mode: DemodMode = DemodMode.FM,
+                         channel_bw: int = 0) -> float:
     """Compute signal power level in dB for the active channel only.
 
     Args:
         iq_bytes: Raw IQ data (uint8 interleaved I/Q)
         sample_rate: IQ sample rate in Hz
-        mode: Demodulation mode (determines channel bandwidth)
+        mode: Demodulation mode (determines default channel bandwidth)
+        channel_bw: override channel bandwidth in Hz (0 = use mode default)
 
     Returns:
         Signal level in dB (negative value) — channel-only power
@@ -303,4 +311,4 @@ def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
         return -120.0
 
     iq = iq_to_complex(iq_bytes)
-    return compute_channel_power(iq, sample_rate, mode)
+    return compute_channel_power(iq, sample_rate, mode, channel_bw)

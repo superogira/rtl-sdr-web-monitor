@@ -114,6 +114,12 @@ const API = {
         async setFFTSize(size) {
             return API.request('POST', '/api/sdr/fft-size', { fft_size: size });
         },
+        async setBandwidth(bwHz) {
+            return API.request('POST', '/api/sdr/bandwidth', { bandwidth: bwHz });
+        },
+        async setFreqCorrection(ppm) {
+            return API.request('POST', '/api/sdr/freq-correction', { ppm });
+        },
         async streamStart() {
             return API.request('POST', '/api/sdr/stream/start');
         },

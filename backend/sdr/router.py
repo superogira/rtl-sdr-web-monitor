@@ -33,6 +33,12 @@ class SquelchRequest(BaseModel):
 class FFTSizeRequest(BaseModel):
     fft_size: int  # Must be power of 2 (256-8192)
 
+class BandwidthRequest(BaseModel):
+    bandwidth: int  # Hz (channel bandwidth, 1kHz-500kHz)
+
+class FreqCorrectionRequest(BaseModel):
+    ppm: int  # Parts per million frequency correction
+
 class ConnectionRequest(BaseModel):
     host: str
     port: int = 1234
@@ -153,6 +159,29 @@ async def set_fft_size(
         return {"fft_size": req.fft_size}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/bandwidth")
+async def set_bandwidth(
+    req: BandwidthRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Set channel bandwidth (Hz) for signal level computation."""
+    try:
+        sdr_manager.set_channel_bw(req.bandwidth)
+        return {"bandwidth": req.bandwidth}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/freq-correction")
+async def set_freq_correction(
+    req: FreqCorrectionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Set frequency correction in PPM (parts per million)."""
+    await sdr_manager.set_freq_correction(req.ppm)
+    return {"ppm": req.ppm}
 
 
 @router.post("/stream/start")

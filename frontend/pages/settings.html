@@ -97,6 +97,27 @@
                         </select>
                     </div>
                 </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Frequency Correction (PPM)</label>
+                        <input type="number" id="sdr-ppm" value="0" step="1" min="-200" max="200">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            ปรับความคลาดเคลื่อนของ crystal oscillator<br>
+                            RTL-SDR ทั่วไป: 28–70 ppm. ค่า + = ความถี่ต่ำเกิน, ค่า − = สูงเกิน<br>
+                            <strong>ตัวอย่าง:</strong> สัญญาณควรอยู่กลางแต่ไปด้านขวา → ลอง −30 ถึง −60
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label>ช่วงความถี่ที่รับ (Bandwidth)</label>
+                        <select id="sdr-bw-preset">
+                            <option value="6000">6 kHz - Narrow (NBFM voice)</option>
+                            <option value="12000" selected>12 kHz - Normal (NBFM voice)</option>
+                            <option value="25000">25 kHz - Wide</option>
+                            <option value="50000">50 kHz - Extra Wide</option>
+                            <option value="200000">200 kHz - Broadcast FM</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button class="btn btn-primary" onclick="Settings.saveSDR()">💾 บันทึก</button>
                 </div>
@@ -370,6 +391,12 @@
                 if (status.sample_rate) document.getElementById('sdr-samplerate').value = status.sample_rate;
                 if (status.gain) document.getElementById('sdr-gain').value = status.gain;
                 if (status.mode) document.getElementById('sdr-mode').value = status.mode;
+                if (status.freq_correction_ppm !== undefined) {
+                    document.getElementById('sdr-ppm').value = status.freq_correction_ppm;
+                }
+                if (status.channel_bw !== undefined) {
+                    document.getElementById('sdr-bw-preset').value = status.channel_bw;
+                }
             } catch (e) {
                 console.warn('Could not load SDR status from backend, using local defaults');
                 const savedHost = localStorage.getItem('sdr_host');
@@ -455,6 +482,8 @@
             const sampleRate = parseInt(document.getElementById('sdr-samplerate').value);
             const gain = parseInt(document.getElementById('sdr-gain').value);
             const mode = document.getElementById('sdr-mode').value;
+            const ppm = parseInt(document.getElementById('sdr-ppm').value) || 0;
+            const bwPreset = parseInt(document.getElementById('sdr-bw-preset').value) || 12000;
             if (!host) { alert('กรุณาใส่ Host'); return; }
 
             // 1) Persist freq/rate/gain/mode to localStorage (local cache).
@@ -462,6 +491,8 @@
             localStorage.setItem('sdr_sample_rate', String(sampleRate));
             localStorage.setItem('sdr_gain', String(gain));
             localStorage.setItem('sdr_mode', mode);
+            localStorage.setItem('sdr_ppm', String(ppm));
+            localStorage.setItem('sdr_bw', String(bwPreset));
 
             // 2) Send host/port to backend (persisted server-side → survives restart).
             try {
@@ -471,7 +502,10 @@
                 return;
             }
 
-            // 3) Apply freq/rate/gain/mode to hardware if currently connected.
+            // 3) Apply bandwidth (always, no connection needed — it's channel analysis only)
+            try { await API.sdr.setBandwidth(bwPreset); } catch(e) { console.warn('Set BW:', e); }
+
+            // 4) Apply freq/rate/gain/mode/ppm to hardware if currently connected.
             try {
                 const status = await API.sdr.status();
                 if (status.connected) {
@@ -479,6 +513,7 @@
                     await API.sdr.setSampleRate(sampleRate);
                     await API.sdr.setGain(gain);
                     await API.sdr.setMode(mode);
+                    await API.sdr.setFreqCorrection(ppm);
                     alert('✅ บันทึกและตั้งค่าสำเร็จ! (เปลี่ยน host/port จะมีผลตอนเชื่อมต่อใหม่)');
                 } else {
                     alert('✅ บันทึกเรียบร้อย! ค่าจะถูกใช้ตอนกด "เชื่อมต่อ"');

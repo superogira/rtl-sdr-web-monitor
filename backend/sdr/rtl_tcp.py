@@ -42,6 +42,7 @@ class RtlTcpClient:
         self._frequency = settings.RTL_TCP_CENTER_FREQ
         self._sample_rate = settings.RTL_TCP_SAMPLE_RATE
         self._gain = settings.RTL_TCP_GAIN
+        self._ppm = settings.RTL_TCP_FREQ_CORRECTION_PPM
 
     def set_connection(self, host: str, port: int):
         """Update target host/port. Takes effect on next connect().
@@ -119,10 +120,23 @@ class RtlTcpClient:
             logger.error(f"Failed to send command {cmd}: {e}")
 
     async def set_frequency(self, freq_hz: int):
-        """Set center frequency in Hz."""
+        """Set center frequency in Hz.
+
+        Applies PPM correction: the actual frequency sent to the dongle is
+        adjusted by the PPM offset so that the desired frequency lands exactly
+        where the user expects it on the waterfall.
+            actual = desired / (1 + ppm × 1e-6)
+        """
         self._frequency = freq_hz
-        self._send_command(CMD_SET_FREQUENCY, freq_hz)
-        logger.info(f"Frequency set to {freq_hz} Hz ({freq_hz/1e6:.3f} MHz)")
+        if self._ppm != 0:
+            actual_freq = int(round(freq_hz / (1.0 + self._ppm * 1e-6)))
+        else:
+            actual_freq = freq_hz
+        self._send_command(CMD_SET_FREQUENCY, actual_freq)
+        logger.info(
+            f"Frequency set to {freq_hz} Hz ({freq_hz/1e6:.3f} MHz) "
+            f"[PPM correction: {self._ppm:+d} ppm → actual {actual_freq} Hz]"
+        )
 
     async def set_sample_rate(self, rate: int):
         """Set sample rate in Hz."""
@@ -137,6 +151,19 @@ class RtlTcpClient:
         self._send_command(CMD_SET_GAIN_MODE, GAIN_MANUAL)
         self._send_command(CMD_SET_GAIN, gain_db * 10)  # rtl_tcp uses tenths of dB
         logger.info(f"Gain set to {gain_db} dB")
+
+    async def set_freq_correction(self, ppm: int):
+        """Set frequency correction in PPM (parts per million).
+
+        Takes effect immediately by re-tuning to the current frequency with
+        the new correction applied.
+        """
+        old_ppm = self._ppm
+        self._ppm = int(ppm)
+        logger.info(f"Frequency correction: {old_ppm:+d} → {self._ppm:+d} ppm")
+        # Re-apply current frequency so the correction takes effect now
+        if self.connected:
+            await self.set_frequency(self._frequency)
 
     async def set_gain_by_index(self, index: int):
         """Set gain by index."""
@@ -187,4 +214,5 @@ class RtlTcpClient:
             "frequency": self._frequency,
             "sample_rate": self._sample_rate,
             "gain": self._gain,
+            "freq_correction_ppm": self._ppm,
         }

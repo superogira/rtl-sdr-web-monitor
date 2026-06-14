@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     RTL_TCP_SAMPLE_RATE: int = 2048000  # 2.048 MSPS (most stable for RTL-SDR)
     RTL_TCP_CENTER_FREQ: int = 145500000
     RTL_TCP_GAIN: int = 30
+    RTL_TCP_FREQ_CORRECTION_PPM: int = 0  # Parts per million frequency correction
 
     # Audio Settings
     AUDIO_SAMPLE_RATE: int = 8000
