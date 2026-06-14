@@ -34,6 +34,7 @@ class Recording(Base):
     transcript = Column(Text, nullable=True)
     transcript_language = Column(String(10), nullable=True, default="th")
     status = Column(Enum(RecordingStatus), default=RecordingStatus.RECORDING, nullable=False)
+    source = Column(String(20), default="auto", nullable=False, comment="auto or manual")
     is_unread = Column(Integer, default=1, nullable=False)
     recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -57,6 +58,7 @@ class Recording(Base):
             "transcript": self.transcript,
             "transcript_language": self.transcript_language,
             "status": self.status.value if self.status else None,
+            "source": self.source or "auto",
             "is_unread": self.is_unread,
             "recorded_at": self.recorded_at.isoformat() if self.recorded_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,

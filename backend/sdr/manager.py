@@ -52,6 +52,8 @@ class SDRManager:
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
         self.is_streaming = False
         self.is_recording = False
+        self._manual_recording = False
+        self._recording_source = "auto"  # "auto" or "manual"
         self._stream_task: Optional[asyncio.Task] = None
         self._audio_buffer: list[np.ndarray] = []
         self._recording_buffer: list[np.ndarray] = []
@@ -280,19 +282,24 @@ class SDRManager:
         return {"streaming": False}
 
     async def start_recording(self):
-        """Manually start recording."""
+        """Manually start recording (independent from auto-record)."""
         if self.is_recording:
             return {"error": "Already recording"}
         self.is_recording = True
+        self._manual_recording = True
+        self._recording_source = "manual"
         self._recording_buffer = []
         self._recording_start_time = time.time()
         self._silence_start = None
-        return {"recording": True}
+        logger.info(f"🎙️ Manual recording started ({self.client._frequency/1e6:.3f} MHz)")
+        return {"recording": True, "source": "manual"}
 
     async def stop_recording(self):
-        """Manually stop recording."""
+        """Manually stop recording (only if currently manual recording)."""
         if not self.is_recording:
             return {"error": "Not recording"}
+        if not self._manual_recording:
+            return {"error": "Auto-recording in progress, cannot stop manually"}
         return await self._finish_recording()
 
     def get_new_recordings(self) -> list[dict]:
@@ -371,8 +378,19 @@ class SDRManager:
                         _spectrum_counter = 0
                         self._compute_spectrum(iq_data)
 
-                    # Auto recording logic
-                    if self._auto_record and self.is_streaming:
+                    # === Manual recording: just append audio, no auto-stop ===
+                    if self._manual_recording and self.is_recording:
+                        if len(audio) > 0:
+                            self._recording_buffer.append(audio)
+                        # Max recording duration check (safety)
+                        if self._recording_start_time:
+                            elapsed = time.time() - self._recording_start_time
+                            if elapsed > settings.MAX_RECORDING_DURATION:
+                                logger.info("Manual recording hit MAX_RECORDING_DURATION, finishing")
+                                await self._finish_recording()
+
+                    # === Auto recording logic (skipped during manual) ===
+                    elif self._auto_record and self.is_streaming:
                         above_squelch = self._signal_level > self._squelch_level
 
                         if above_squelch and not self.is_recording:
@@ -480,10 +498,12 @@ class SDRManager:
     async def _auto_start_recording(self):
         """Auto-start recording when signal detected."""
         self.is_recording = True
+        self._manual_recording = False
+        self._recording_source = "auto"
         self._recording_buffer = []
         self._recording_start_time = time.time()
         self._silence_start = None
-        logger.info(f"🎙️ Recording started (signal: {self._signal_level:.1f} dB)")
+        logger.info(f"🎙️ Auto recording started (signal: {self._signal_level:.1f} dB)")
 
     async def _finish_recording(self) -> dict:
         """Finish recording and save to file."""
@@ -523,6 +543,7 @@ class SDRManager:
             "signal_level": round(self._signal_level, 1),
             "timestamp": datetime.now().isoformat(),
             "transcription": None,
+            "source": self._recording_source,
         }
 
         self._last_recording_path = str(filepath)
@@ -542,6 +563,8 @@ class SDRManager:
 
         # Reset
         self.is_recording = False
+        self._manual_recording = False
+        self._recording_source = "auto"
         self._recording_buffer = []
         self._recording_start_time = None
         self._silence_start = None

@@ -421,11 +421,15 @@ const App = {
             });
         }
 
-        // Record buttons
+        // Record toggle button
         const btnRecord = document.getElementById('btn-record');
         if (btnRecord) btnRecord.addEventListener('click', () => this.toggleRecording());
-        const btnStop = document.getElementById('btn-stop');
-        if (btnStop) btnStop.addEventListener('click', () => this.stopRecording());
+
+        // Volume slider
+        this.initVolumeSlider();
+
+        // Sync recording state from backend on init
+        this._syncRecordingState();
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
@@ -533,16 +537,73 @@ const App = {
         if (freqHigh) freqHigh.textContent = `${highMhz.toFixed(4)} MHz`;
     },
 
-    toggleRecording() {
-        this.isRecording = !this.isRecording;
+    async toggleRecording() {
         const btn = document.getElementById('btn-record');
-        if (btn) btn.classList.toggle('recording', this.isRecording);
+        try {
+            if (this.isRecording) {
+                await API.sdr.recordStop();
+                this.isRecording = false;
+                if (btn) btn.classList.remove('recording');
+                console.log('⏹ Manual recording stopped');
+            } else {
+                await API.sdr.recordStart();
+                this.isRecording = true;
+                if (btn) btn.classList.add('recording');
+                console.log('⏺ Manual recording started');
+            }
+        } catch (err) {
+            if (btn) btn.classList.toggle('recording', this.isRecording);
+            const msg = err.detail || err.message || err;
+            console.error('Recording toggle failed:', msg);
+            alert('ไม่สามารถบันทึกได้: ' + msg);
+        }
     },
 
-    stopRecording() {
-        this.isRecording = false;
-        const btn = document.getElementById('btn-record');
-        if (btn) btn.classList.remove('recording');
+    async _syncRecordingState() {
+        try {
+            const status = await API.sdr.status();
+            if (status.recording) {
+                this.isRecording = true;
+                const btn = document.getElementById('btn-record');
+                if (btn) btn.classList.add('recording');
+            }
+        } catch (e) { /* ignore */ }
+    },
+
+    // === Volume ===
+    initVolumeSlider() {
+        const slider = document.getElementById('volume-slider');
+        const pct = document.getElementById('volume-pct');
+        const icon = document.getElementById('volume-icon');
+        if (!slider) return;
+
+        const savedVol = parseFloat(localStorage.getItem('audio_volume'));
+        const initialPct = (savedVol !== null && !isNaN(savedVol))
+            ? Math.round(savedVol * 100)
+            : 80;
+        slider.value = initialPct;
+        if (pct) pct.textContent = initialPct + '%';
+        this._updateVolumeIcon(initialPct, icon);
+        if (typeof LiveAudio !== 'undefined') {
+            LiveAudio.volume = initialPct / 100;
+        }
+
+        slider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            if (pct) pct.textContent = val + '%';
+            this._updateVolumeIcon(val, icon);
+            if (typeof LiveAudio !== 'undefined') {
+                LiveAudio.setVolume(val / 100);
+            }
+        });
+    },
+
+    _updateVolumeIcon(pct, icon) {
+        if (!icon) return;
+        if (pct === 0) icon.textContent = '🔇';
+        else if (pct < 33) icon.textContent = '🔈';
+        else if (pct < 66) icon.textContent = '🔉';
+        else icon.textContent = '🔊';
     },
 
     // === Signal Meter ===
@@ -630,6 +691,12 @@ const App = {
 
         WS.on('new_recording', (data) => {
             this.addLiveFeedItem(data);
+            // If manual recording just finished, clear the button state
+            if (data.source === 'manual') {
+                this.isRecording = false;
+                const btn = document.getElementById('btn-record');
+                if (btn) btn.classList.remove('recording');
+            }
         });
     },
 
@@ -1211,12 +1278,18 @@ const App = {
         const sig = rec.signal_level ? rec.signal_level.toFixed(0) + ' dB' : '';
         const transcript = rec.transcription || '<span class="text-muted">กำลังถอดเสียง...</span>';
         const audioUrl = rec.url || '';
+        const source = rec.source || 'auto';
+        const badgeClass = source === 'manual' ? 'manual' : 'auto';
+        const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
 
         return `
             <div class="feed-item" id="feed-${rec.id}">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span class="feed-time">${time}</span>
-                    <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <span class="source-badge ${badgeClass}" title="${source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ'}">${badgeLabel}</span>
+                        <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
+                    </div>
                 </div>
                 <div class="feed-text">
                     <div class="transcript" style="font-size:0.8rem;">${transcript}</div>

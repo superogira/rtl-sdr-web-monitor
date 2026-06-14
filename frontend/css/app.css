@@ -901,6 +901,86 @@ a:hover {
     50% { box-shadow: 0 0 0 6px transparent; }
 }
 
+/* === Volume Control === */
+.volume-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    height: 32px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.volume-control .volume-icon {
+    font-size: 1rem;
+    cursor: default;
+    user-select: none;
+}
+
+.volume-control input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 80px;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.volume-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    cursor: pointer;
+    border: none;
+}
+
+.volume-control input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    cursor: pointer;
+    border: none;
+}
+
+.volume-control .volume-pct {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    min-width: 30px;
+    text-align: right;
+}
+
+/* === Source Badge (auto/manual) === */
+.source-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.source-badge.manual {
+    background: var(--accent-red)30;
+    color: var(--accent-red);
+    border: 1px solid var(--accent-red)60;
+}
+
+.source-badge.auto {
+    background: var(--accent-blue)30;
+    color: var(--accent-blue);
+    border: 1px solid var(--accent-blue)60;
+}
+
 /* === Audio Player === */
 .audio-player {
     display: flex;

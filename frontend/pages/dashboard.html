@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=13">
+    <link rel="stylesheet" href="/css/app.css?v=14">
 </head>
 <body>
     <div class="app-container">
@@ -194,8 +194,6 @@
                     </div>
                 </div>
 
-                </div>
-
                 <!-- Waterfall Auto Range Toggle -->
                 <div class="step-selector">
                     <span class="step-label">WF</span>
@@ -204,25 +202,17 @@
                     </div>
                 </div>
 
-                <!-- Record controls -->
+                <!-- Record toggle -->
                 <div class="radio-controls">
-                    <button class="radio-btn" id="btn-record" title="บันทึก">⏺</button>
-                    <button class="radio-btn" id="btn-stop" title="หยุด">⏹</button>
+                    <button class="radio-btn" id="btn-record" title="บันทึก (กดอีกครั้งเพื่อหยุด)">⏺</button>
                 </div>
 
-                <!-- Audio Player -->
-                <div class="audio-player" id="audio-player">
-                    <button class="play-btn" id="btn-play" title="เล่น">▶</button>
-                    <div class="progress">
-                        <div class="fill" id="audio-progress"></div>
-                    </div>
-                    <span class="time" id="audio-time">0:00/0:00</span>
-                    <div class="volume">
-                        <span>🔊</span>
-                        <div class="progress" style="width:50px;">
-                            <div class="fill" style="width:70%;"></div>
-                        </div>
-                    </div>
+                <!-- Volume control -->
+                <div class="volume-control" id="volume-control">
+                    <span class="volume-icon" id="volume-icon">🔊</span>
+                    <input type="range" id="volume-slider" min="0" max="100" value="80"
+                           title="ระดับเสียง" />
+                    <span class="volume-pct" id="volume-pct">80%</span>
                 </div>
             </div>
 
@@ -242,10 +232,10 @@
         </footer>
     </div>
 
-    <script src="/js/api.js?v=4"></script>
-    <script src="/js/auth.js?v=4"></script>
-    <script src="/js/websocket.js?v=4"></script>
-    <script src="/js/audio.js?v=5"></script>
-    <script src="/js/app.js?v=21"></script>
+    <script src="/js/api.js?v=5"></script>
+    <script src="/js/auth.js?v=5"></script>
+    <script src="/js/websocket.js?v=5"></script>
+    <script src="/js/audio.js?v=6"></script>
+    <script src="/js/app.js?v=22"></script>
 </body>
 </html>
