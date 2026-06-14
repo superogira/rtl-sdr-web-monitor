@@ -154,8 +154,9 @@ a:hover {
 
 .header-center {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 0.5rem;
+    gap: 3px;
 }
 
 .header-right {
@@ -196,6 +197,40 @@ a:hover {
     background: var(--accent-blue);
     color: #fff;
     box-shadow: 0 0 8px var(--accent-blue)40;
+}
+
+/* === Channel Bandwidth Selector (1.8k - 200k) === */
+.bw-selector {
+    display: flex;
+    gap: 1px;
+    background: var(--bg-input);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    border: 1px solid var(--border-color);
+}
+
+.bw-btn {
+    padding: 2px 6px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.bw-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.bw-btn.active {
+    background: var(--accent-yellow);
+    color: #000;
+    box-shadow: 0 0 6px var(--accent-yellow)60;
 }
 
 /* === Dashboard Layout === */

@@ -149,12 +149,12 @@ const App = {
             }
             this.updateFreqDisplay();
         }
-        // Sync channel bandwidth button active state
+        // Sync channel bandwidth button active state (buttons in header)
         if (data.channel_bw !== undefined) {
             this._channelBw = data.channel_bw;
             const bwButtons = document.getElementById('bw-buttons');
             if (bwButtons) {
-                bwButtons.querySelectorAll('.step-btn').forEach(b =>
+                bwButtons.querySelectorAll('.bw-btn').forEach(b =>
                     b.classList.toggle('active', parseInt(b.dataset.bw) === data.channel_bw)
                 );
             }
@@ -295,14 +295,14 @@ const App = {
             });
         }
 
-        // Channel bandwidth selector
+        // Channel bandwidth selector (buttons in header)
         const bwButtons = document.getElementById('bw-buttons');
         if (bwButtons) {
             bwButtons.addEventListener('click', async (e) => {
-                const btn = e.target.closest('.step-btn');
+                const btn = e.target.closest('.bw-btn');
                 if (!btn) return;
                 const newBw = parseInt(btn.dataset.bw);
-                bwButtons.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
+                bwButtons.querySelectorAll('.bw-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this._channelBw = newBw;
                 try {
@@ -873,12 +873,100 @@ const App = {
             this._waterfallDirty = true;
         }
 
-        // Composite to main canvas only when dirty, then draw grid.
+        // Composite to main canvas only when dirty, then draw grid + overlays.
         if (this._waterfallDirty) {
             ctx.drawImage(bb, 0, 0);
             this._drawFreqGrid(ctx, w, h);
+            this._drawChannelBwOverlay(ctx, w, h);
             this._waterfallDirty = false;
         }
+    },
+
+    /**
+     * Draw channel bandwidth overlay — brackets at top & bottom of waterfall
+     * showing the active receive filter width.
+     *
+     *   ┌─[── 200 kHz ──]─┐
+     *   │      ↓ 93.0      │
+     *   └─[──────────────]─┘
+     */
+    _drawChannelBwOverlay(ctx, w, h) {
+        const bw = this._channelBw || 12000;
+        const sr = this._sampleRate || 2048000;
+        const bwPx = Math.min(w, (bw / sr) * w);
+        if (bwPx < 4) return;  // too small to draw
+
+        const cx = w / 2;
+        const left = cx - bwPx / 2;
+        const right = cx + bwPx / 2;
+
+        // Label
+        const bwLabel = bw >= 1e6 ? (bw / 1e6).toFixed(1) + ' MHz'
+                      : bw >= 1e3 ? (bw / 1e3).toFixed(bw % 1000 === 0 ? 0 : 1) + ' kHz'
+                      : bw + ' Hz';
+
+        ctx.save();
+
+        // === Top bracket ===
+        const armH = 10;       // vertical arm length
+        const armW = 6;        // horizontal arm length (corner tick)
+        ctx.strokeStyle = 'rgba(234, 179, 8, 0.85)';
+        ctx.lineWidth = 2;
+
+        // Top-left corner
+        ctx.beginPath();
+        ctx.moveTo(left, armH);
+        ctx.lineTo(left, 0);
+        ctx.lineTo(left + armW, 0);
+        ctx.stroke();
+
+        // Top-right corner
+        ctx.beginPath();
+        ctx.moveTo(right, armH);
+        ctx.lineTo(right, 0);
+        ctx.lineTo(right - armW, 0);
+        ctx.stroke();
+
+        // === Bottom bracket ===
+        // Bottom-left corner
+        ctx.beginPath();
+        ctx.moveTo(left, h - armH);
+        ctx.lineTo(left, h);
+        ctx.lineTo(left + armW, h);
+        ctx.stroke();
+
+        // Bottom-right corner
+        ctx.beginPath();
+        ctx.moveTo(right, h - armH);
+        ctx.lineTo(right, h);
+        ctx.lineTo(right - armW, h);
+        ctx.stroke();
+
+        // === Faint vertical edge lines (full height) ===
+        ctx.strokeStyle = 'rgba(234, 179, 8, 0.20)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(left) + 0.5, 0);
+        ctx.lineTo(Math.round(left) + 0.5, h);
+        ctx.moveTo(Math.round(right) + 0.5, 0);
+        ctx.lineTo(Math.round(right) + 0.5, h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // === BW label pill (top-center of channel) ===
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const labelW = ctx.measureText(bwLabel).width + 12;
+        const labelX = cx;
+        const labelY = 7;
+        ctx.fillStyle = 'rgba(234, 179, 8, 0.9)';
+        ctx.fillRect(labelX - labelW / 2, labelY - 6, labelW, 12);
+        ctx.fillStyle = '#1a2235';
+        ctx.fillText(bwLabel, labelX, labelY);
+
+        ctx.restore();
     },
 
     _drawFreqGrid(ctx, w, h) {

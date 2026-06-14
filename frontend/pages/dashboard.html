@@ -26,6 +26,16 @@
                     <button class="mode-btn" data-mode="USB">USB</button>
                     <button class="mode-btn" data-mode="LSB">LSB</button>
                 </div>
+                <div class="bw-selector" id="bw-buttons">
+                    <button class="bw-btn" data-bw="1800" title="SSB Narrow (1.8 kHz)">1.8k</button>
+                    <button class="bw-btn" data-bw="2400" title="SSB Voice (2.4 kHz) - USB/LSB voice">2.4k</button>
+                    <button class="bw-btn" data-bw="3000" title="SSB Wide (3 kHz)">3k</button>
+                    <button class="bw-btn" data-bw="6000" title="Narrow (6 kHz) - NBFM/CW">6k</button>
+                    <button class="bw-btn active" data-bw="12000" title="Normal (12 kHz) - NBFM voice">12k</button>
+                    <button class="bw-btn" data-bw="25000" title="Wide (25 kHz)">25k</button>
+                    <button class="bw-btn" data-bw="50000" title="Extra Wide (50 kHz)">50k</button>
+                    <button class="bw-btn" data-bw="200000" title="Broadcast (200 kHz) - WBFM">200k</button>
+                </div>
             </div>
             <div class="header-right">
                 <span id="ws-status" style="font-size:0.7rem;color:#f66;margin-right:4px;">WS: ⚪</span>
@@ -182,16 +192,6 @@
                     </div>
                 </div>
 
-                <!-- Channel Bandwidth Selector -->
-                <div class="step-selector">
-                    <span class="step-label">BW</span>
-                    <div class="step-buttons" id="bw-buttons">
-                        <button class="step-btn" data-bw="6000" title="Narrow (6 kHz) - NBFM voice">N</button>
-                        <button class="step-btn active" data-bw="12000" title="Normal (12 kHz) - NBFM voice">NF</button>
-                        <button class="step-btn" data-bw="25000" title="Wide (25 kHz) - แชนเนลกว้าง">W</button>
-                        <button class="step-btn" data-bw="50000" title="Extra Wide (50 kHz)">XW</button>
-                        <button class="step-btn" data-bw="200000" title="Broadcast (200 kHz) - FM วิทยุ">BC</button>
-                    </div>
                 </div>
 
                 <!-- Waterfall Auto Range Toggle -->
