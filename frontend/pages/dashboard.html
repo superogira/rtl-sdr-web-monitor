@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=10">
+    <link rel="stylesheet" href="/css/app.css?v=11">
 </head>
 <body>
     <div class="app-container">
@@ -49,6 +49,8 @@
                     <!-- Waterfall Display -->
                     <div class="waterfall-container">
                         <canvas id="waterfall-canvas"></canvas>
+                        <!-- Center frequency marker (triangle pointing down + vertical line) -->
+                        <div class="center-freq-marker" title="ความถี่กึ่งกลาง"></div>
                         <div class="waterfall-overlay">
                             <span id="freq-low">144.000 MHz</span>
                             <span id="freq-center" class="text-accent">145.500 MHz</span>
@@ -87,7 +89,8 @@
                 </div>
 
                 <!-- Right Panel: Clock + Freq List + Feed -->
-                <div class="panel-right">
+                <div class="panel-right" id="panel-right">
+                    <button class="panel-collapse-btn" id="panel-collapse-btn" title="ย่อ/ขยายแผงขวา">⬆</button>
                     <!-- Clock Widget -->
                     <div class="clock-widget">
                         <div class="clock-time" id="clock-time">--:--:--</div>
@@ -239,6 +242,6 @@
     <script src="/js/auth.js?v=4"></script>
     <script src="/js/websocket.js?v=4"></script>
     <script src="/js/audio.js?v=5"></script>
-    <script src="/js/app.js?v=17"></script>
+    <script src="/js/app.js?v=18"></script>
 </body>
 </html>

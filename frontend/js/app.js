@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v4',  // smooth waterfall: bilinear + overlap blend + continuous gradient
+    VERSION: '2024.06.14-v5',  // preserve waterfall on resize + collapse panel + center marker
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -295,6 +295,24 @@ const App = {
                 } catch (err) {
                     console.error('Set bandwidth failed:', err);
                 }
+            });
+        }
+
+        // Panel-right collapse toggle (for small screens / tablets)
+        const collapseBtn = document.getElementById('panel-collapse-btn');
+        const panelRight = document.getElementById('panel-right');
+        if (collapseBtn && panelRight) {
+            // Restore saved state
+            if (localStorage.getItem('panel_right_collapsed') === 'true') {
+                panelRight.classList.add('collapsed');
+                collapseBtn.textContent = '⬇';
+            }
+            collapseBtn.addEventListener('click', () => {
+                const isCollapsed = panelRight.classList.toggle('collapsed');
+                // Mark as user-expanded so mobile media query doesn't auto-hide
+                panelRight.classList.add('user-expanded');
+                collapseBtn.textContent = isCollapsed ? '⬇' : '⬆';
+                localStorage.setItem('panel_right_collapsed', String(isCollapsed));
             });
         }
 
@@ -592,17 +610,30 @@ const App = {
             const w = parent.clientWidth;
             const h = parent.clientHeight;
             if (w > 0 && h > 0 && (w !== this._waterfallCanvasW || h !== this._waterfallCanvasH)) {
+                // PRESERVE existing waterfall content on resize (don't clear!)
+                const oldW = this._waterfallCanvasW;
+                const oldH = this._waterfallCanvasH;
+                let oldCanvas = null;
+                if (oldW > 0 && oldH > 0 && this._waterfallBackBuffer) {
+                    oldCanvas = document.createElement('canvas');
+                    oldCanvas.width = oldW;
+                    oldCanvas.height = oldH;
+                    oldCanvas.getContext('2d').drawImage(this._waterfallBackBuffer, 0, 0);
+                }
                 this._waterfallCanvasW = w;
                 this._waterfallCanvasH = h;
                 canvas.width = w;
                 canvas.height = h;
-                // Resize back buffer; preserve nothing (full repaint is cheap on resize)
                 this._waterfallBackBuffer.width = w;
                 this._waterfallBackBuffer.height = h;
-                // Clear back buffer to background color
                 const bb = this._waterfallBackCtx;
+                // Fill background
                 bb.fillStyle = '#0a0a1a';
                 bb.fillRect(0, 0, w, h);
+                // Restore old content (top-left aligned)
+                if (oldCanvas) {
+                    bb.drawImage(oldCanvas, 0, 0);
+                }
                 this._waterfallLineBins = 0;  // force rebuild of line canvas/img
                 this._waterfallDirty = true;
             }

@@ -1078,6 +1078,93 @@ a:hover {
 .gap-1 { gap: 0.5rem; }
 .gap-2 { gap: 1rem; }
 
+/* === Center Frequency Marker (waterfall) === */
+.center-freq-marker {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 10px solid var(--accent-yellow);
+    filter: drop-shadow(0 0 4px var(--accent-yellow));
+    z-index: 5;
+    pointer-events: none;
+}
+.center-freq-marker::after {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 1px;
+    height: calc(100vh - 200px);
+    background: repeating-linear-gradient(
+        to bottom,
+        var(--accent-yellow) 0,
+        var(--accent-yellow) 4px,
+        transparent 4px,
+        transparent 8px
+    );
+    opacity: 0.6;
+}
+
+/* === Panel Right Collapse Button === */
+.panel-collapse-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 10;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+.panel-collapse-btn:hover {
+    background: var(--accent-blue);
+    color: #fff;
+}
+
+/* Collapsed state: hide panel-right, waterfall takes full width */
+.panel-right.collapsed {
+    display: none;
+}
+/* When panel-right is collapsed, expand grid to single column */
+.dashboard:has(.panel-right.collapsed) {
+    grid-template-columns: 1fr;
+}
+
+/* === Layout Reflow Prevention === */
+/* Lock panel-right to fixed max-height with internal scroll,
+   so feed items don't change the waterfall container height. */
+.panel-right {
+    overflow-y: auto;
+    min-width: 0;
+    position: relative;
+}
+
+.live-feed {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.live-feed-container {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
     .dashboard {
@@ -1088,6 +1175,18 @@ a:hover {
     .panel-left {
         border-right: none;
         border-bottom: 1px solid var(--border-color);
+    }
+
+    /* On mobile/tablet portrait, auto-collapse panel-right by default
+       so waterfall gets full screen. User can expand via button. */
+    .panel-right:not(.user-expanded) {
+        max-height: 200px;
+        overflow-y: auto;
+    }
+
+    /* Force single-column grid on mobile regardless of collapse state */
+    .dashboard {
+        grid-template-columns: 1fr !important;
     }
 
     .radio-control {
@@ -1101,5 +1200,17 @@ a:hover {
 
     .freq-display {
         font-size: 1.2rem;
+    }
+
+    /* Smaller step selectors on mobile */
+    .step-selector .step-label {
+        display: none;
+    }
+}
+
+@media (max-width: 480px) {
+    /* On very small screens, auto-hide panel-right unless user expanded it */
+    .panel-right:not(.user-expanded) {
+        display: none;
     }
 }
