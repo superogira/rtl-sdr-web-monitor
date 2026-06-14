@@ -147,14 +147,30 @@ class RtlTcpClient:
         self._send_command(CMD_SET_GAIN_MODE, GAIN_AUTO)
 
     async def read_samples(self, num_bytes: int = 65536) -> Optional[bytes]:
-        """Read raw IQ samples from rtl_tcp."""
+        """Read raw IQ samples from rtl_tcp.
+
+        Uses readexactly() instead of read() to ensure we always get a full
+        chunk of num_bytes. read() can return partial data as soon as any
+        bytes are available, which at low sample rates yields tiny chunks
+        (e.g. ~3KB at 250kSPS instead of 32KB). This causes audio underruns
+        because each demodulated chunk is too small to fill the broadcaster's
+        batching buffer, leading to gaps/stuttering in live audio.
+        """
         if not self.reader or not self.connected:
             return None
         try:
+            # readexactly() blocks until exactly num_bytes are available,
+            # giving consistent chunk sizes across all sample rates.
             data = await asyncio.wait_for(
-                self.reader.read(num_bytes), timeout=5.0
+                self.reader.readexactly(num_bytes), timeout=5.0
             )
-            return data if data else None
+            return data
+        except asyncio.IncompleteReadError as e:
+            # Connection closed mid-read — return partial data if we have any
+            logger.warning(
+                f"Incomplete read: got {len(e.partial)}/{num_bytes} bytes"
+            )
+            return e.partial if len(e.partial) > 0 else None
         except asyncio.TimeoutError:
             return None
         except Exception as e:
