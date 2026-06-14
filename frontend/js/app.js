@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v5',  // preserve waterfall on resize + collapse panel + center marker
+    VERSION: '2024.06.14-v6',  // waterfall auto 3-state: OFF / ONCE / CONT
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -48,6 +48,18 @@ const App = {
         await this.loadRecentRecordings();
         this._showVersionBadge();
         console.log('✅ App initialized v' + this.VERSION);
+    },
+
+    // Update AUTO button text/active based on _autoMode state
+    _updateAutoBtn(btn) {
+        if (!btn) return;
+        const labels = {
+            off:  '🎚️ AUTO',
+            once: '🎚️ ONCE ✓',
+            cont: '🎚️ AUTO ✓',
+        };
+        btn.textContent = labels[this._autoMode] || labels.off;
+        btn.classList.toggle('active', this._autoMode !== 'off');
     },
 
     _showVersionBadge() {
@@ -318,27 +330,31 @@ const App = {
             });
         }
 
-        // Waterfall Auto Range toggle
+        // Waterfall Auto Range toggle — 3-state cycle: OFF → ONCE → CONT → OFF
         const wfAutoBtn = document.getElementById('wf-auto-btn');
         if (wfAutoBtn) {
-            // Restore saved state
-            if (localStorage.getItem('waterfall_auto') === 'true') {
-                this._autoRange = true;
-                wfAutoBtn.classList.add('active');
-                wfAutoBtn.textContent = '🎚️ AUTO ✓';
-            }
+            // Restore saved state (backwards-compat: old 'waterfall_auto' → 'cont')
+            const savedMode = localStorage.getItem('waterfall_auto_mode') ||
+                (localStorage.getItem('waterfall_auto') === 'true' ? 'cont' : 'off');
+            this._autoMode = savedMode;
+            this._updateAutoBtn(wfAutoBtn);
+
             wfAutoBtn.addEventListener('click', () => {
-                this._autoRange = !this._autoRange;
-                localStorage.setItem('waterfall_auto', String(this._autoRange));
-                wfAutoBtn.classList.toggle('active', this._autoRange);
-                wfAutoBtn.textContent = this._autoRange ? '🎚️ AUTO ✓' : '🎚️ AUTO';
-                if (this._autoRange) {
-                    // Reset continuous tracking to current manual settings
+                // Cycle: off → once → cont → off
+                const cycle = { off: 'once', once: 'cont', cont: 'off' };
+                this._autoMode = cycle[this._autoMode] || 'off';
+                localStorage.setItem('waterfall_auto_mode', this._autoMode);
+                this._updateAutoBtn(wfAutoBtn);
+
+                if (this._autoMode === 'cont') {
+                    // Reset continuous tracking to current settings
                     this._autoContMin = this.waterfallDbMin;
                     this._autoContMax = this.waterfallDbMax;
-                    console.log('🎚️ Waterfall AUTO range ENABLED');
+                    console.log('🎚️ Waterfall AUTO = CONT (continuous tracking)');
+                } else if (this._autoMode === 'once') {
+                    console.log('🎚️ Waterfall AUTO = ONCE (will compute once on next frame)');
                 } else {
-                    console.log('🎚️ Waterfall AUTO range DISABLED (manual mode)');
+                    console.log('🎚️ Waterfall AUTO = OFF (manual mode)');
                 }
             });
         }
@@ -728,7 +744,7 @@ const App = {
 
     _renderWaterfall() {
         // Read live settings from localStorage (only when NOT in auto mode)
-        if (!this._autoRange) {
+        if (this._autoMode === 'off') {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
         }
@@ -931,42 +947,67 @@ const App = {
         // Accept both typed arrays (Int16Array, Float32Array) and regular arrays
         if (!spectrumData || !spectrumData.length) return;
 
-        // === Auto Range (OpenWebRX-style continuous auto) ===
-        // When enabled, compute min/max from spectrum and smoothly adjust
-        // the dB range so colors update immediately on the latest line.
-        if (this._autoRange) {
+        // === Auto Range (3 modes: off / once / cont) ===
+        // off:  manual — read from localStorage
+        // once: compute min/max ONE time, then switch to 'off'
+        // cont: continuous tracking (fast rise +1, slow fall -0.1)
+        if (this._autoMode === 'once' || this._autoMode === 'cont') {
             let smin = Infinity, smax = -Infinity;
             for (let i = 0; i < spectrumData.length; i++) {
                 const v = spectrumData[i];
                 if (v < smin) smin = v;
                 if (v > smax) smax = v;
             }
-            // Initialize continuous tracking
-            if (this._autoContMin === undefined || this._autoContMax === undefined) {
-                this._autoContMin = smin;
-                this._autoContMax = smax;
+
+            if (this._autoMode === 'once') {
+                // === ONCE: compute once, no smoothing ===
+                let paddedMin = smin - 5;
+                let paddedMax = smax + 5;
+                if (paddedMax - paddedMin < 20) {
+                    const mid = (paddedMax + paddedMin) / 2;
+                    paddedMin = mid - 10;
+                    paddedMax = mid + 10;
+                }
+                this._dbMin = Math.round(paddedMin);
+                this._dbMax = Math.round(paddedMax);
+                // Save to localStorage so manual mode inherits these values
+                localStorage.setItem('waterfall_db_min', this._dbMin);
+                localStorage.setItem('waterfall_db_max', this._dbMax);
+                // Switch back to 'off' after one computation
+                this._autoMode = 'off';
+                localStorage.setItem('waterfall_auto_mode', 'off');
+                const btn = document.getElementById('wf-auto-btn');
+                if (btn) this._updateAutoBtn(btn);
+                console.log(`🎚️ ONCE done: dB range set to [${this._dbMin}, ${this._dbMax}]`);
+            } else {
+                // === CONT: continuous tracking with smoothing ===
+                // Initialize continuous tracking
+                if (this._autoContMin === undefined || this._autoContMax === undefined) {
+                    this._autoContMin = smin;
+                    this._autoContMax = smax;
+                }
+                // Fast rise (+1), slow fall (-0.1) — prevents flicker
+                if (smax > this._autoContMax + 1) {
+                    this._autoContMax += 1;
+                } else if (smax < this._autoContMax - 1) {
+                    this._autoContMax -= 0.1;
+                }
+                if (smin < this._autoContMin - 1) {
+                    this._autoContMin -= 1;
+                } else if (smin > this._autoContMin + 1) {
+                    this._autoContMin += 0.1;
+                }
+                // Add padding and ensure minimum range of 20 dB
+                let paddedMin = this._autoContMin - 5;
+                let paddedMax = this._autoContMax + 5;
+                if (paddedMax - paddedMin < 20) {
+                    const mid = (paddedMax + paddedMin) / 2;
+                    paddedMin = mid - 10;
+                    paddedMax = mid + 10;
+                }
+                this._dbMin = Math.round(paddedMin);
+                this._dbMax = Math.round(paddedMax);
             }
-            // Fast rise (+1), slow fall (-0.1) — prevents flicker
-            if (smax > this._autoContMax + 1) {
-                this._autoContMax += 1;
-            } else if (smax < this._autoContMax - 1) {
-                this._autoContMax -= 0.1;
-            }
-            if (smin < this._autoContMin - 1) {
-                this._autoContMin -= 1;
-            } else if (smin > this._autoContMin + 1) {
-                this._autoContMin += 0.1;
-            }
-            // Add padding and ensure minimum range of 20 dB
-            let paddedMin = this._autoContMin - 5;
-            let paddedMax = this._autoContMax + 5;
-            if (paddedMax - paddedMin < 20) {
-                const mid = (paddedMax + paddedMin) / 2;
-                paddedMin = mid - 10;
-                paddedMax = mid + 10;
-            }
-            this._dbMin = Math.round(paddedMin);
-            this._dbMax = Math.round(paddedMax);
         }
 
         // Push a copy of the spectrum into pending lines; the render loop
