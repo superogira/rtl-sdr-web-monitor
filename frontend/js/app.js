@@ -367,9 +367,19 @@ const App = {
                 if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
                 if (!didHold) {
                     // Quick click → ONCE
+                    // Show ONCE label, compute on next spectrum frame,
+                    // then keep showing computed values for ~0.6s before
+                    // reverting to OFF so user can read the result.
                     this._autoMode = 'once';
+                    this._onceComputed = false;
                     this._updateAutoBtn(wfAutoBtn);
                     console.log('🎚️ Waterfall AUTO = ONCE (will compute on next frame)');
+                    if (this._onceTimer) clearTimeout(this._onceTimer);
+                    this._onceTimer = setTimeout(() => {
+                        this._autoMode = 'off';
+                        this._updateAutoBtn(wfAutoBtn);
+                        this._onceTimer = null;
+                    }, 600);
                 }
             };
 
@@ -986,25 +996,30 @@ const App = {
             }
 
             if (this._autoMode === 'once') {
-                // === ONCE: compute once, no smoothing ===
-                let paddedMin = smin - 5;
-                let paddedMax = smax + 5;
-                if (paddedMax - paddedMin < 20) {
-                    const mid = (paddedMax + paddedMin) / 2;
-                    paddedMin = mid - 10;
-                    paddedMax = mid + 10;
+                // === ONCE: compute once (first frame only), then show values ===
+                if (this._onceComputed) {
+                    // Already computed this cycle; wait for timer to revert to OFF
+                } else {
+                    let paddedMin = smin - 5;
+                    let paddedMax = smax + 5;
+                    if (paddedMax - paddedMin < 20) {
+                        const mid = (paddedMax + paddedMin) / 2;
+                        paddedMin = mid - 10;
+                        paddedMax = mid + 10;
+                    }
+                    this._dbMin = Math.round(paddedMin);
+                    this._dbMax = Math.round(paddedMax);
+                    this._onceComputed = true;
+                    // Save to localStorage so manual mode inherits these values
+                    localStorage.setItem('waterfall_db_min', this._dbMin);
+                    localStorage.setItem('waterfall_db_max', this._dbMax);
+                    // Show computed min/max on the button so user sees the values
+                    const btn = document.getElementById('wf-auto-btn');
+                    if (btn) {
+                        btn.textContent = `${this._dbMin}/${this._dbMax} dB`;
+                    }
+                    console.log(`🎚️ ONCE done: dB range set to [${this._dbMin}, ${this._dbMax}]`);
                 }
-                this._dbMin = Math.round(paddedMin);
-                this._dbMax = Math.round(paddedMax);
-                // Save to localStorage so manual mode inherits these values
-                localStorage.setItem('waterfall_db_min', this._dbMin);
-                localStorage.setItem('waterfall_db_max', this._dbMax);
-                // Switch back to 'off' after one computation
-                this._autoMode = 'off';
-                localStorage.setItem('waterfall_auto_mode', 'off');
-                const btn = document.getElementById('wf-auto-btn');
-                if (btn) this._updateAutoBtn(btn);
-                console.log(`🎚️ ONCE done: dB range set to [${this._dbMin}, ${this._dbMax}]`);
             } else {
                 // === CONT: continuous tracking with smoothing ===
                 // Initialize continuous tracking
