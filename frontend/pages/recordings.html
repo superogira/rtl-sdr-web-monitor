@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recordings - RTL-SDR Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <a href="/dashboard" class="header-logo">📡 RTL-SDR Monitor</a>
+            </div>
+            <div class="header-right">
+                <button class="btn btn-sm" onclick="Auth.logout()">ออกจากระบบ</button>
+            </div>
+        </header>
+        <div class="app-main" style="padding: 2rem; overflow-y: auto;">
+            <h2 style="margin-bottom: 1rem;">📋 รายการบันทึกทั้งหมด</h2>
+            <div id="recordings-list" class="text-center text-muted p-2">
+                กำลังโหลด...
+            </div>
+        </div>
+    </div>
+    <script src="/js/api.js"></script>
+    <script src="/js/auth.js"></script>
+    <script>
+        if (!Auth.isAuthenticated()) window.location.href = '/login';
+        // TODO: Load and render recordings list
+        document.getElementById('recordings-list').innerHTML = '<p class="text-muted">ยังไม่มีรายการบันทึก</p>';
+    </script>
+</body>
+</html>

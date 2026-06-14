@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - RTL-SDR Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css?v=9">
+</head>
+<body>
+    <div class="app-container">
+        <!-- === Header === -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="header-logo">
+                    <span class="status-dot" id="connection-status"></span>
+                    <span>📡 RTL-SDR Monitor</span>
+                </div>
+            </div>
+            <div class="header-center">
+                <div class="mode-selector" id="mode-selector">
+                    <button class="mode-btn active" data-mode="FM">FM</button>
+                    <button class="mode-btn" data-mode="AM">AM</button>
+                    <button class="mode-btn" data-mode="USB">USB</button>
+                    <button class="mode-btn" data-mode="LSB">LSB</button>
+                </div>
+            </div>
+            <div class="header-right">
+                <span id="ws-status" style="font-size:0.7rem;color:#f66;margin-right:4px;">WS: ⚪</span>
+                <button class="btn btn-sm" id="btn-connect" onclick="App.connectSDR()">🔗 เชื่อมต่อ</button>
+                <button class="btn btn-sm" id="btn-stream" onclick="App.toggleStream()" style="display:none;">▶ รับสัญญาณ</button>
+                <button class="btn btn-sm btn-listen" id="btn-listen" onclick="LiveAudio.toggle()">🔈 ฟังสด</button>
+                <span id="listen-indicator" style="display:none; font-size:0.75rem; color:var(--accent-green);" title="กำลังฟังสด">●</span>
+                <span id="audio-status" style="font-size:0.7rem;"></span>
+                <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
+                <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
+                <a href="/settings" class="btn btn-sm">⚙️ ตั้งค่า</a>
+                <button class="btn btn-sm" onclick="Auth.logout()">ออกจากระบบ</button>
+            </div>
+        </header>
+
+        <!-- === Main Dashboard === -->
+        <div class="app-main">
+            <div class="dashboard">
+                <!-- Left Panel: Waterfall + Signal -->
+                <div class="panel-left">
+                    <!-- Waterfall Display -->
+                    <div class="waterfall-container">
+                        <canvas id="waterfall-canvas"></canvas>
+                        <div class="waterfall-overlay">
+                            <span id="freq-low">144.000 MHz</span>
+                            <span id="freq-center" class="text-accent">145.500 MHz</span>
+                            <span id="freq-high">147.000 MHz</span>
+                        </div>
+                    </div>
+
+                    <!-- Signal Meter -->
+                    <div class="signal-meter">
+                        <span class="label">SIG</span>
+                        <div class="bars" id="signal-bars">
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                            <div class="bar"></div>
+                        </div>
+                        <span class="dbm" id="signal-dbm">--- dBm</span>
+                    </div>
+
+                    <!-- Bookmarks -->
+                    <div class="bookmark-list" id="bookmark-list">
+                        <div style="padding:4px 8px; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.8rem; font-weight:600; color:var(--text-secondary);">🔖 Bookmarks</span>
+                            <button class="btn btn-sm" onclick="App.showAddBookmark()">+ เพิ่ม</button>
+                        </div>
+                        <div id="bookmarks-container">
+                            <!-- Bookmark items rendered here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Clock + Freq List + Feed -->
+                <div class="panel-right">
+                    <!-- Clock Widget -->
+                    <div class="clock-widget">
+                        <div class="clock-time" id="clock-time">--:--:--</div>
+                        <div class="clock-date" id="clock-date">-- ๆๆๆๆ ๆๆๆ</div>
+                        <div class="clock-day" id="clock-day">วันๆๆๆๆๆ</div>
+                    </div>
+
+                    <!-- Bookmarked Frequency List -->
+                    <div class="freq-list">
+                        <div class="freq-list-header">
+                            <span>📻 ความถี่ที่บันทึกไว้</span>
+                            <span class="text-muted" id="freq-count">0</span>
+                        </div>
+                        <div id="freq-list-container">
+                            <!-- Freq items rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Live Feed -->
+                    <div class="live-feed">
+                        <div class="live-feed-header">
+                            <span>📋 รายการล่าสุด</span>
+                            <button class="btn btn-sm" onclick="App.viewAllRecordings()">ดูทั้งหมด</button>
+                        </div>
+                        <div id="live-feed-container">
+                            <!-- Feed items rendered here -->
+                            <div class="text-center text-muted p-2" style="font-size:0.8rem;">
+                                ยังไม่มีรายการบันทึก
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- === Footer: Radio Control === -->
+        <footer class="app-footer">
+            <!-- Row 1: Frequency + Tune + Step -->
+            <div class="radio-row">
+                <div class="radio-controls">
+                    <button class="radio-btn" id="btn-tune-down-coarse" title="ลดความถี่ (coarse)">◀◀</button>
+                    <button class="radio-btn" id="btn-tune-down" title="ลดความถี่">◀</button>
+                </div>
+                <div class="radio-display" id="freq-display-box" title="คลิกเพื่อพิมพ์ความถี่">
+                    <div class="freq-display" id="freq-display">
+                        1 4 5 . 5 0 0 <span class="decimal">0</span>
+                    </div>
+                    <div class="radio-info">
+                        <div class="info-row">
+                            <span class="label">MODE:</span>
+                            <span class="value" id="radio-mode">FM</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">BW:</span>
+                            <span class="value" id="radio-bw">2.048M</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="radio-controls">
+                    <button class="radio-btn" id="btn-tune-up" title="เพิ่มความถี่">▶</button>
+                    <button class="radio-btn" id="btn-tune-up-coarse" title="เพิ่มความถี่ (coarse)">▶▶</button>
+                </div>
+
+                <!-- Step Size Selector -->
+                <div class="step-selector">
+                    <span class="step-label">STEP</span>
+                    <div class="step-buttons" id="step-buttons">
+                        <button class="step-btn" data-step="1000">1k</button>
+                        <button class="step-btn" data-step="5000">5k</button>
+                        <button class="step-btn" data-step="12500">12.5k</button>
+                        <button class="step-btn active" data-step="25000">25k</button>
+                        <button class="step-btn" data-step="100000">100k</button>
+                        <button class="step-btn" data-step="1000000">1M</button>
+                    </div>
+                </div>
+
+                <!-- Sample Rate Selector -->
+                <div class="step-selector">
+                    <span class="step-label">SRATE</span>
+                    <div class="step-buttons" id="srate-buttons">
+                        <button class="step-btn" data-srate="250000">250k</button>
+                        <button class="step-btn" data-srate="1024000">1M</button>
+                        <button class="step-btn" data-srate="1536000">1.5M</button>
+                        <button class="step-btn active" data-srate="2048000">2M</button>
+                        <button class="step-btn" data-srate="2400000">2.4M</button>
+                    </div>
+                </div>
+
+                <!-- Record controls -->
+                <div class="radio-controls">
+                    <button class="radio-btn" id="btn-record" title="บันทึก">⏺</button>
+                    <button class="radio-btn" id="btn-stop" title="หยุด">⏹</button>
+                </div>
+
+                <!-- Audio Player -->
+                <div class="audio-player" id="audio-player">
+                    <button class="play-btn" id="btn-play" title="เล่น">▶</button>
+                    <div class="progress">
+                        <div class="fill" id="audio-progress"></div>
+                    </div>
+                    <span class="time" id="audio-time">0:00/0:00</span>
+                    <div class="volume">
+                        <span>🔊</span>
+                        <div class="progress" style="width:50px;">
+                            <div class="fill" style="width:70%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 2: Gain + Squelch -->
+            <div class="radio-row radio-sliders">
+                <div class="slider-group">
+                    <span class="slider-label">GAIN</span>
+                    <input type="range" id="gain-slider" min="0" max="50" value="30" step="1">
+                    <span class="slider-value" id="gain-value">30 dB</span>
+                </div>
+                <div class="slider-group">
+                    <span class="slider-label">SQL</span>
+                    <input type="range" id="squelch-slider" min="-120" max="-40" value="-70" step="1">
+                    <span class="slider-value" id="squelch-value">-70 dB</span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/js/api.js?v=3"></script>
+    <script src="/js/auth.js?v=3"></script>
+    <script src="/js/websocket.js?v=3"></script>
+    <script src="/js/audio.js?v=4"></script>
+    <script src="/js/app.js?v=13"></script>
+</body>
+</html>

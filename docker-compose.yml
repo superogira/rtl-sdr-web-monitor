@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  rtl-sdr-web:
+    build: .
+    container_name: rtl-sdr-monitor
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - APP_ENV=production
+    restart: unless-stopped
+    # If RTL-SDR USB device is available, uncomment:
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+
+  # Optional: rtl_tcp service (if running separately on host)
+  # rtl-tcp:
+  #   image: librtlsdr
+  #   command: rtl_tcp -a 0.0.0.0 -p 1234
+  #   ports:
+  #     - "1234:1234"
+  #   devices:
+  #     - /dev/bus/usb:/dev/bus/usb

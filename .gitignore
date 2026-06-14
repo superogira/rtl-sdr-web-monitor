@@ -1,0 +1,23 @@
+# Environment
+.env
+.venv
+venv/
+__pycache__/
+*.pyc
+
+# Data
+data/
+*.db
+*.wav
+*.mp3
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/

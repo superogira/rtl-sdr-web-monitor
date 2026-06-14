@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTL-SDR Monitor</title>
+    <script>
+        // Redirect to dashboard (or login if not authenticated)
+        const token = localStorage.getItem('access_token');
+        if (token) {
+            window.location.href = '/dashboard';
+        } else {
+            window.location.href = '/login';
+        }
+    </script>
+</head>
+<body>
+    <p>Redirecting...</p>
+</body>
+</html>

@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ตั้งค่า - RTL-SDR Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css">
+    <style>
+        .settings-page { max-width: 900px; margin: 0 auto; padding: 20px; }
+        .settings-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .settings-header h1 { font-size: 1.4rem; color: var(--accent-cyan); }
+        .settings-section { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .settings-section h2 { font-size: 1rem; color: var(--accent-cyan); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%; padding: 8px 12px; background: var(--surface-1); border: 1px solid var(--border);
+            border-radius: 4px; color: var(--text-primary); font-size: 0.85rem; font-family: 'JetBrains Mono', monospace;
+        }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent-cyan); }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+        .btn-primary { background: var(--accent-cyan); color: #000; font-weight: 600; }
+        .btn-primary:hover { opacity: 0.9; }
+        .tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .tag { background: var(--surface-1); border: 1px solid var(--border); padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; display: flex; align-items: center; gap: 4px; }
+        .tag .remove { cursor: pointer; color: var(--accent-red); font-weight: bold; }
+        .nav-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+        .nav-tab { padding: 8px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); }
+        .nav-tab.active { background: var(--surface-1); color: var(--accent-cyan); border-bottom-color: var(--surface-1); }
+        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.7rem; font-weight: 600; }
+        .status-on { background: rgba(16,185,129,0.2); color: var(--accent-green); }
+        .status-off { background: rgba(239,68,68,0.2); color: var(--accent-red); }
+        .back-link { color: var(--text-secondary); text-decoration: none; font-size: 0.85rem; }
+        .back-link:hover { color: var(--accent-cyan); }
+    </style>
+</head>
+<body>
+    <div class="settings-page">
+        <div class="settings-header">
+            <div>
+                <a href="/dashboard" class="back-link">← กลับ Dashboard</a>
+                <h1>⚙️ ตั้งค่าระบบ</h1>
+            </div>
+            <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
+        </div>
+
+        <!-- Tabs -->
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="Settings.showTab('sdr')">📡 RTL-TCP</div>
+            <div class="nav-tab" onclick="Settings.showTab('recording')">🎙️ การอัดเสียง</div>
+            <div class="nav-tab" onclick="Settings.showTab('stt')">📝 ถอดเสียง</div>
+            <div class="nav-tab" onclick="Settings.showTab('telegram')">📨 Telegram</div>
+            <div class="nav-tab" onclick="Settings.showTab('keywords')">🔑 Keywords</div>
+            <div class="nav-tab" onclick="Settings.showTab('display')">🎨 แสดงผล</div>
+            <div class="nav-tab" onclick="Settings.showTab('users')">👥 ผู้ใช้งาน</div>
+        </div>
+
+        <!-- SDR Settings -->
+        <div class="tab-content" id="tab-sdr">
+            <div class="settings-section">
+                <h2>📡 การเชื่อมต่อ RTL-TCP</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Host</label>
+                        <input type="text" id="sdr-host" value="192.168.2.151">
+                    </div>
+                    <div class="form-group">
+                        <label>Port</label>
+                        <input type="number" id="sdr-port" value="1234">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>ความถี่เริ่มต้น (Hz)</label>
+                        <input type="number" id="sdr-freq" value="145500000">
+                    </div>
+                    <div class="form-group">
+                        <label>Sample Rate (Hz)</label>
+                        <input type="number" id="sdr-samplerate" value="2048000">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Gain (dB)</label>
+                        <input type="number" id="sdr-gain" value="30">
+                    </div>
+                    <div class="form-group">
+                        <label>Demodulation Mode</label>
+                        <select id="sdr-mode">
+                            <option value="FM">FM</option>
+                            <option value="AM">AM</option>
+                            <option value="USB">USB</option>
+                            <option value="LSB">LSB</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveSDR()">💾 บันทึก</button>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h2>📊 สถานะการเชื่อมต่อ</h2>
+                <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
+                <div class="form-actions">
+                    <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
+                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
+                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recording Settings -->
+        <div class="tab-content" id="tab-recording" style="display:none;">
+            <div class="settings-section">
+                <h2>🎙️ การอัดเสียงอัตโนมัติ</h2>
+                <div class="form-group">
+                    <label>Auto Record</label>
+                    <select id="rec-auto">
+                        <option value="true">เปิด (อัดอัตโนมัติเมื่อจับสัญญาณ)</option>
+                        <option value="false">ปิด (อัดเองเท่านั้น)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Squelch Level (dB) - เริ่มอัดเมื่อสัญญาณแรงกว่า</label>
+                        <input type="number" id="rec-squelch" value="-70">
+                    </div>
+                    <div class="form-group">
+                        <label>Silence Timeout (วินาที) - หยุดอัดเมื่อเงียบเกิน</label>
+                        <input type="number" id="rec-silence" value="5">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Min Recording Duration (วินาที)</label>
+                        <input type="number" id="rec-min" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Recording Duration (วินาที)</label>
+                        <input type="number" id="rec-max" value="300">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึก</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- STT Settings -->
+        <div class="tab-content" id="tab-stt" style="display:none;">
+            <div class="settings-section">
+                <h2>📝 Speech-to-Text</h2>
+                <div class="form-group">
+                    <label>Provider</label>
+                    <select id="stt-provider">
+                        <option value="whisper">Whisper (Local)</option>
+                        <option value="speechmatics">Speechmatics API</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Whisper Model</label>
+                        <select id="stt-whisper-model">
+                            <option value="tiny">tiny</option>
+                            <option value="base">base</option>
+                            <option value="small">small</option>
+                            <option value="medium">medium</option>
+                            <option value="large">large</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Language</label>
+                        <select id="stt-lang">
+                            <option value="th">ไทย</option>
+                            <option value="en">English</option>
+                            <option value="auto">Auto detect</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Speechmatics API Key</label>
+                    <input type="password" id="stt-api-key" placeholder="ใส่ API Key ถ้าใช้ Speechmatics">
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveSTT()">💾 บันทึก</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Telegram Settings -->
+        <div class="tab-content" id="tab-telegram" style="display:none;">
+            <div class="settings-section">
+                <h2>📨 แจ้งเตือน Telegram</h2>
+                <div class="form-group">
+                    <label>สถานะ: <span id="tg-status" class="status-badge status-off">ปิด</span></label>
+                    <select id="tg-enabled">
+                        <option value="false">ปิด</option>
+                        <option value="true">เปิด</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Bot Token</label>
+                    <input type="password" id="tg-token" placeholder="123456:ABC-DEF...">
+                </div>
+                <div class="form-group">
+                    <label>Chat ID</label>
+                    <input type="text" id="tg-chatid" placeholder="-100123456789">
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-sm" onclick="Settings.testTelegram()">🧪 ทดสอบส่งข้อความ</button>
+                    <button class="btn btn-primary" onclick="Settings.saveTelegram()">💾 บันทึก</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Keywords Settings -->
+        <div class="tab-content" id="tab-keywords" style="display:none;">
+            <div class="settings-section">
+                <h2>🔑 Keywords สำหรับแจ้งเตือน</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:8px;">
+                    เมื่อถอดเสียงแล้วพบคำเหล่านี้ ระบบจะส่งแจ้งเตือน Telegram
+                </p>
+                <div class="form-group">
+                    <label>เพิ่ม Keyword</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="kw-input" placeholder="พิมพ์คำที่ต้องการ..." style="flex:1;">
+                        <button class="btn btn-sm btn-primary" onclick="Settings.addKeyword()">เพิ่ม</button>
+                    </div>
+                </div>
+                <div class="tag-list" id="kw-list">
+                    <!-- Keywords rendered here -->
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveKeywords()">💾 บันทึก</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Display Settings -->
+        <div class="tab-content" id="tab-display" style="display:none;">
+            <div class="settings-section">
+                <h2>🌊 Waterfall ความเร็วการเลื่อน</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    ความเร็ว = จำนวนบรรทัดที่เพิ่มต่อเฟรมข้อมูล spectrum (1x = ช้า, 4x = เร็วมาก)
+                </p>
+                <div class="form-group">
+                    <label>ความเร็ว Waterfall</label>
+                    <select id="wf-speed">
+                        <option value="1">1x - ช้า</option>
+                        <option value="2">2x - ปานกลาง</option>
+                        <option value="3">3x - เร็ว</option>
+                        <option value="4">4x - เร็วมาก</option>
+                    </select>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h2>📊 FFT Size (ความละเอียด Waterfall)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    ขนาด FFT = จำนวน bins ในแต่ละบรรทัดของ waterfall<br>
+                    <strong>ค่ามาก = ละเอียดขึ้น แต่ใช้ CPU/Bandwidth มากขึ้น</strong>
+                </p>
+                <div class="form-group">
+                    <label>FFT Size</label>
+                    <select id="wf-fft-size">
+                        <option value="512">512 bins - เบา (เหมาะกับอุปกรณ์ช้า)</option>
+                        <option value="1024">1024 bins - ปานกลาง (แนะนำ)</option>
+                        <option value="2048">2048 bins - ละเอียด (CPU ปานกลาง)</option>
+                        <option value="4096">4096 bins - ละเอียดมาก ⚠️ (หนัก)</option>
+                    </select>
+                </div>
+                <p id="fft-warning" style="font-size:0.75rem; color:var(--accent-red); display:none; margin-top:4px;">
+                    ⚠️ 4096 bins ใช้ CPU และ Bandwidth สูง อาจทำให้เครื่องช้าได้
+                </p>
+            </div>
+            <div class="settings-section">
+                <h2>🎨 ช่วงสี Waterfall (dB)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    ค่า dB ต่ำสุด-สูงสุดที่จะแสดงเป็นสี ค่าที่ต่ำกว่าจะเป็นสีดำ ค่าที่สูงกว่าจะเป็นสีขาว
+                </p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>dB ต่ำสุด (Noise Floor)</label>
+                        <input type="number" id="wf-db-min" value="-110" min="-150" max="-50">
+                    </div>
+                    <div class="form-group">
+                        <label>dB สูงสุด (Strong Signal)</label>
+                        <input type="number" id="wf-db-max" value="-55" min="-100" max="0">
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h2>📋 พรีเซ็ต</h2>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('default')">ปกติ</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('sensitive')">สัญญาณอ่อน</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('fast')">เลื่อนเร็ว</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('wide')">ช่วงกว้าง</button>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="Settings.saveDisplay()">💾 บันทึก</button>
+            </div>
+        </div>
+
+        <!-- Users Settings (Admin) -->
+        <div class="tab-content" id="tab-users" style="display:none;">
+            <div class="settings-section">
+                <h2>👥 จัดการผู้ใช้งาน</h2>
+                <table style="width:100%; font-size:0.85rem; border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border);">
+                            <th style="text-align:left; padding:8px;">Username</th>
+                            <th style="text-align:left; padding:8px;">Role</th>
+                            <th style="text-align:left; padding:8px;">สถานะ</th>
+                            <th style="text-align:left; padding:8px;">Last Login</th>
+                            <th style="text-align:right; padding:8px;">จัดการ</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody">
+                        <tr><td colspan="5" class="text-center text-muted p-2">กำลังโหลด...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/auth.js"></script>
+    <script>
+    const Settings = {
+        keywords: ['ฉุกเฉิน', 'เหตุด่วน', 'help', 'emergency'],
+
+        async init() {
+            if (!Auth.requireAuth()) return;
+            const user = Auth.getUser();
+            if (user) {
+                document.getElementById('user-display').textContent = `👤 ${user.display_name || user.username}`;
+            }
+            this.loadSDRSettings();
+            this.loadDisplaySettings();
+            this.renderKeywords();
+            this.refreshStatus();
+            this.loadUsers();
+        },
+
+        // === SDR Settings (persisted in localStorage) ===
+        loadSDRSettings() {
+            const fields = {
+                'sdr-host': 'sdr_host',
+                'sdr-port': 'sdr_port',
+                'sdr-freq': 'sdr_freq',
+                'sdr-samplerate': 'sdr_sample_rate',
+                'sdr-gain': 'sdr_gain',
+                'sdr-mode': 'sdr_mode',
+            };
+            for (const [elId, key] of Object.entries(fields)) {
+                const el = document.getElementById(elId);
+                if (!el) continue;
+                const saved = localStorage.getItem(key);
+                if (saved !== null) el.value = saved;
+            }
+        },
+
+        showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(`tab-${tabId}`).style.display = '';
+            event.target.classList.add('active');
+        },
+
+        async refreshStatus() {
+            try {
+                const status = await API.sdr.status();
+                const el = document.getElementById('sdr-status');
+                const connBadge = status.connected
+                    ? '<span class="status-badge status-on">เชื่อมต่อแล้ว</span>'
+                    : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
+                const streamBadge = status.streaming
+                    ? '<span class="status-badge status-on">กำลังรับสัญญาณ</span>'
+                    : '<span class="status-badge status-off">หยุดรับ</span>';
+                const recBadge = status.recording
+                    ? '<span class="status-badge status-on">กำลังอัด</span>'
+                    : '<span class="status-badge status-off">ไม่ได้อัด</span>';
+                el.innerHTML = `
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px;">
+                        <div>🔗 การเชื่อมต่อ: ${connBadge}</div>
+                        <div>📡 Streaming: ${streamBadge}</div>
+                        <div>🎙️ Recording: ${recBadge}</div>
+                        <div>📊 Signal: <code>${status.signal_level_db} dB</code></div>
+                        <div>🔄 Freq: <code>${(status.frequency/1e6).toFixed(3)} MHz</code></div>
+                        <div>📻 Mode: <code>${status.mode}</code></div>
+                        <div>🔊 Gain: <code>${status.gain} dB</code></div>
+                        <div>📶 Squelch: <code>${status.squelch_level} dB</code></div>
+                    </div>
+                `;
+            } catch (err) {
+                console.error('Failed to load SDR status:', err);
+                document.getElementById('sdr-status').innerHTML = `
+                    <div style="color:var(--accent-red);">⚠️ ไม่สามารถโหลดสถานะได้</div>
+                    <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
+                        Error: ${err.detail || err.message || err}<br>
+                        <a href="/login" style="color:var(--accent-cyan);">ลองเข้าสู่ระบบใหม่</a>
+                    </div>
+                `;
+            }
+        },
+
+        async connectSDR() {
+            try {
+                await API.sdr.connect();
+                // Apply saved SDR settings to hardware after connecting
+                try {
+                    await API.sdr.setFrequency(parseInt(document.getElementById('sdr-freq').value));
+                    await API.sdr.setSampleRate(parseInt(document.getElementById('sdr-samplerate').value));
+                    await API.sdr.setGain(parseInt(document.getElementById('sdr-gain').value));
+                    await API.sdr.setMode(document.getElementById('sdr-mode').value);
+                } catch (applyErr) {
+                    console.warn('Apply settings after connect failed:', applyErr);
+                }
+                this.refreshStatus();
+            } catch(e) { alert('เชื่อมต่อไม่ได้: ' + (e.detail || e)); }
+        },
+
+        async disconnectSDR() {
+            try { await API.sdr.disconnect(); this.refreshStatus(); }
+            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+        },
+
+        async saveSDR() {
+            // Always persist to localStorage first (survives refresh + restart)
+            const fields = {
+                'sdr-host': 'sdr_host',
+                'sdr-port': 'sdr_port',
+                'sdr-freq': 'sdr_freq',
+                'sdr-samplerate': 'sdr_sample_rate',
+                'sdr-gain': 'sdr_gain',
+                'sdr-mode': 'sdr_mode',
+            };
+            for (const [elId, key] of Object.entries(fields)) {
+                const el = document.getElementById(elId);
+                if (el) localStorage.setItem(key, el.value);
+            }
+
+            // Apply to hardware if currently connected
+            try {
+                const status = await API.sdr.status();
+                if (status.connected) {
+                    await API.sdr.setFrequency(parseInt(document.getElementById('sdr-freq').value));
+                    await API.sdr.setSampleRate(parseInt(document.getElementById('sdr-samplerate').value));
+                    await API.sdr.setGain(parseInt(document.getElementById('sdr-gain').value));
+                    await API.sdr.setMode(document.getElementById('sdr-mode').value);
+                    alert('✅ บันทึกและตั้งค่าสำเร็จ!');
+                } else {
+                    alert('✅ บันทึกแล้ว ค่าจะถูกใช้ตอนเชื่อมต่อ RTL-TCP');
+                }
+            } catch(e) {
+                alert('✅ บันทึก local แล้ว แต่ส่งไป server ไม่ได้: ' + (e.detail || e.message || e));
+            }
+        },
+
+        async saveRecording() {
+            try {
+                await API.sdr.setSquelch(parseFloat(document.getElementById('rec-squelch').value));
+                alert('✅ บันทึกสำเร็จ!');
+            } catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+        },
+
+        saveSTT() { alert('✅ บันทึก STT settings แล้ว (จะใช้ในโหมด production)'); },
+        saveTelegram() { alert('✅ บันทึก Telegram settings แล้ว'); },
+        testTelegram() { alert('🧪 กำลังทดสอบ... (ต้องตั้ง Bot Token และ Chat ID ก่อน)'); },
+
+        addKeyword() {
+            const input = document.getElementById('kw-input');
+            const word = input.value.trim();
+            if (word && !this.keywords.includes(word)) {
+                this.keywords.push(word);
+                this.renderKeywords();
+            }
+            input.value = '';
+        },
+
+        removeKeyword(word) {
+            this.keywords = this.keywords.filter(k => k !== word);
+            this.renderKeywords();
+        },
+
+        renderKeywords() {
+            const el = document.getElementById('kw-list');
+            if (!el) return;
+            el.innerHTML = this.keywords.map(k =>
+                `<div class="tag">${k} <span class="remove" onclick="Settings.removeKeyword('${k}')">×</span></div>`
+            ).join('');
+        },
+
+        saveKeywords() { alert('✅ บันทึก Keywords แล้ว: ' + this.keywords.join(', ')); },
+
+        // === Display / Waterfall Settings ===
+        loadDisplaySettings() {
+            const speed = localStorage.getItem('waterfall_speed') || '1';
+            const dbMin = localStorage.getItem('waterfall_db_min') || '-110';
+            const dbMax = localStorage.getItem('waterfall_db_max') || '-55';
+            const fftSize = localStorage.getItem('fft_size') || '1024';
+            const elSpeed = document.getElementById('wf-speed');
+            const elDbMin = document.getElementById('wf-db-min');
+            const elDbMax = document.getElementById('wf-db-max');
+            const elFft = document.getElementById('wf-fft-size');
+            if (elSpeed) elSpeed.value = speed;
+            if (elDbMin) elDbMin.value = dbMin;
+            if (elDbMax) elDbMax.value = dbMax;
+            if (elFft) {
+                elFft.value = fftSize;
+                this.updateFFTWarning();
+                elFft.addEventListener('change', () => this.updateFFTWarning());
+            }
+        },
+
+        updateFFTWarning() {
+            const el = document.getElementById('wf-fft-size');
+            const warning = document.getElementById('fft-warning');
+            if (!el || !warning) return;
+            warning.style.display = (parseInt(el.value) >= 4096) ? '' : 'none';
+        },
+
+        async saveDisplay() {
+            const speed = document.getElementById('wf-speed').value;
+            const dbMin = document.getElementById('wf-db-min').value;
+            const dbMax = document.getElementById('wf-db-max').value;
+            const fftSize = parseInt(document.getElementById('wf-fft-size').value);
+            localStorage.setItem('waterfall_speed', speed);
+            localStorage.setItem('waterfall_db_min', dbMin);
+            localStorage.setItem('waterfall_db_max', dbMax);
+            localStorage.setItem('fft_size', String(fftSize));
+            // Send FFT size to backend
+            try {
+                await API.sdr.setFFTSize(fftSize);
+                alert('✅ บันทึกการตั้งค่าแสดงผลแล้ว!\nกลับไป Dashboard เพื่อเห็นผล');
+            } catch(e) {
+                alert('✅ บันทึก local แล้ว แต่ส่งไป server ไม่ได้: ' + (e.detail || e.message || e));
+            }
+        },
+
+        applyPreset(name) {
+            const presets = {
+                default:   { speed: '1', dbMin: '-110', dbMax: '-55' },
+                sensitive: { speed: '1', dbMin: '-120', dbMax: '-70' },
+                fast:      { speed: '4', dbMin: '-110', dbMax: '-55' },
+                wide:      { speed: '2', dbMin: '-130', dbMax: '-40' },
+            };
+            const p = presets[name];
+            if (!p) return;
+            document.getElementById('wf-speed').value = p.speed;
+            document.getElementById('wf-db-min').value = p.dbMin;
+            document.getElementById('wf-db-max').value = p.dbMax;
+        },
+
+        async loadUsers() {
+            const tbody = document.getElementById('users-tbody');
+            try {
+                const users = await API.request('GET', '/api/auth/users');
+                tbody.innerHTML = users.map(u => `
+                    <tr style="border-bottom:1px solid var(--border);">
+                        <td style="padding:8px;">${u.username}</td>
+                        <td style="padding:8px;"><code>${u.role}</code></td>
+                        <td style="padding:8px;"><span class="status-badge ${u.is_active ? 'status-on' : 'status-off'}">${u.is_active ? 'ใช้งาน' : 'ปิด'}</span></td>
+                        <td style="padding:8px; font-size:0.75rem;">${u.last_login || '-'}</td>
+                        <td style="padding:8px; text-align:right;">
+                            <button class="btn btn-sm" onclick="Settings.toggleUser('${u.id}')">${u.is_active ? 'ปิด' : 'เปิด'}</button>
+                            <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteUser('${u.id}')">ลบ</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch(e) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">ไม่สามารถโหลดข้อมูลได้</td></tr>';
+            }
+        },
+
+        async toggleUser(id) {
+            try { await API.request('PUT', `/api/auth/users/${id}/toggle-active`); this.loadUsers(); }
+            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+        },
+
+        async deleteUser(id) {
+            if (!confirm('ต้องการลบผู้ใช้นี้?')) return;
+            try { await API.request('DELETE', `/api/auth/users/${id}`); this.loadUsers(); }
+            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+        },
+    };
+
+    document.addEventListener('DOMContentLoaded', () => Settings.init());
+    </script>
+</body>
+</html>

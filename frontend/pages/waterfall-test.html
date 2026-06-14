@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>Waterfall Test v2</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; color: #0f0; font-family: monospace; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        #toolbar { padding: 8px; display: flex; gap: 12px; align-items: center; font-size: 12px; background: #111; border-bottom: 1px solid #333; flex-shrink: 0; }
+        #toolbar button { padding: 4px 12px; background: #222; color: #0f0; border: 1px solid #0f0; cursor: pointer; font-family: monospace; }
+        #toolbar button:hover { background: #0f0; color: #000; }
+        #canvas-wrap { flex: 1; position: relative; min-height: 0; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #info { position: absolute; top: 4px; left: 4px; font-size: 11px; z-index: 10; text-shadow: 0 0 4px #000; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <button id="btn-connect" onclick="toggleWS()">🔗 Connect WS</button>
+        <button onclick="drawTestPattern()">🎨 Test Pattern</button>
+        <span id="status">❌ Disconnected</span>
+        <span id="frame-info">Frame: 0</span>
+    </div>
+    <div id="canvas-wrap">
+        <canvas id="wf"></canvas>
+        <div id="info"></div>
+    </div>
+
+    <script>
+    const canvas = document.getElementById('wf');
+    const ctx = canvas.getContext('2d');
+    const info = document.getElementById('info');
+    const statusEl = document.getElementById('status');
+    const frameInfoEl = document.getElementById('frame-info');
+    
+    let ws = null;
+    let drawCount = 0;
+    let canvasW = 0, canvasH = 0;
+
+    // === Waterfall buffer ===
+    // Store history as array of Float32Array lines
+    let buffer = [];
+    const MAX_LINES = 1000;
+    let needsRedraw = true;
+
+    function resizeCanvas() {
+        const wrap = document.getElementById('canvas-wrap');
+        const w = wrap.clientWidth;
+        const h = wrap.clientHeight;
+        if (w !== canvasW || h !== canvasH) {
+            canvasW = w;
+            canvasH = h;
+            canvas.width = w;
+            canvas.height = h;
+            needsRedraw = true;
+            console.log(`📐 Canvas resized to ${w}x${h}`);
+        }
+    }
+
+    // Watch for size changes
+    const ro = new ResizeObserver(() => {
+        resizeCanvas();
+        needsRedraw = true;
+    });
+    ro.observe(document.getElementById('canvas-wrap'));
+    resizeCanvas();
+
+    function addSpectrumLine(spectrumData) {
+        if (!Array.isArray(spectrumData) || spectrumData.length === 0) return;
+        
+        drawCount++;
+        buffer.push(new Float32Array(spectrumData));
+        if (buffer.length > MAX_LINES) buffer.shift();
+        needsRedraw = true;
+        
+        if (drawCount <= 10 || drawCount % 50 === 0) {
+            const min = Math.min(...spectrumData);
+            const max = Math.max(...spectrumData);
+            frameInfoEl.textContent = `Frame: ${drawCount} | ${buffer.length} lines | bins=${spectrumData.length} | ${min.toFixed(1)}~${max.toFixed(1)} dB`;
+            console.log(`📊 #${drawCount}: bins=${spectrumData.length}, range=${min.toFixed(1)}~${max.toFixed(1)}, samples=${spectrumData.slice(0,5).map(v=>v.toFixed(1)).join(',')}`);
+        }
+    }
+
+    function renderWaterfall() {
+        if (!needsRedraw || canvasW <= 0 || canvasH <= 0 || buffer.length === 0) {
+            requestAnimationFrame(renderWaterfall);
+            return;
+        }
+        needsRedraw = false;
+
+        // How many lines fit on screen
+        const numLines = Math.min(buffer.length, canvasH);
+        const startIdx = buffer.length - numLines;
+        
+        // Draw background
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        // For each visible line, draw 1 pixel row
+        for (let i = 0; i < numLines; i++) {
+            const line = buffer[startIdx + i];
+            const y = canvasH - numLines + i;
+            const numBins = line.length;
+            
+            // Find min/max for this line (auto-scale)
+            let min = Infinity, max = -Infinity;
+            for (let b = 0; b < numBins; b++) {
+                if (line[b] < min) min = line[b];
+                if (line[b] > max) max = line[b];
+            }
+            const range = max - min || 1;
+            
+            // Draw pixel by pixel
+            for (let x = 0; x < canvasW; x++) {
+                const idx = Math.floor(x / canvasW * numBins);
+                const val = line[idx];
+                const norm = (val - min) / range;
+                
+                let r, g, b2;
+                if (norm < 0.2) {
+                    const t = norm / 0.2;
+                    r = 0; g = 0; b2 = Math.floor(t * 255);
+                } else if (norm < 0.4) {
+                    const t = (norm - 0.2) / 0.2;
+                    r = 0; g = Math.floor(t * 255); b2 = 255;
+                } else if (norm < 0.6) {
+                    const t = (norm - 0.4) / 0.2;
+                    r = 0; g = 255; b2 = Math.floor(255 * (1 - t));
+                } else if (norm < 0.8) {
+                    const t = (norm - 0.6) / 0.2;
+                    r = Math.floor(t * 255); g = 255; b2 = 0;
+                } else {
+                    const t = (norm - 0.8) / 0.2;
+                    r = 255; g = Math.floor(255 * (1 - t)); b2 = 0;
+                }
+                ctx.fillStyle = `rgb(${r},${g},${b2})`;
+                ctx.fillRect(x, y, 1, 1);
+            }
+        }
+
+        // Draw info overlay
+        info.textContent = `${canvasW}×${canvasH} | ${buffer.length} lines in buffer | Drawn: ${numLines} lines`;
+
+        requestAnimationFrame(renderWaterfall);
+    }
+    requestAnimationFrame(renderWaterfall);
+
+    // === Test Pattern ===
+    function drawTestPattern() {
+        console.log('🎨 Drawing test pattern...');
+        // Add 100 fake spectrum lines with a simulated signal
+        for (let f = 0; f < 100; f++) {
+            const fake = new Float32Array(256);
+            for (let i = 0; i < 256; i++) {
+                fake[i] = -90 + Math.random() * 15;
+                // Add a "signal" peak
+                if (Math.abs(i - 128) < 5) fake[i] += 15 + Math.random() * 5;
+                if (Math.abs(i - 64) < 3) fake[i] += 10 + Math.random() * 3;
+            }
+            buffer.push(fake);
+        }
+        needsRedraw = true;
+        frameInfoEl.textContent = `Frame: TEST | ${buffer.length} lines (test pattern)`;
+    }
+
+    // === WebSocket ===
+    function toggleWS() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            return;
+        }
+        
+        const url = `ws://${window.location.host}/ws`;
+        console.log('🔌 Connecting to', url);
+        statusEl.textContent = '⏳ Connecting...';
+        
+        ws = new WebSocket(url);
+        
+        ws.onopen = () => {
+            statusEl.textContent = '✅ Connected';
+            console.log('✅ WS connected');
+        };
+        
+        ws.onclose = () => {
+            statusEl.textContent = '❌ Disconnected';
+            console.log('❌ WS closed');
+            ws = null;
+        };
+        
+        ws.onerror = (e) => {
+            statusEl.textContent = '❌ Error';
+            console.error('❌ WS error', e);
+        };
+        
+        ws.onmessage = (e) => {
+            try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'spectrum' && msg.data) {
+                    addSpectrumLine(msg.data);
+                } else if (msg.type === 'status') {
+                    if (drawCount <= 3) console.log('📡 Status:', msg.data);
+                }
+            } catch(err) {
+                console.warn('Unknown message:', err);
+            }
+        };
+    }
+    </script>
+</body>
+</html>

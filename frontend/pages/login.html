@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - RTL-SDR Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+    <div class="login-page">
+        <div class="login-card">
+            <div class="login-logo">
+                <h1>📡 RTL-SDR Monitor</h1>
+                <p>Radio Signal Monitoring System</p>
+            </div>
+
+            <div id="alert-box" class="hidden"></div>
+
+            <!-- Login Form -->
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">ชื่อผู้ใช้</label>
+                    <input type="text" id="username" class="form-input" placeholder="กรอกชื่อผู้ใช้" required autocomplete="username" autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">รหัสผ่าน</label>
+                    <input type="password" id="password" class="form-input" placeholder="กรอกรหัสผ่าน" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="login-btn">
+                    เข้าสู่ระบบ
+                </button>
+            </form>
+
+            <div class="text-center mt-2">
+                <p class="text-muted" style="font-size: 0.8rem;">
+                    🔧 ผู้ดูแลระบบ: <code>python -m backend.cli createsuperuser</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/auth.js"></script>
+    <script>
+        // If already logged in, redirect to dashboard
+        if (Auth.isAuthenticated()) {
+            window.location.href = '/dashboard';
+        }
+
+        const loginForm = document.getElementById('login-form');
+        const alertBox = document.getElementById('alert-box');
+        const loginBtn = document.getElementById('login-btn');
+
+        function showAlert(message, type = 'error') {
+            alertBox.className = `alert alert-${type}`;
+            alertBox.textContent = message;
+            alertBox.classList.remove('hidden');
+        }
+
+        function hideAlert() {
+            alertBox.classList.add('hidden');
+        }
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideAlert();
+
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                showAlert('กรุณากรอกข้อมูลให้ครบ');
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'กำลังเข้าสู่ระบบ...';
+
+            try {
+                const result = await Auth.login(username, password);
+                if (result.success) {
+                    showAlert('เข้าสู่ระบบสำเร็จ! กำลังเปลี่ยนหน้า...', 'success');
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 500);
+                } else {
+                    showAlert(result.error || 'เข้าสู่ระบบไม่สำเร็จ');
+                    loginBtn.disabled = false;
+                    loginBtn.textContent = 'เข้าสู่ระบบ';
+                }
+            } catch (err) {
+                showAlert('เกิดข้อผิดพลาดในการเชื่อมต่อ');
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'เข้าสู่ระบบ';
+            }
+        });
+    </script>
+</body>
+</html>
