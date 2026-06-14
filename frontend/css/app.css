@@ -665,6 +665,19 @@ a:hover {
     color: #fff;
 }
 
+/* Waterfall AUTO button — continuous mode slow blink */
+.step-btn.auto-active {
+    background: var(--accent-green);
+    color: #fff;
+    border-color: var(--accent-green);
+    animation: auto-blink 1.5s infinite;
+}
+
+@keyframes auto-blink {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent-green)80; }
+    50%      { opacity: 0.55; box-shadow: 0 0 1px var(--accent-green)30; }
+}
+
 .slider-group {
     display: flex;
     align-items: center;
@@ -1187,6 +1200,12 @@ a:hover {
     .panel-left {
         border-right: none;
         border-bottom: 1px solid var(--border-color);
+    }
+
+    /* On portrait/mobile, move collapse button down so it doesn't
+       overlap the frequency grid labels drawn on the waterfall. */
+    .panel-collapse-btn {
+        top: 32px;
     }
 
     /* On mobile/tablet portrait, auto-collapse panel-right by default

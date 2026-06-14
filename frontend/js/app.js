@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v6',  // waterfall auto 3-state: OFF / ONCE / CONT
+    VERSION: '2024.06.14-v7',  // UI fixes: mobile collapse pos + auto click/hold
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -51,15 +51,19 @@ const App = {
     },
 
     // Update AUTO button text/active based on _autoMode state
+    // - off:  no class
+    // - once: .active (solid blue)
+    // - cont: .auto-active (green + blinking animation)
     _updateAutoBtn(btn) {
         if (!btn) return;
         const labels = {
             off:  '🎚️ AUTO',
-            once: '🎚️ ONCE ✓',
-            cont: '🎚️ AUTO ✓',
+            once: '🎚️ ONCE',
+            cont: '🎚️ AUTO ●',
         };
         btn.textContent = labels[this._autoMode] || labels.off;
-        btn.classList.toggle('active', this._autoMode !== 'off');
+        btn.classList.toggle('active', this._autoMode === 'once');
+        btn.classList.toggle('auto-active', this._autoMode === 'cont');
     },
 
     _showVersionBadge() {
@@ -330,33 +334,55 @@ const App = {
             });
         }
 
-        // Waterfall Auto Range toggle — 3-state cycle: OFF → ONCE → CONT → OFF
+        // Waterfall Auto Range button
+        // - CLICK (release < 500ms): ONCE — compute once then back to OFF
+        // - HOLD (≥ 500ms): toggle CONT (continuous, button blinks)
+        // - OFF is the default on page load / refresh (not persisted)
         const wfAutoBtn = document.getElementById('wf-auto-btn');
         if (wfAutoBtn) {
-            // Restore saved state (backwards-compat: old 'waterfall_auto' → 'cont')
-            const savedMode = localStorage.getItem('waterfall_auto_mode') ||
-                (localStorage.getItem('waterfall_auto') === 'true' ? 'cont' : 'off');
-            this._autoMode = savedMode;
+            this._autoMode = 'off';  // always start OFF on page load
             this._updateAutoBtn(wfAutoBtn);
 
-            wfAutoBtn.addEventListener('click', () => {
-                // Cycle: off → once → cont → off
-                const cycle = { off: 'once', once: 'cont', cont: 'off' };
-                this._autoMode = cycle[this._autoMode] || 'off';
-                localStorage.setItem('waterfall_auto_mode', this._autoMode);
-                this._updateAutoBtn(wfAutoBtn);
+            let holdTimer = null;
+            let didHold = false;
 
-                if (this._autoMode === 'cont') {
-                    // Reset continuous tracking to current settings
-                    this._autoContMin = this.waterfallDbMin;
-                    this._autoContMax = this.waterfallDbMax;
-                    console.log('🎚️ Waterfall AUTO = CONT (continuous tracking)');
-                } else if (this._autoMode === 'once') {
-                    console.log('🎚️ Waterfall AUTO = ONCE (will compute once on next frame)');
-                } else {
-                    console.log('🎚️ Waterfall AUTO = OFF (manual mode)');
+            const startHold = () => {
+                didHold = false;
+                holdTimer = setTimeout(() => {
+                    didHold = true;
+                    // Toggle continuous mode
+                    this._autoMode = (this._autoMode === 'cont') ? 'off' : 'cont';
+                    if (this._autoMode === 'cont') {
+                        this._autoContMin = this.waterfallDbMin;
+                        this._autoContMax = this.waterfallDbMax;
+                        console.log('🎚️ Waterfall AUTO = CONT (continuous tracking)');
+                    } else {
+                        console.log('🎚️ Waterfall AUTO = OFF (stopped continuous)');
+                    }
+                    this._updateAutoBtn(wfAutoBtn);
+                }, 500);
+            };
+
+            const endHold = () => {
+                if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+                if (!didHold) {
+                    // Quick click → ONCE
+                    this._autoMode = 'once';
+                    this._updateAutoBtn(wfAutoBtn);
+                    console.log('🎚️ Waterfall AUTO = ONCE (will compute on next frame)');
                 }
+            };
+
+            // Mouse events
+            wfAutoBtn.addEventListener('mousedown', startHold);
+            wfAutoBtn.addEventListener('mouseup', endHold);
+            wfAutoBtn.addEventListener('mouseleave', () => {
+                if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
             });
+
+            // Touch events (mobile)
+            wfAutoBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(); }, { passive: false });
+            wfAutoBtn.addEventListener('touchend', (e) => { e.preventDefault(); endHold(); }, { passive: false });
         }
 
         // Direct frequency input (click on freq display)
