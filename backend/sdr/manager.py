@@ -2,6 +2,7 @@
 SDR Manager - orchestrates RTL-TCP connection, demodulation, and recording.
 """
 import asyncio
+import json
 import time
 import logging
 import uuid
@@ -19,12 +20,28 @@ from backend.audio.broadcaster import audio_broadcaster
 
 logger = logging.getLogger(__name__)
 
+# Persisted SDR settings (host/port/freq/etc.) so UI changes survive restarts.
+SDR_SETTINGS_FILE = Path("data/sdr_settings.json")
+# Default values mirroring settings.* so a missing file still works.
+_DEFAULT_SDR_SETTINGS = {
+    "host": settings.RTL_TCP_HOST,
+    "port": settings.RTL_TCP_PORT,
+    "frequency": settings.RTL_TCP_CENTER_FREQ,
+    "sample_rate": settings.RTL_TCP_SAMPLE_RATE,
+    "gain": settings.RTL_TCP_GAIN,
+}
+
 
 class SDRManager:
     """Manages SDR operations: connection, streaming, demodulation, recording."""
 
     def __init__(self):
-        self.client = RtlTcpClient()
+        persisted = self._load_persisted_settings()
+        self.client = RtlTcpClient(host=persisted["host"], port=persisted["port"])
+        # Apply persisted frequency/sample_rate/gain as initial device values.
+        self.client._frequency = persisted["frequency"]
+        self.client._sample_rate = persisted["sample_rate"]
+        self.client._gain = persisted["gain"]
         self.mode = DemodMode.FM
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
         self.is_streaming = False
@@ -43,7 +60,7 @@ class SDRManager:
         self._spectrum_callbacks: list = []
         self._last_spectrum: list = []
         self._spectrum_prev: Optional[np.ndarray] = None  # For exponential averaging
-        self._spectrum_alpha: float = 0.3  # EMA factor (0.3 = 30% new, 70% previous)
+        self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
 
     @property
@@ -64,6 +81,62 @@ class SDRManager:
             "listeners": audio_broadcaster.listener_count,
         }
 
+    # ------------------------------------------------------------------
+    # Persisted settings (host/port/freq/etc. survive restarts)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_persisted_settings() -> dict:
+        """Load SDR settings from data/sdr_settings.json, falling back to defaults."""
+        data = dict(_DEFAULT_SDR_SETTINGS)
+        try:
+            if SDR_SETTINGS_FILE.exists():
+                with open(SDR_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                # Only accept keys we know; coerce types defensively.
+                if isinstance(saved.get("host"), str) and saved["host"].strip():
+                    data["host"] = saved["host"].strip()
+                if isinstance(saved.get("port"), (int, str)):
+                    data["port"] = int(saved["port"])
+                if isinstance(saved.get("frequency"), (int, str)):
+                    data["frequency"] = int(saved["frequency"])
+                if isinstance(saved.get("sample_rate"), (int, str)):
+                    data["sample_rate"] = int(saved["sample_rate"])
+                if isinstance(saved.get("gain"), (int, str)):
+                    data["gain"] = int(saved["gain"])
+        except Exception as e:
+            logger.warning(f"Failed to load SDR settings file, using defaults: {e}")
+        return data
+
+    def _save_persisted_settings(self) -> None:
+        """Persist current SDR connection + tuner settings to disk."""
+        try:
+            SDR_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "host": self.client.host,
+                "port": self.client.port,
+                "frequency": self.client._frequency,
+                "sample_rate": self.client._sample_rate,
+                "gain": self.client._gain,
+            }
+            with open(SDR_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to persist SDR settings: {e}")
+
+    def set_connection(self, host: str, port: int) -> dict:
+        """Update RTL-TCP target host/port and persist to disk.
+
+        Takes effect on the next connect(). Caller should disconnect first if
+        currently connected and wants the new endpoint immediately.
+        """
+        self.client.set_connection(host, port)
+        self._save_persisted_settings()
+        logger.info(f"RTL-TCP target set to {host}:{port}")
+        return {"host": self.client.host, "port": self.client.port}
+
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
     async def connect(self) -> dict:
         """Connect to RTL-TCP server."""
         # Cleanup any existing connection first
@@ -72,8 +145,10 @@ class SDRManager:
         if self.client.connected:
             await self.client.disconnect()
             await asyncio.sleep(0.5)  # Give RTL-TCP time to cleanup
-        
+
         success = await self.client.connect()
+        # Persist latest values (host/port/freq/etc. used for this attempt).
+        self._save_persisted_settings()
         return {
             "success": success,
             "status": self.status,
@@ -87,14 +162,17 @@ class SDRManager:
     async def set_frequency(self, freq_hz: int):
         """Set center frequency."""
         await self.client.set_frequency(freq_hz)
+        self._save_persisted_settings()
 
     async def set_sample_rate(self, rate: int):
         """Set sample rate."""
         await self.client.set_sample_rate(rate)
+        self._save_persisted_settings()
 
     async def set_gain(self, gain_db: int):
         """Set gain."""
         await self.client.set_gain(gain_db)
+        self._save_persisted_settings()
 
     async def set_mode(self, mode: str):
         """Set demodulation mode."""
@@ -170,29 +248,42 @@ class SDRManager:
         self._spectrum_callbacks.append(callback)
 
     async def _stream_loop(self):
-        """Main streaming loop - reads IQ data, demodulates, handles recording."""
+        """Main streaming loop - reads IQ data, demodulates, handles recording.
+
+        Optimized: FFT/spectrum is computed every Nth iteration to reduce CPU
+        contention with audio demodulation (which must stay realtime).
+        """
         logger.info("Streaming started")
         consecutive_errors = 0
         max_errors = 50  # Allow up to 50 consecutive read errors before giving up
+        _spectrum_counter = 0
+        _SPECTRUM_INTERVAL = 2  # Compute FFT every 2nd iteration (~15 Hz at 32ms/iter)
         try:
             while self.is_streaming and self.client.connected:
                 try:
-                    # Read IQ samples
-                    iq_data = await self.client.read_samples(131072)  # 128KB chunks
+                    # Read IQ samples — time-based chunk for consistent waterfall
+                    # refresh rate regardless of sample rate.
+                    # ~50ms of audio → ~10 Hz spectrum update, audio stays smooth.
+                    #   1.024 MSPS → 51200 samples → 102400 bytes (~100 KB)
+                    #     250 kSPS → 12500 samples →  25000 bytes (~25 KB)
+                    samples_per_chunk = max(1024, int(self.client._sample_rate * 0.05))
+                    iq_data = await self.client.read_samples(samples_per_chunk * 2)
                     if not iq_data:
                         # Normal: timeout or no data yet, just wait and retry
                         await asyncio.sleep(0.01)
                         continue
-                    
+
                     consecutive_errors = 0  # Reset on successful read
 
-                    # Compute signal level
-                    self._signal_level = compute_signal_level(iq_data)
+                    # Compute signal level for ONLY the tuned channel bandwidth
+                    # (was: total-bandwidth power, which reacted to nearby signals)
+                    self._signal_level = compute_signal_level(
+                        iq_data,
+                        sample_rate=self.client._sample_rate,
+                        mode=self.mode,
+                    )
 
-                    # Compute FFT spectrum
-                    self._compute_spectrum(iq_data)
-
-                    # Demodulate
+                    # Demodulate FIRST (audio must stay realtime; FFT can wait)
                     sample_rate = self.client._sample_rate
                     audio = demodulate(iq_data, self.mode, sample_rate, self.audio_rate)
 
@@ -208,6 +299,12 @@ class SDRManager:
                             await audio_broadcaster.broadcast(
                                 audio, self.audio_rate
                             )
+
+                    # Compute FFT spectrum every Nth iteration to save CPU for audio
+                    _spectrum_counter += 1
+                    if _spectrum_counter >= _SPECTRUM_INTERVAL:
+                        _spectrum_counter = 0
+                        self._compute_spectrum(iq_data)
 
                     # Auto recording logic
                     if self._auto_record and self.is_streaming:
@@ -255,8 +352,9 @@ class SDRManager:
 
     def _compute_spectrum(self, iq_data: bytes):
         """Compute FFT spectrum from IQ data and notify callbacks.
-        
-        Phase 1 upgrade: 1024 bins + Blackman window + exponential averaging.
+
+        Optimized: sends base64-encoded int16 binary instead of JSON list,
+        which is ~10x faster than `.tolist()` + JSON serialization.
         """
         try:
             raw = np.frombuffer(iq_data, dtype=np.uint8)
@@ -297,12 +395,18 @@ class SDRManager:
             if len(spectrum) < target_bins:
                 spectrum = np.pad(spectrum, (0, target_bins - len(spectrum)), mode='edge')
 
-            self._last_spectrum = spectrum.tolist()
+            # Encode as base64 int16 binary (much faster than .tolist() JSON)
+            # Client decodes: atob → charCodeAt pairs → int16
+            import base64
+            spectrum_int16 = np.clip(spectrum, -32768, 32767).astype(np.int16)
+            spectrum_b64 = base64.b64encode(spectrum_int16.tobytes()).decode('ascii')
 
-            # Notify callbacks
+            self._last_spectrum = spectrum_b64
+
+            # Notify callbacks — send base64 string (client decodes)
             for cb in self._spectrum_callbacks:
                 try:
-                    cb(spectrum.tolist())
+                    cb(spectrum_b64)
                 except Exception as e:
                     logger.error(f"Spectrum callback error: {e}")
         except Exception as e:

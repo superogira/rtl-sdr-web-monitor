@@ -2,6 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
+    VERSION: '2024.06.14-v4',  // smooth waterfall: bilinear + overlap blend + continuous gradient
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -45,7 +46,24 @@ const App = {
         API.sdr.setFFTSize(fftSize).catch(() => {});
 
         await this.loadRecentRecordings();
-        console.log('✅ App initialized');
+        this._showVersionBadge();
+        console.log('✅ App initialized v' + this.VERSION);
+    },
+
+    _showVersionBadge() {
+        // Display version so users can confirm they have the latest code.
+        let el = document.getElementById('app-version');
+        if (!el) {
+            el = document.createElement('span');
+            el.id = 'app-version';
+            el.style.cssText = 'font-size:0.6rem;color:var(--text-muted);padding:0 6px;opacity:0.7;white-space:nowrap;';
+            // Insert into header-right (near settings/logout)
+            const headerRight = document.querySelector('.header-right');
+            if (headerRight) {
+                headerRight.insertBefore(el, headerRight.firstChild);
+            }
+        }
+        el.textContent = 'v' + this.VERSION;
     },
 
     async syncState() {
@@ -56,6 +74,8 @@ const App = {
             this.currentFreq = status.frequency || 145500000;
             this.currentMode = status.mode || 'FM';
             this.currentSignal = status.signal_level_db || -120;
+            // Sync sliders + SRATE button active state from backend reality
+            this.syncControlsFromStatus(status);
             this.updateUI();
             console.log('🔄 State synced:', status);
         } catch (err) {
@@ -91,6 +111,42 @@ const App = {
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === this.currentMode));
         const rm = document.getElementById('radio-mode');
         if (rm) rm.textContent = this.currentMode;
+    },
+
+    // Sync UI controls (sliders, selectors) from a status dict.
+    // Called from syncState() and WS status updates.
+    syncControlsFromStatus(data) {
+        // Sync sample rate (BW display + freq-low/high + SRATE button active state)
+        if (data.sample_rate !== undefined) {
+            this._sampleRate = data.sample_rate;
+            const bw = document.getElementById('radio-bw');
+            if (bw) {
+                const sr = data.sample_rate;
+                bw.textContent = sr >= 1e6 ? (sr / 1e6).toFixed(sr % 1e6 === 0 ? 0 : 3) + 'M' : (sr / 1e3).toFixed(0) + 'k';
+            }
+            // Highlight the SRATE button that matches the actual sample rate
+            const srateButtons = document.getElementById('srate-buttons');
+            if (srateButtons) {
+                srateButtons.querySelectorAll('.step-btn').forEach(b =>
+                    b.classList.toggle('active', parseInt(b.dataset.srate) === data.sample_rate)
+                );
+            }
+            this.updateFreqDisplay();
+        }
+        // Sync gain slider
+        if (data.gain !== undefined) {
+            const gs = document.getElementById('gain-slider');
+            const gv = document.getElementById('gain-value');
+            if (gs) gs.value = data.gain;
+            if (gv) gv.textContent = data.gain + ' dB';
+        }
+        // Sync squelch slider
+        if (data.squelch_level !== undefined) {
+            const ss = document.getElementById('squelch-slider');
+            const sv = document.getElementById('squelch-value');
+            if (ss) ss.value = data.squelch_level;
+            if (sv) sv.textContent = data.squelch_level + ' dB';
+        }
     },
 
     // === SDR Connection ===
@@ -400,29 +456,8 @@ const App = {
                 const rm = document.getElementById('radio-mode');
                 if (rm) rm.textContent = data.mode;
             }
-            // Sync gain slider
-            if (data.gain !== undefined) {
-                const gs = document.getElementById('gain-slider');
-                const gv = document.getElementById('gain-value');
-                if (gs) gs.value = data.gain;
-                if (gv) gv.textContent = data.gain + ' dB';
-            }
-            // Sync squelch slider
-            if (data.squelch_level !== undefined) {
-                const ss = document.getElementById('squelch-slider');
-                const sv = document.getElementById('squelch-value');
-                if (ss) ss.value = data.squelch_level;
-                if (sv) sv.textContent = data.squelch_level + ' dB';
-            }
-            // Sync sample rate (for BW display + freq-low/freq-high calculation)
-            if (data.sample_rate !== undefined) {
-                this._sampleRate = data.sample_rate;
-                const bw = document.getElementById('radio-bw');
-                if (bw) {
-                    const sr = data.sample_rate;
-                    bw.textContent = sr >= 1e6 ? (sr/1e6).toFixed(1)+'M' : (sr/1e3).toFixed(0)+'k';
-                }
-            }
+            // Sync sliders + SRATE button from backend (single source of truth)
+            this.syncControlsFromStatus(data);
             // Sync listener count (live audio)
             if (data.listeners !== undefined) {
                 const el = document.getElementById('listener-count');
@@ -460,19 +495,30 @@ const App = {
         });
     },
 
-    // === Waterfall Display ===
-    _waterfallBuffer: [],
-    _waterfallMaxLines: 1000,
-    _waterfallNeedsRedraw: true,
+    // === Waterfall Display (scroll-blit, OpenWebRX style) ===
+    // Instead of redrawing all history every frame (O(w*h)), we scroll the
+    // existing canvas content down by 1px and draw only the new line at top.
+    // This is ~50-100x faster and frees CPU for audio playback.
     _waterfallCanvasW: 0,
     _waterfallCanvasH: 0,
-    _waterfallRenderRunning: false,
+    _waterfallBackBuffer: null,     // offscreen canvas holding waterfall data
+    _waterfallBackCtx: null,
+    _waterfallLineCanvas: null,     // offscreen canvas at numBins width (for bilinear scaling)
+    _waterfallLineCtx: null,
+    _waterfallLineImg: null,        // reusable ImageData (numBins × 1)
+    _waterfallLineBins: 0,          // track line image width (= numBins)
+    _waterfallPendingLines: [],     // queue of new lines to draw
+    _waterfallDirty: false,         // need to composite to main canvas
 
     initWaterfall() {
         const canvas = document.getElementById('waterfall-canvas');
         if (!canvas) return;
         this.waterfallCanvas = canvas;
         this.waterfallCtx = canvas.getContext('2d');
+
+        // Offscreen back buffer holds only waterfall pixels (no grid).
+        this._waterfallBackBuffer = document.createElement('canvas');
+        this._waterfallBackCtx = this._waterfallBackBuffer.getContext('2d');
 
         const resize = () => {
             const parent = canvas.parentElement;
@@ -484,7 +530,15 @@ const App = {
                 this._waterfallCanvasH = h;
                 canvas.width = w;
                 canvas.height = h;
-                this._waterfallNeedsRedraw = true;
+                // Resize back buffer; preserve nothing (full repaint is cheap on resize)
+                this._waterfallBackBuffer.width = w;
+                this._waterfallBackBuffer.height = h;
+                // Clear back buffer to background color
+                const bb = this._waterfallBackCtx;
+                bb.fillStyle = '#0a0a1a';
+                bb.fillRect(0, 0, w, h);
+                this._waterfallLineBins = 0;  // force rebuild of line canvas/img
+                this._waterfallDirty = true;
             }
         };
 
@@ -510,42 +564,67 @@ const App = {
     _colorLUTDbMax: null,
 
     _buildColorLUT() {
-        // Build a 256-entry RGB lookup table from current dB range
-        // Called once when dB range changes → saves massive CPU in render loop
-        const lut = new Uint8ClampedArray(256 * 3);
-        const dbRange = this._dbMax - this._dbMin;
-        for (let i = 0; i < 256; i++) {
-            const norm = i / 255;
-            let r, g, b;
-            if (norm < 0.15) {
-                const t = norm / 0.15;
-                r = 0; g = 0; b = (t * 128) | 0;
-            } else if (norm < 0.3) {
-                const t = (norm - 0.15) / 0.15;
-                r = 0; g = 0; b = (128 + t * 127) | 0;
-            } else if (norm < 0.45) {
-                const t = (norm - 0.3) / 0.15;
-                r = 0; g = (t * 255) | 0; b = 255;
-            } else if (norm < 0.6) {
-                const t = (norm - 0.45) / 0.15;
-                r = 0; g = 255; b = (255 * (1 - t)) | 0;
-            } else if (norm < 0.75) {
-                const t = (norm - 0.6) / 0.15;
-                r = (t * 255) | 0; g = 255; b = 0;
-            } else if (norm < 0.9) {
-                const t = (norm - 0.75) / 0.15;
-                r = 255; g = (255 * (1 - t)) | 0; b = 0;
-            } else {
-                const t = (norm - 0.9) / 0.1;
-                r = 255; g = (t * 255) | 0; b = (t * 255) | 0;
-            }
-            lut[i*3] = r;
-            lut[i*3+1] = g;
-            lut[i*3+2] = b;
+        // Build a 1024-entry RGB lookup table using HSL color wheel.
+        // This produces a *continuous* gradient (no hard band transitions)
+        // similar to OpenWebRX's default colormap.
+        // Color stops (HSL hue 240→0, i.e. blue→red):
+        //   0.00 → dark navy    (hue 250, sat 80%, light 8%)
+        //   0.20 → blue         (hue 220, sat 85%, light 35%)
+        //   0.40 → cyan         (hue 185, sat 90%, light 50%)
+        //   0.60 → green        (hue 120, sat 85%, light 45%)
+        //   0.80 → yellow       (hue 50,  sat 95%, light 55%)
+        //   1.00 → red/white    (hue 0,   sat 95%, light 65%)
+        const N = 1024;
+        const lut = new Uint8ClampedArray(N * 3);
+        const stops = [
+            [0.00, 250, 80, 8],
+            [0.20, 220, 85, 35],
+            [0.40, 185, 90, 50],
+            [0.60, 120, 85, 45],
+            [0.80, 50,  95, 55],
+            [1.00, 0,   95, 65],
+        ];
+        for (let i = 0; i < N; i++) {
+            const norm = i / (N - 1);
+            // Find segment
+            let seg = 0;
+            while (seg < stops.length - 2 && norm > stops[seg + 1][0]) seg++;
+            const s0 = stops[seg], s1 = stops[seg + 1];
+            const t = (norm - s0[0]) / (s1[0] - s0[0]);
+            // Interpolate HSL
+            let h = s0[1] + t * (s1[1] - s0[1]);
+            let s = (s0[2] + t * (s1[2] - s0[2])) / 100;
+            let l = (s0[3] + t * (s1[3] - s0[3])) / 100;
+            const [r, g, b] = this._hslToRgb(h, s, l);
+            lut[i * 3]     = r;
+            lut[i * 3 + 1] = g;
+            lut[i * 3 + 2] = b;
         }
         this._colorLUT = lut;
+        this._colorLUTN = N;
         this._colorLUTDbMin = this._dbMin;
         this._colorLUTDbMax = this._dbMax;
+    },
+
+    _hslToRgb(h, s, l) {
+        // Standard HSL→RGB. h in degrees [0,360], s/l in [0,1].
+        h = ((h % 360) + 360) % 360;
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const hp = h / 60;
+        const x = c * (1 - Math.abs((hp % 2) - 1));
+        let r1 = 0, g1 = 0, b1 = 0;
+        if (hp < 1)      { r1 = c; g1 = x; }
+        else if (hp < 2) { r1 = x; g1 = c; }
+        else if (hp < 3) { g1 = c; b1 = x; }
+        else if (hp < 4) { g1 = x; b1 = c; }
+        else if (hp < 5) { r1 = x; b1 = c; }
+        else             { r1 = c; b1 = x; }
+        const m = l - c / 2;
+        return [
+            Math.round((r1 + m) * 255),
+            Math.round((g1 + m) * 255),
+            Math.round((b1 + m) * 255),
+        ];
     },
 
     _renderWaterfall() {
@@ -555,67 +634,98 @@ const App = {
         const canvas = this.waterfallCanvas;
         const ctx = this.waterfallCtx;
         if (!canvas || !ctx) return;
-        
+
         const w = this._waterfallCanvasW;
         const h = this._waterfallCanvasH;
         if (w <= 0 || h <= 0) return;
 
-        const buffer = this._waterfallBuffer;
-        if (buffer.length === 0) return;
-        if (!this._waterfallNeedsRedraw) return;
-        this._waterfallNeedsRedraw = false;
+        const bb = this._waterfallBackBuffer;
+        const bbCtx = this._waterfallBackCtx;
+        if (!bb || !bbCtx) return;
 
         // Rebuild color LUT if dB range changed
         if (!this._colorLUT || this._colorLUTDbMin !== this._dbMin || this._colorLUTDbMax !== this._dbMax) {
             this._buildColorLUT();
         }
         const lut = this._colorLUT;
+        const lutN = this._colorLUTN || 1024;
+        const lutNMinus1 = lutN - 1;
         const dbRange = this._dbMax - this._dbMin;
         const dbMin = this._dbMin;
+        const dbScale = lutNMinus1 / dbRange;
 
-        const numLines = Math.min(buffer.length, h);
-        const startIdx = buffer.length - numLines;
-
-        // Use ImageData for fast bulk pixel operations
-        const imgData = ctx.createImageData(w, h);
-        const pixels = imgData.data;
-        // Fill with background color (10, 10, 26)
-        for (let i = 0; i < pixels.length; i += 4) {
-            pixels[i] = 10; pixels[i+1] = 10; pixels[i+2] = 26; pixels[i+3] = 255;
-        }
-
-        // Precompute bin index mapping for each x pixel (avoids Math.floor per pixel per line)
-        const numBins = buffer[startIdx] ? buffer[startIdx].length : 1024;
-        const binMap = new Int32Array(w);
-        for (let x = 0; x < w; x++) {
-            binMap[x] = Math.floor(x / w * numBins);
-        }
-
-        // Draw each line using Color LUT (much faster: no if-else chains per pixel)
-        // Flow DOWN: newest data at top (y=0), oldest at bottom
-        for (let i = 0; i < numLines; i++) {
-            const line = buffer[startIdx + i];
-            const y = numLines - 1 - i;
-            const rowOffset = y * w * 4;
-
-            for (let x = 0; x < w; x++) {
-                const val = line[binMap[x]];
-                // Map dB to LUT index (0-255)
-                let lutIdx = ((val - dbMin) / dbRange * 255) | 0;
-                if (lutIdx < 0) lutIdx = 0;
-                else if (lutIdx > 255) lutIdx = 255;
-                const lutOff = lutIdx * 3;
-                const off = rowOffset + x * 4;
-                pixels[off] = lut[lutOff];
-                pixels[off+1] = lut[lutOff+1];
-                pixels[off+2] = lut[lutOff+2];
+        // Drain pending lines into the back buffer (scroll-blit).
+        const pending = this._waterfallPendingLines;
+        if (pending.length > 0) {
+            const numNew = Math.min(pending.length, h);
+            // Scroll existing content DOWN by numNew pixels via drawImage self-blit.
+            if (numNew < h) {
+                bbCtx.drawImage(bb, 0, 0, w, h - numNew, 0, numNew, w, h - numNew);
             }
+            // Clear the top numNew rows
+            bbCtx.fillStyle = '#0a0a1a';
+            bbCtx.fillRect(0, 0, w, numNew);
+
+            // Setup line canvas at numBins width (for bilinear scaling)
+            const firstLine = pending[pending.length - 1];
+            const numBins = firstLine.length;
+            if (numBins <= 0) {
+                pending.length = 0;
+                return;
+            }
+            if (this._waterfallLineBins !== numBins || !this._waterfallLineCanvas) {
+                this._waterfallLineCanvas = document.createElement('canvas');
+                this._waterfallLineCanvas.width = numBins;
+                this._waterfallLineCanvas.height = 1;
+                this._waterfallLineCtx = this._waterfallLineCanvas.getContext('2d');
+                this._waterfallLineImg = this._waterfallLineCtx.createImageData(numBins, 1);
+                this._waterfallLineBins = numBins;
+            }
+            const lineCanvas = this._waterfallLineCanvas;
+            const lineCtx = this._waterfallLineCtx;
+            const imgData = this._waterfallLineImg;
+            const pixels = imgData.data;
+
+            // Enable smoothing on back buffer for bilinear scaling (Fix A)
+            bbCtx.imageSmoothingEnabled = true;
+            bbCtx.imageSmoothingQuality = 'high';
+
+            for (let i = 0; i < numNew; i++) {
+                const line = pending[pending.length - numNew + i];
+                const y = numNew - 1 - i;
+
+                // Render spectrum into ImageData at numBins resolution (native FFT bins)
+                for (let x = 0; x < numBins; x++) {
+                    const val = line[x];
+                    let lutIdx = ((val - dbMin) * dbScale) | 0;
+                    if (lutIdx < 0) lutIdx = 0;
+                    else if (lutIdx > lutNMinus1) lutIdx = lutNMinus1;
+                    const lutOff = lutIdx * 3;
+                    const off = x * 4;
+                    pixels[off] = lut[lutOff];
+                    pixels[off + 1] = lut[lutOff + 1];
+                    pixels[off + 2] = lut[lutOff + 2];
+                    pixels[off + 3] = 255;
+                }
+                lineCtx.putImageData(imgData, 0, 0);
+
+                // drawImage with scale → browser does bilinear interpolation (Fix A)
+                // Vertical overlap blend (Fix B): draw with alpha 0.85 at top edge
+                // to blend with existing content, producing smoother vertical transitions
+                bbCtx.globalAlpha = 0.85;
+                bbCtx.drawImage(lineCanvas, 0, 0, numBins, 1, 0, y, w, 1);
+                bbCtx.globalAlpha = 1.0;
+            }
+            pending.length = 0;
+            this._waterfallDirty = true;
         }
 
-        ctx.putImageData(imgData, 0, 0);
-
-        // Draw frequency grid overlay (vertical lines + top labels)
-        this._drawFreqGrid(ctx, w, h);
+        // Composite to main canvas only when dirty, then draw grid.
+        if (this._waterfallDirty) {
+            ctx.drawImage(bb, 0, 0);
+            this._drawFreqGrid(ctx, w, h);
+            this._waterfallDirty = false;
+        }
     },
 
     _drawFreqGrid(ctx, w, h) {
@@ -719,16 +829,19 @@ const App = {
     drawWaterfall(spectrumData) {
         // Accept both typed arrays (Int16Array, Float32Array) and regular arrays
         if (!spectrumData || !spectrumData.length) return;
-        
-        const speed = this.waterfallSpeed;
+
+        // Push a copy of the spectrum into pending lines; the render loop
+        // will drain them via scroll-blit. Cap pending to canvas height to
+        // avoid unbounded growth if the browser stalls.
         const line = new Float32Array(spectrumData);
+        const maxPending = this._waterfallCanvasH || 300;
+        const speed = this.waterfallSpeed;
         for (let i = 0; i < speed; i++) {
-            this._waterfallBuffer.push(line);
+            this._waterfallPendingLines.push(line);
         }
-        while (this._waterfallBuffer.length > this._waterfallMaxLines) {
-            this._waterfallBuffer.shift();
+        if (this._waterfallPendingLines.length > maxPending) {
+            this._waterfallPendingLines.splice(0, this._waterfallPendingLines.length - maxPending);
         }
-        this._waterfallNeedsRedraw = true;
     },
 
     spectrumToColor(db) {

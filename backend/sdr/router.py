@@ -33,6 +33,10 @@ class SquelchRequest(BaseModel):
 class FFTSizeRequest(BaseModel):
     fft_size: int  # Must be power of 2 (256-8192)
 
+class ConnectionRequest(BaseModel):
+    host: str
+    port: int = 1234
+
 
 # === Endpoints ===
 
@@ -42,9 +46,30 @@ async def get_sdr_status(current_user: User = Depends(get_current_user)):
     return sdr_manager.status
 
 
+@router.post("/connection")
+async def set_connection(
+    req: ConnectionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Set RTL-TCP host/port (persisted; used on next connect)."""
+    return sdr_manager.set_connection(req.host, req.port)
+
+
+
 @router.post("/connect")
-async def connect_sdr(current_user: User = Depends(get_current_user)):
-    """Connect to RTL-TCP server."""
+async def connect_sdr(
+    req: Optional[ConnectionRequest] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Connect to RTL-TCP server.
+
+    Optionally accepts {host, port} to update the target before connecting.
+    """
+    if req is not None and req.host:
+        # If currently connected, disconnect first so new endpoint applies.
+        if sdr_manager.client.connected:
+            await sdr_manager.disconnect()
+        sdr_manager.set_connection(req.host, req.port)
     result = await sdr_manager.connect()
     if not result["success"]:
         raise HTTPException(status_code=503, detail="Failed to connect to RTL-TCP")

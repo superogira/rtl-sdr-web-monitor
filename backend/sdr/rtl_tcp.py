@@ -43,6 +43,14 @@ class RtlTcpClient:
         self._sample_rate = settings.RTL_TCP_SAMPLE_RATE
         self._gain = settings.RTL_TCP_GAIN
 
+    def set_connection(self, host: str, port: int):
+        """Update target host/port. Takes effect on next connect().
+
+        If currently connected, caller should disconnect first.
+        """
+        self.host = host
+        self.port = int(port)
+
     async def connect(self) -> bool:
         """Connect to rtl_tcp server."""
         try:

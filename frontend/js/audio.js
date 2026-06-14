@@ -15,9 +15,10 @@ const LiveAudio = {
 
     // Buffer scheduling
     _sampleRate: 8000,       // Updated from server frames
-    _nextStartTime: 0,       // When the next buffer should play
+    _nextStartTime: 0,       // 0 = not started; set on first frame arrival
+    _targetLatency: 0.25,    // 250ms target buffer ahead (jitter cushion)
     _queue: [],              // Queue of decoded Float32Arrays
-    _maxQueue: 20,           // Max buffers in queue (prevents memory leak)
+    _maxQueue: 30,           // Max buffers in queue (prevents memory leak)
     _framesReceived: 0,
     _underruns: 0,
     _reconnectTimer: null,
@@ -113,7 +114,7 @@ const LiveAudio = {
         this.isPlaying = true;
         this._framesReceived = 0;
         this._underruns = 0;
-        this._nextStartTime = this.ctx.currentTime;
+        this._nextStartTime = 0;  // Reset; will be set on first frame arrival
         this._connectWS();
         this._updateUI();
         this._startDebugOverlay();
@@ -339,10 +340,15 @@ const LiveAudio = {
     _scheduleBuffer(audioBuffer) {
         const now = this.ctx.currentTime;
 
-        // If we're behind schedule (underrun), reset to now
-        if (this._nextStartTime < now) {
-            this._underruns++;
-            this._nextStartTime = now + 0.05;  // Small buffer ahead
+        // First frame or underrun recovery: set start time with target latency.
+        // This builds a ~250ms jitter cushion before audio starts playing,
+        // absorbing network/CPU timing variations that cause stuttering.
+        if (this._nextStartTime === 0 || this._nextStartTime < now) {
+            if (this._nextStartTime !== 0) {
+                this._underruns++;
+                console.warn(`🔊 [audio] underrun #${this._underruns}, re-buffering ${this._targetLatency * 1000}ms`);
+            }
+            this._nextStartTime = now + this._targetLatency;
         }
 
         // Prevent queue overflow (drop oldest)

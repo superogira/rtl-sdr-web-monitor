@@ -65,7 +65,7 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>Host</label>
-                        <input type="text" id="sdr-host" value="192.168.2.151">
+                        <input type="text" id="sdr-host" value="192.168.1.101">
                     </div>
                     <div class="form-group">
                         <label>Port</label>
@@ -346,11 +346,10 @@
             this.loadUsers();
         },
 
-        // === SDR Settings (persisted in localStorage) ===
-        loadSDRSettings() {
+        // === SDR Settings === Host/port/freq etc. are authoritative on backend.
+        async loadSDRSettings() {
+            // Fallback values from localStorage first.
             const fields = {
-                'sdr-host': 'sdr_host',
-                'sdr-port': 'sdr_port',
                 'sdr-freq': 'sdr_freq',
                 'sdr-samplerate': 'sdr_sample_rate',
                 'sdr-gain': 'sdr_gain',
@@ -361,6 +360,22 @@
                 if (!el) continue;
                 const saved = localStorage.getItem(key);
                 if (saved !== null) el.value = saved;
+            }
+            // Pull host/port/freq etc. from backend (authoritative source).
+            try {
+                const status = await API.sdr.status();
+                if (status.host) document.getElementById('sdr-host').value = status.host;
+                if (status.port) document.getElementById('sdr-port').value = status.port;
+                if (status.frequency) document.getElementById('sdr-freq').value = status.frequency;
+                if (status.sample_rate) document.getElementById('sdr-samplerate').value = status.sample_rate;
+                if (status.gain) document.getElementById('sdr-gain').value = status.gain;
+                if (status.mode) document.getElementById('sdr-mode').value = status.mode;
+            } catch (e) {
+                console.warn('Could not load SDR status from backend, using local defaults');
+                const savedHost = localStorage.getItem('sdr_host');
+                const savedPort = localStorage.getItem('sdr_port');
+                if (savedHost) document.getElementById('sdr-host').value = savedHost;
+                if (savedPort) document.getElementById('sdr-port').value = savedPort;
             }
         },
 
@@ -409,8 +424,12 @@
         },
 
         async connectSDR() {
+            const host = document.getElementById('sdr-host').value.trim();
+            const port = parseInt(document.getElementById('sdr-port').value) || 1234;
+            if (!host) { alert('กรุณาใส่ Host'); return; }
             try {
-                await API.sdr.connect();
+                // Send host/port with the connect call so backend uses them.
+                await API.sdr.connect(host, port);
                 // Apply saved SDR settings to hardware after connecting
                 try {
                     await API.sdr.setFrequency(parseInt(document.getElementById('sdr-freq').value));
@@ -430,34 +449,42 @@
         },
 
         async saveSDR() {
-            // Always persist to localStorage first (survives refresh + restart)
-            const fields = {
-                'sdr-host': 'sdr_host',
-                'sdr-port': 'sdr_port',
-                'sdr-freq': 'sdr_freq',
-                'sdr-samplerate': 'sdr_sample_rate',
-                'sdr-gain': 'sdr_gain',
-                'sdr-mode': 'sdr_mode',
-            };
-            for (const [elId, key] of Object.entries(fields)) {
-                const el = document.getElementById(elId);
-                if (el) localStorage.setItem(key, el.value);
+            const host = document.getElementById('sdr-host').value.trim();
+            const port = parseInt(document.getElementById('sdr-port').value) || 1234;
+            const freq = parseInt(document.getElementById('sdr-freq').value);
+            const sampleRate = parseInt(document.getElementById('sdr-samplerate').value);
+            const gain = parseInt(document.getElementById('sdr-gain').value);
+            const mode = document.getElementById('sdr-mode').value;
+            if (!host) { alert('กรุณาใส่ Host'); return; }
+
+            // 1) Persist freq/rate/gain/mode to localStorage (local cache).
+            localStorage.setItem('sdr_freq', String(freq));
+            localStorage.setItem('sdr_sample_rate', String(sampleRate));
+            localStorage.setItem('sdr_gain', String(gain));
+            localStorage.setItem('sdr_mode', mode);
+
+            // 2) Send host/port to backend (persisted server-side → survives restart).
+            try {
+                await API.sdr.setConnection(host, port);
+            } catch(e) {
+                alert('⚠️ ส่งค่า host/port ไป server ไม่ได้: ' + (e.detail || e.message || e));
+                return;
             }
 
-            // Apply to hardware if currently connected
+            // 3) Apply freq/rate/gain/mode to hardware if currently connected.
             try {
                 const status = await API.sdr.status();
                 if (status.connected) {
-                    await API.sdr.setFrequency(parseInt(document.getElementById('sdr-freq').value));
-                    await API.sdr.setSampleRate(parseInt(document.getElementById('sdr-samplerate').value));
-                    await API.sdr.setGain(parseInt(document.getElementById('sdr-gain').value));
-                    await API.sdr.setMode(document.getElementById('sdr-mode').value);
-                    alert('✅ บันทึกและตั้งค่าสำเร็จ!');
+                    await API.sdr.setFrequency(freq);
+                    await API.sdr.setSampleRate(sampleRate);
+                    await API.sdr.setGain(gain);
+                    await API.sdr.setMode(mode);
+                    alert('✅ บันทึกและตั้งค่าสำเร็จ! (เปลี่ยน host/port จะมีผลตอนเชื่อมต่อใหม่)');
                 } else {
-                    alert('✅ บันทึกแล้ว ค่าจะถูกใช้ตอนเชื่อมต่อ RTL-TCP');
+                    alert('✅ บันทึกเรียบร้อย! ค่าจะถูกใช้ตอนกด "เชื่อมต่อ"');
                 }
             } catch(e) {
-                alert('✅ บันทึก local แล้ว แต่ส่งไป server ไม่ได้: ' + (e.detail || e.message || e));
+                alert('✅ บันทึก host/port แล้ว แต่ apply ค่าอื่นไม่ได้: ' + (e.detail || e.message || e));
             }
         },
 

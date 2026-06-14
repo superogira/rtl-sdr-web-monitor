@@ -87,20 +87,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
     sdr_manager.on_spectrum(on_spectrum)
 
-    import base64
-    import numpy as np
-
     status_counter = 0
     try:
         while True:
-            # Send spectrum data at ~30 FPS (binary base64 for efficiency)
+            # Send spectrum data (already base64-encoded int16 in manager.py)
             if spectrum_data["latest"]:
-                # Encode as int16 binary (1024 bins × 2 bytes = 2KB → ~2.7KB base64)
-                arr = np.array(spectrum_data["latest"], dtype=np.int16)
-                b64 = base64.b64encode(arr.tobytes()).decode("ascii")
                 await websocket.send_text(json.dumps({
                     "type": "spectrum",
-                    "data": b64
+                    "data": spectrum_data["latest"]
                 }))
                 spectrum_data["latest"] = None
 

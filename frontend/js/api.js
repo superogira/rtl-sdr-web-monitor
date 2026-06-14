@@ -83,8 +83,12 @@ const API = {
 
     // SDR
     sdr: {
-        async connect() {
-            return API.request('POST', '/api/sdr/connect');
+        async connect(host = null, port = null) {
+            const body = (host) ? { host, port: parseInt(port) || 1234 } : null;
+            return API.request('POST', '/api/sdr/connect', body);
+        },
+        async setConnection(host, port) {
+            return API.request('POST', '/api/sdr/connection', { host, port: parseInt(port) || 1234 });
         },
         async disconnect() {
             return API.request('POST', '/api/sdr/disconnect');
