@@ -209,6 +209,7 @@ a:hover {
     flex: 1 1 0%;
     min-height: 0;
     overflow: hidden;
+    position: relative;  /* anchor for collapse button */
 }
 
 .panel-left {
@@ -1112,11 +1113,12 @@ a:hover {
 }
 
 /* === Panel Right Collapse Button === */
+/* Positioned outside panel-right (as sibling) so it stays visible when collapsed. */
 .panel-collapse-btn {
     position: absolute;
     top: 4px;
     right: 4px;
-    z-index: 10;
+    z-index: 20;
     background: var(--bg-card-hover);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
@@ -1130,8 +1132,14 @@ a:hover {
     align-items: center;
     justify-content: center;
     transition: background 0.2s;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
 }
 .panel-collapse-btn:hover {
+    background: var(--accent-blue);
+    color: #fff;
+}
+/* When panel is collapsed, slide button slightly inward for visual feedback */
+.panel-collapse-btn.is-collapsed {
     background: var(--accent-blue);
     color: #fff;
 }
@@ -1143,6 +1151,10 @@ a:hover {
 /* When panel-right is collapsed, expand grid to single column */
 .dashboard:has(.panel-right.collapsed) {
     grid-template-columns: 1fr;
+}
+/* When panel collapsed, keep collapse button at top-right corner */
+.dashboard:has(.panel-right.collapsed) .panel-collapse-btn {
+    right: 4px;
 }
 
 /* === Layout Reflow Prevention === */

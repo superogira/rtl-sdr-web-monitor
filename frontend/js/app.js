@@ -306,12 +306,14 @@ const App = {
             if (localStorage.getItem('panel_right_collapsed') === 'true') {
                 panelRight.classList.add('collapsed');
                 collapseBtn.textContent = '⬇';
+                collapseBtn.classList.add('is-collapsed');
             }
             collapseBtn.addEventListener('click', () => {
                 const isCollapsed = panelRight.classList.toggle('collapsed');
                 // Mark as user-expanded so mobile media query doesn't auto-hide
                 panelRight.classList.add('user-expanded');
                 collapseBtn.textContent = isCollapsed ? '⬇' : '⬆';
+                collapseBtn.classList.toggle('is-collapsed', isCollapsed);
                 localStorage.setItem('panel_right_collapsed', String(isCollapsed));
             });
         }

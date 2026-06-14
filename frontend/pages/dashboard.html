@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=11">
+    <link rel="stylesheet" href="/css/app.css?v=12">
 </head>
 <body>
     <div class="app-container">
@@ -88,9 +88,11 @@
                     </div>
                 </div>
 
+                <!-- Collapse button (OUTSIDE panel-right so it stays visible when collapsed) -->
+                <button class="panel-collapse-btn" id="panel-collapse-btn" title="ย่อ/ขยายแผงขวา">⬆</button>
+
                 <!-- Right Panel: Clock + Freq List + Feed -->
                 <div class="panel-right" id="panel-right">
-                    <button class="panel-collapse-btn" id="panel-collapse-btn" title="ย่อ/ขยายแผงขวา">⬆</button>
                     <!-- Clock Widget -->
                     <div class="clock-widget">
                         <div class="clock-time" id="clock-time">--:--:--</div>
@@ -242,6 +244,6 @@
     <script src="/js/auth.js?v=4"></script>
     <script src="/js/websocket.js?v=4"></script>
     <script src="/js/audio.js?v=5"></script>
-    <script src="/js/app.js?v=18"></script>
+    <script src="/js/app.js?v=19"></script>
 </body>
 </html>
