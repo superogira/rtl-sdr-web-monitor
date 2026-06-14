@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=12">
+    <link rel="stylesheet" href="/css/app.css?v=13">
 </head>
 <body>
     <div class="app-container">
@@ -60,7 +60,9 @@
                     <div class="waterfall-container">
                         <canvas id="waterfall-canvas"></canvas>
                         <!-- Center frequency marker (triangle pointing down + vertical line) -->
-                        <div class="center-freq-marker" title="ความถี่กึ่งกลาง"></div>
+                        <!-- center-freq-marker removed: label pill from grid
+                             already marks center frequency clearly. Removing
+                             triangle avoids overlap with freq label at top. -->
                         <div class="waterfall-overlay">
                             <span id="freq-low">144.000 MHz</span>
                             <span id="freq-center" class="text-accent">145.500 MHz</span>
@@ -244,6 +246,6 @@
     <script src="/js/auth.js?v=4"></script>
     <script src="/js/websocket.js?v=4"></script>
     <script src="/js/audio.js?v=5"></script>
-    <script src="/js/app.js?v=19"></script>
+    <script src="/js/app.js?v=20"></script>
 </body>
 </html>

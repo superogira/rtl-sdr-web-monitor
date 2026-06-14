@@ -883,14 +883,14 @@ const App = {
     },
 
     /**
-     * Draw channel bandwidth overlay — faint dashed vertical edge lines
-     * showing the active receive filter width. No label/brackets to avoid
-     * overlapping with frequency tick labels.
+     * Draw channel bandwidth overlay — corner brackets at top & bottom of
+     * waterfall + faint dashed vertical edge lines.
+     * No label pill (would overlap frequency tick labels at top).
      *
-     *   ┊                 ┊
-     *   ┊      ↓ 93.0     ┊
-     *   ┊   (waterfall)   ┊
-     *   ┊                 ┊
+     *   ┊┌               ┐┊
+     *   ┊      ↓ 93.0    ┊
+     *   ┊   (waterfall)  ┊
+     *   ┊└               ┘┊
      */
     _drawChannelBwOverlay(ctx, w, h) {
         const bw = this._channelBw || 12000;
@@ -899,8 +899,8 @@ const App = {
         if (bwPx < 4) return;  // too small to draw
 
         const cx = w / 2;
-        const left = Math.round(cx - bwPx / 2) + 0.5;
-        const right = Math.round(cx + bwPx / 2) + 0.5;
+        const left = cx - bwPx / 2;
+        const right = cx + bwPx / 2;
 
         ctx.save();
 
@@ -909,12 +909,46 @@ const App = {
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.moveTo(left, 0);
-        ctx.lineTo(left, h);
-        ctx.moveTo(right, 0);
-        ctx.lineTo(right, h);
+        ctx.moveTo(Math.round(left) + 0.5, 0);
+        ctx.lineTo(Math.round(left) + 0.5, h);
+        ctx.moveTo(Math.round(right) + 0.5, 0);
+        ctx.lineTo(Math.round(right) + 0.5, h);
         ctx.stroke();
         ctx.setLineDash([]);
+
+        // === Corner brackets (top & bottom) ===
+        const armH = 10;       // vertical arm length
+        const armW = 6;        // horizontal arm length (corner tick)
+        ctx.strokeStyle = 'rgba(234, 179, 8, 0.85)';
+        ctx.lineWidth = 2;
+
+        // Top-left corner
+        ctx.beginPath();
+        ctx.moveTo(left, armH);
+        ctx.lineTo(left, 0);
+        ctx.lineTo(left + armW, 0);
+        ctx.stroke();
+
+        // Top-right corner
+        ctx.beginPath();
+        ctx.moveTo(right, armH);
+        ctx.lineTo(right, 0);
+        ctx.lineTo(right - armW, 0);
+        ctx.stroke();
+
+        // Bottom-left corner
+        ctx.beginPath();
+        ctx.moveTo(left, h - armH);
+        ctx.lineTo(left, h);
+        ctx.lineTo(left + armW, h);
+        ctx.stroke();
+
+        // Bottom-right corner
+        ctx.beginPath();
+        ctx.moveTo(right, h - armH);
+        ctx.lineTo(right, h);
+        ctx.lineTo(right - armW, h);
+        ctx.stroke();
 
         ctx.restore();
     },
@@ -948,18 +982,15 @@ const App = {
             const x = ((tickHz - lowHz) / bwHz) * w;
             const isCenter = Math.abs(tickHz - centerHz) < stepHz * 0.01;
 
-            // Vertical grid line
-            if (isCenter) {
-                ctx.strokeStyle = "rgba(234, 179, 8, 0.7)";
-                ctx.lineWidth = 1.5;
-            } else {
+            // Vertical grid line (skip center — marked by BW overlay + label pill)
+            if (!isCenter) {
                 ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
                 ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(Math.round(x) + 0.5, 0);
+                ctx.lineTo(Math.round(x) + 0.5, h);
+                ctx.stroke();
             }
-            ctx.beginPath();
-            ctx.moveTo(Math.round(x) + 0.5, 0);
-            ctx.lineTo(Math.round(x) + 0.5, h);
-            ctx.stroke();
 
             // Frequency label at top
             const label = this._formatFreqTick(tickHz);

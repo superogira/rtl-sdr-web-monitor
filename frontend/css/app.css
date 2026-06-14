@@ -1126,40 +1126,6 @@ a:hover {
 .justify-between { justify-content: space-between; }
 .gap-1 { gap: 0.5rem; }
 .gap-2 { gap: 1rem; }
-
-/* === Center Frequency Marker (waterfall) === */
-.center-freq-marker {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 0;
-    height: 0;
-    border-left: 8px solid transparent;
-    border-right: 8px solid transparent;
-    border-top: 10px solid var(--accent-yellow);
-    filter: drop-shadow(0 0 4px var(--accent-yellow));
-    z-index: 5;
-    pointer-events: none;
-}
-.center-freq-marker::after {
-    content: '';
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 1px;
-    height: calc(100vh - 200px);
-    background: repeating-linear-gradient(
-        to bottom,
-        var(--accent-yellow) 0,
-        var(--accent-yellow) 4px,
-        transparent 4px,
-        transparent 8px
-    );
-    opacity: 0.6;
-}
-
 /* === Panel Right Collapse Button === */
 /* Positioned outside panel-right (as sibling) so it stays visible when collapsed. */
 .panel-collapse-btn {
