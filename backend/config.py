@@ -33,7 +33,12 @@ class Settings(BaseSettings):
     RTL_TCP_FREQ_CORRECTION_PPM: int = 0  # Parts per million frequency correction
 
     # Audio Settings
-    AUDIO_SAMPLE_RATE: int = 8000
+    # Audio output sample rate.
+    # 32000 Hz chosen to support WBFM broadcast audio (up to 15 kHz music)
+    # while keeping bandwidth modest for live streaming.
+    #   Nyquist = 16 kHz → covers 30-15000 Hz WBFM audio band fully.
+    #   NBFM voice (300-3400 Hz) also works fine at this rate.
+    AUDIO_SAMPLE_RATE: int = 32000
     AUDIO_CHANNELS: int = 1
     SQUELCH_LEVEL: float = -70.0
     VAD_AGGRESSIVENESS: int = 3

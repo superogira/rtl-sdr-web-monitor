@@ -12,25 +12,43 @@ from scipy.signal import lfilter, butter, sosfiltfilt
 
 logger = logging.getLogger(__name__)
 
-# Voice-band filter cache (keyed by audio sample rate).
+# Voice-band filter cache (keyed by audio sample rate + WBFM flag).
 # We design filters lazily because scipy's butter() needs a valid fs.
 _FILTER_CACHE: dict = {}
 
 
-def _get_voice_filters(audio_rate: float):
+def _get_voice_filters(audio_rate: float, wbfm: bool = False):
     """Return (high_pass_sos, band_pass_sos) for a given audio_rate.
 
-    Designed once per unique audio_rate and cached for efficiency.
+    Designed once per unique (audio_rate, wbfm) combination and cached.
+
+    - NBFM: HP 150 Hz (strip CTCSS) + BP 300-3400 Hz (telephone voice band)
+    - WBFM: HP 30 Hz  + BP 30-15000 Hz (FM broadcast high-fidelity)
     """
-    key = int(audio_rate)
+    key = (int(audio_rate), bool(wbfm))
     if key not in _FILTER_CACHE:
-        nyq = key / 2.0
-        # High-pass at 150 Hz (strip DC / CTCSS tones)
-        hp = butter(2, 150.0 / nyq, btype='high', output='sos')
-        # Band-pass 300-3400 Hz (telephone voice band)
-        bp = butter(4, [300.0 / nyq, min(3400.0 / nyq, 0.99)], btype='band', output='sos')
+        fs = key[0]
+        nyq = fs / 2.0
+        if wbfm:
+            # WBFM broadcast: wide-band audio for music
+            hp_cut = 30.0
+            bp_lo = 30.0
+            bp_hi = min(15000.0, nyq * 0.95)
+        else:
+            # NBFM voice: strip sub-audio tones, telephone-grade voice
+            hp_cut = 150.0
+            bp_lo = 300.0
+            bp_hi = min(3400.0, nyq * 0.99)
+        hp = butter(2, hp_cut / nyq, btype='high', output='sos')
+        bp = butter(4, [bp_lo / nyq, min(bp_hi / nyq, 0.99)], btype='band', output='sos')
         _FILTER_CACHE[key] = (hp, bp)
     return _FILTER_CACHE[key]
+
+
+# Threshold (Hz) to distinguish FM broadcast (WBFM) from narrow FM (NBFM).
+# WBFM channels are 200 kHz wide (Japan/Europe/Thailand) or 75 kHz (OIRT).
+# Anything >= 100 kHz is treated as WBFM.
+_WBFM_BW_THRESHOLD = 100_000
 
 
 class DemodMode(str, Enum):
@@ -49,14 +67,19 @@ def iq_to_complex(iq_bytes: bytes) -> np.ndarray:
     return complex_data
 
 
-def demod_fm(iq: np.ndarray, sample_rate: float, audio_rate: float = 8000) -> np.ndarray:
+def demod_fm(iq: np.ndarray, sample_rate: float, audio_rate: float = 8000,
+             channel_bw: int = 0) -> np.ndarray:
     """FM demodulation using instantaneous frequency.
 
+    Automatically selects WBFM (broadcast) vs NBFM (voice) parameters based
+    on channel_bw:
+      - channel_bw >= 100 kHz  → WBFM (±75 kHz deviation, 30-15k audio)
+      - channel_bw <  100 kHz  → NBFM (±5 kHz deviation, 300-3.4k voice)
+
     Returns float32 audio roughly in [-1, 1] range.
-    Phase differences are naturally in [-pi, pi], so we scale by 1/pi
-    to map to approximately [-1, 1] WITHOUT per-chunk normalization
-    (which previously boosted noise floor to signal level).
     """
+    wbfm = bool(channel_bw) and channel_bw >= _WBFM_BW_THRESHOLD
+
     # Compute instantaneous phase
     phase = np.angle(iq)
     # Differentiate phase to get frequency deviation
@@ -66,33 +89,38 @@ def demod_fm(iq: np.ndarray, sample_rate: float, audio_rate: float = 8000) -> np
     demod = np.where(demod < -np.pi, demod + 2 * np.pi, demod)
 
     # FM deemphasis (simple low-pass) — vectorized via scipy.signal.lfilter
-    # lfilter([alpha], [1, -(1-alpha)], x) == IIR: y[i] = alpha*x[i] + (1-alpha)*y[i-1]
-    alpha = 0.1
+    # WBFM uses a longer time constant (75 µs in US/Korea, 50 µs in EU/Thailand)
+    # which means a SMALLER alpha (slower filter). NBFM uses a faster alpha.
+    # alpha = dt / (tau + dt), where dt = 1/sample_rate
+    if wbfm:
+        tau = 50e-6   # 50 µs (EU/Thailand WBFM deemphasis)
+    else:
+        tau = 530e-6  # ~530 µs (NBFM-ish, fast response)
+    dt = 1.0 / sample_rate
+    alpha = dt / (tau + dt)
     filtered = lfilter([alpha], [1, -(1 - alpha)], demod).astype(np.float32)
 
     # Decimate to audio rate
     decim_factor = max(1, int(sample_rate / audio_rate))
     audio = filtered[::decim_factor]
 
-    # --- Correct gain (FIX 1 — the actual bug) ---
-    # Old code divided by π, which assumed deviation of ±(fs/2). For real NBFM
-    # voice (±5 kHz out of 1 MHz+ sample rate), that made speech ~50-100× too
-    # quiet — so when a carrier appeared and FM quieting killed the noise floor,
-    # the user heard silence instead of speech.
-    #
+    # --- Correct gain ---
     # demod is radians per ORIGINAL sample (diff computed before decimation),
     # so instantaneous frequency in Hz = demod × sample_rate / (2π).
-    # Normalize by expected peak deviation (5 kHz for NBFM) → full swing = ±1.0.
-    expected_dev = 5000.0  # Hz, NBFM standard ±5 kHz
+    # Normalize by expected peak deviation → full swing = ±1.0.
+    if wbfm:
+        expected_dev = 75000.0   # ±75 kHz WBFM broadcast
+    else:
+        expected_dev = 5000.0    # ±5 kHz NBFM voice
     audio = audio * sample_rate / (2.0 * np.pi * expected_dev)
     audio = np.clip(audio, -1.0, 1.0)
 
-    # --- Voice filters (FIX 2 + FIX 3) ---
-    # High-pass at 150 Hz removes DC offset and CTCSS/DCS sub-audio tones.
-    # Band-pass 300-3400 Hz (telephone band) keeps speech, rejects out-of-band noise.
+    # --- Audio filters ---
+    # WBFM: 30-15000 Hz (music grade)
+    # NBFM: 150 Hz HP (strip CTCSS) + 300-3400 Hz BP (telephone voice)
     if len(audio) > 64:
         try:
-            hp_sos, bp_sos = _get_voice_filters(audio_rate)
+            hp_sos, bp_sos = _get_voice_filters(audio_rate, wbfm=wbfm)
             audio = sosfiltfilt(hp_sos, audio)
             audio = sosfiltfilt(bp_sos, audio)
         except ValueError:
@@ -172,7 +200,7 @@ def demod_ssb(iq: np.ndarray, sample_rate: float, audio_rate: float = 8000,
 
 
 def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
-               audio_rate: float = 8000) -> np.ndarray:
+               audio_rate: float = 8000, channel_bw: int = 0) -> np.ndarray:
     """
     Demodulate raw IQ bytes to audio.
 
@@ -181,6 +209,9 @@ def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
         mode: Demodulation mode (FM, AM, USB, LSB)
         sample_rate: Input sample rate in Hz
         audio_rate: Output audio sample rate in Hz
+        channel_bw: Channel bandwidth in Hz. For FM, >= 100 kHz selects WBFM
+                    broadcast parameters (±75 kHz deviation, 30-15 kHz audio).
+                    0 or < 100 kHz uses NBFM voice parameters.
 
     Returns:
         Audio data as float32 numpy array, normalized to [-1, 1]
@@ -191,7 +222,7 @@ def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
     iq = iq_to_complex(iq_bytes)
 
     if mode == DemodMode.FM:
-        audio = demod_fm(iq, sample_rate, audio_rate)
+        audio = demod_fm(iq, sample_rate, audio_rate, channel_bw=channel_bw)
     elif mode == DemodMode.AM:
         audio = demod_am(iq, sample_rate, audio_rate)
     elif mode == DemodMode.USB:
@@ -199,7 +230,7 @@ def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
     elif mode == DemodMode.LSB:
         audio = demod_ssb(iq, sample_rate, audio_rate, "lsb")
     else:
-        audio = demod_fm(iq, sample_rate, audio_rate)
+        audio = demod_fm(iq, sample_rate, audio_rate, channel_bw=channel_bw)
 
     return audio.astype(np.float32)
 

@@ -170,9 +170,43 @@ class SDRManager:
         await self.stop_streaming()
         await self.client.disconnect()
 
+    # FM broadcast band (WBFM) — auto-select wide channel bandwidth when tuning here.
+    # Covers:
+    #   76-95 MHz   (Japan FM broadcast)
+    #   87.5-108 MHz (Worldwide FM broadcast incl. Thailand)
+    #   65.8-74 MHz  (OIRT band, Russia/Eastern Europe)
+    WBFM_BANDS = [(65_800_000, 74_000_000), (76_000_000, 95_000_000), (87_500_000, 108_000_000)]
+    WBFM_CHANNEL_BW = 200_000  # 200 kHz — standard WBFM broadcast channel width
+
+    def _is_wbfm_band(self, freq_hz: int) -> bool:
+        """Return True if frequency falls within a known WBFM broadcast band."""
+        return any(lo <= freq_hz <= hi for lo, hi in self.WBFM_BANDS)
+
     async def set_frequency(self, freq_hz: int):
-        """Set center frequency."""
+        """Set center frequency.
+
+        Auto-adjusts channel bandwidth for FM broadcast:
+          - Tune into 65.8-108 MHz → channel_bw = 200 kHz (WBFM)
+          - Tune outside that band → channel_bw = 12 kHz (NBFM default)
+        This ensures the FM demodulator picks correct deviation & audio filter
+        without the user having to manually change the BW button.
+        """
         await self.client.set_frequency(freq_hz)
+
+        # Auto-select WBFM vs NBFM channel bandwidth based on frequency band.
+        # Only auto-switch when the user is in FM mode (don't override manual
+        # BW choices for AM/SSB).
+        if self.mode == DemodMode.FM:
+            if self._is_wbfm_band(freq_hz) and self._channel_bw != self.WBFM_CHANNEL_BW:
+                self._channel_bw = self.WBFM_CHANNEL_BW
+                logger.info(f"📻 WBFM band detected ({freq_hz/1e6:.1f} MHz) → "
+                            f"channel BW auto-set to {self.WBFM_CHANNEL_BW//1000} kHz")
+            elif not self._is_wbfm_band(freq_hz) and self._channel_bw == self.WBFM_CHANNEL_BW:
+                # Leaving broadcast band → restore NBFM default
+                self._channel_bw = self._DEFAULT_CHANNEL_BW
+                logger.info(f"📻 Left WBFM band → channel BW restored to "
+                            f"{self._DEFAULT_CHANNEL_BW//1000} kHz (NBFM)")
+
         self._save_persisted_settings()
 
     async def set_sample_rate(self, rate: int):
@@ -313,8 +347,10 @@ class SDRManager:
                     )
 
                     # Demodulate FIRST (audio must stay realtime; FFT can wait)
+                    # Pass channel_bw so FM demodulator auto-selects WBFM vs NBFM
                     sample_rate = self.client._sample_rate
-                    audio = demodulate(iq_data, self.mode, sample_rate, self.audio_rate)
+                    audio = demodulate(iq_data, self.mode, sample_rate, self.audio_rate,
+                                       channel_bw=self._channel_bw)
 
                     if len(audio) > 0:
                         self._audio_buffer.append(audio)
