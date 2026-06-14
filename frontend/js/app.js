@@ -298,6 +298,31 @@ const App = {
             });
         }
 
+        // Waterfall Auto Range toggle
+        const wfAutoBtn = document.getElementById('wf-auto-btn');
+        if (wfAutoBtn) {
+            // Restore saved state
+            if (localStorage.getItem('waterfall_auto') === 'true') {
+                this._autoRange = true;
+                wfAutoBtn.classList.add('active');
+                wfAutoBtn.textContent = '🎚️ AUTO ✓';
+            }
+            wfAutoBtn.addEventListener('click', () => {
+                this._autoRange = !this._autoRange;
+                localStorage.setItem('waterfall_auto', String(this._autoRange));
+                wfAutoBtn.classList.toggle('active', this._autoRange);
+                wfAutoBtn.textContent = this._autoRange ? '🎚️ AUTO ✓' : '🎚️ AUTO';
+                if (this._autoRange) {
+                    // Reset continuous tracking to current manual settings
+                    this._autoContMin = this.waterfallDbMin;
+                    this._autoContMax = this.waterfallDbMax;
+                    console.log('🎚️ Waterfall AUTO range ENABLED');
+                } else {
+                    console.log('🎚️ Waterfall AUTO range DISABLED (manual mode)');
+                }
+            });
+        }
+
         // Direct frequency input (click on freq display)
         const freqBox = document.getElementById('freq-display-box');
         if (freqBox) freqBox.addEventListener('click', () => this.showFreqInput());
@@ -402,6 +427,17 @@ const App = {
     },
 
     updateFreqDisplay() {
+        // === Shift waterfall back buffer when frequency changes ===
+        // This makes existing waterfall lines scroll horizontally, so you
+        // can see where signals are relative to the new center frequency.
+        if (this._waterfallBackBuffer && this._lastWaterfallFreq !== undefined) {
+            const deltaHz = this.currentFreq - this._lastWaterfallFreq;
+            if (Math.abs(deltaHz) > 0) {
+                this._shiftWaterfallBuffer(deltaHz);
+            }
+        }
+        this._lastWaterfallFreq = this.currentFreq;
+
         const freqDisplay = document.getElementById('freq-display');
         if (!freqDisplay) return;
         const mhz = this.currentFreq / 1e6;
@@ -658,9 +694,11 @@ const App = {
     },
 
     _renderWaterfall() {
-        // Read live settings from localStorage
-        this._dbMin = this.waterfallDbMin;
-        this._dbMax = this.waterfallDbMax;
+        // Read live settings from localStorage (only when NOT in auto mode)
+        if (!this._autoRange) {
+            this._dbMin = this.waterfallDbMin;
+            this._dbMax = this.waterfallDbMax;
+        }
         const canvas = this.waterfallCanvas;
         const ctx = this.waterfallCtx;
         if (!canvas || !ctx) return;
@@ -860,6 +898,44 @@ const App = {
         // Accept both typed arrays (Int16Array, Float32Array) and regular arrays
         if (!spectrumData || !spectrumData.length) return;
 
+        // === Auto Range (OpenWebRX-style continuous auto) ===
+        // When enabled, compute min/max from spectrum and smoothly adjust
+        // the dB range so colors update immediately on the latest line.
+        if (this._autoRange) {
+            let smin = Infinity, smax = -Infinity;
+            for (let i = 0; i < spectrumData.length; i++) {
+                const v = spectrumData[i];
+                if (v < smin) smin = v;
+                if (v > smax) smax = v;
+            }
+            // Initialize continuous tracking
+            if (this._autoContMin === undefined || this._autoContMax === undefined) {
+                this._autoContMin = smin;
+                this._autoContMax = smax;
+            }
+            // Fast rise (+1), slow fall (-0.1) — prevents flicker
+            if (smax > this._autoContMax + 1) {
+                this._autoContMax += 1;
+            } else if (smax < this._autoContMax - 1) {
+                this._autoContMax -= 0.1;
+            }
+            if (smin < this._autoContMin - 1) {
+                this._autoContMin -= 1;
+            } else if (smin > this._autoContMin + 1) {
+                this._autoContMin += 0.1;
+            }
+            // Add padding and ensure minimum range of 20 dB
+            let paddedMin = this._autoContMin - 5;
+            let paddedMax = this._autoContMax + 5;
+            if (paddedMax - paddedMin < 20) {
+                const mid = (paddedMax + paddedMin) / 2;
+                paddedMin = mid - 10;
+                paddedMax = mid + 10;
+            }
+            this._dbMin = Math.round(paddedMin);
+            this._dbMax = Math.round(paddedMax);
+        }
+
         // Push a copy of the spectrum into pending lines; the render loop
         // will drain them via scroll-blit. Cap pending to canvas height to
         // avoid unbounded growth if the browser stalls.
@@ -877,6 +953,46 @@ const App = {
     spectrumToColor(db) {
         // Not used anymore - colors computed inline in _renderWaterfall
         return '#000';
+    },
+
+    // Shift waterfall back buffer horizontally when frequency changes.
+    // deltaHz > 0 (tuned UP): content moves LEFT (signals appear to slide left)
+    // deltaHz < 0 (tuned DOWN): content moves RIGHT
+    _shiftWaterfallBuffer(deltaHz) {
+        const w = this._waterfallCanvasW;
+        const h = this._waterfallCanvasH;
+        if (w <= 0 || h <= 0) return;
+        const sr = this._sampleRate;
+        if (sr <= 0) return;
+
+        // Convert Hz delta to pixel delta
+        const deltaPx = Math.round((deltaHz / sr) * w);
+        if (deltaPx === 0) return;
+
+        const bb = this._waterfallBackBuffer;
+        const bbCtx = this._waterfallBackCtx;
+
+        // If shift is larger than canvas width, just clear everything
+        if (Math.abs(deltaPx) >= w) {
+            bbCtx.fillStyle = '#0a0a1a';
+            bbCtx.fillRect(0, 0, w, h);
+            this._waterfallDirty = true;
+            return;
+        }
+
+        if (deltaPx > 0) {
+            // Freq went UP → content shifts LEFT
+            bbCtx.drawImage(bb, deltaPx, 0, w - deltaPx, h, 0, 0, w - deltaPx, h);
+            bbCtx.fillStyle = '#0a0a1a';
+            bbCtx.fillRect(w - deltaPx, 0, deltaPx, h);
+        } else {
+            // Freq went DOWN → content shifts RIGHT
+            const absDelta = -deltaPx;
+            bbCtx.drawImage(bb, 0, 0, w - absDelta, h, absDelta, 0, w - absDelta, h);
+            bbCtx.fillStyle = '#0a0a1a';
+            bbCtx.fillRect(0, 0, absDelta, h);
+        }
+        this._waterfallDirty = true;
     },
 
     // === Live Feed ===
