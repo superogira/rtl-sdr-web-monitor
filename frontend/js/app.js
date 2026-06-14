@@ -911,6 +911,9 @@ const App = {
         ctx.beginPath();
         ctx.moveTo(Math.round(left) + 0.5, 0);
         ctx.lineTo(Math.round(left) + 0.5, h);
+        // Center line (marks center frequency)
+        ctx.moveTo(Math.round(cx) + 0.5, 0);
+        ctx.lineTo(Math.round(cx) + 0.5, h);
         ctx.moveTo(Math.round(right) + 0.5, 0);
         ctx.lineTo(Math.round(right) + 0.5, h);
         ctx.stroke();
