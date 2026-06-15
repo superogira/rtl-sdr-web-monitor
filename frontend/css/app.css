@@ -901,6 +901,24 @@ a:hover {
     50% { box-shadow: 0 0 0 6px transparent; }
 }
 
+/* === Auto-Record Indicator (shown next to record button) === */
+#auto-rec-indicator {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--accent-yellow);
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--accent-yellow)20;
+    border: 1px solid var(--accent-yellow)40;
+    animation: blink 1.2s infinite;
+    white-space: nowrap;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 /* === Volume Control === */
 .volume-control {
     display: flex;

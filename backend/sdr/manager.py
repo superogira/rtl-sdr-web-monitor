@@ -34,7 +34,11 @@ _DEFAULT_SDR_SETTINGS = {
 
 
 class SDRManager:
-    """Manages SDR operations: connection, streaming, demodulation, recording."""
+    """Manages SDR operations: connection, streaming, demodulation, recording.
+
+    Recording is dual-track: auto and manual recordings are fully independent.
+    Both can run simultaneously with separate buffers.
+    """
 
     # Channel bandwidth (Hz) — user-adjustable via /api/sdr/bandwidth.
     # Default 12kHz = NBFM voice. Wider values for WBFM/broadcast.
@@ -51,18 +55,22 @@ class SDRManager:
         self.mode = DemodMode.FM
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
         self.is_streaming = False
-        self.is_recording = False
+
+        # === Dual-track recording: auto and manual are INDEPENDENT ===
+        # Both can record at the same time with separate buffers.
+        self._auto_recording = False
         self._manual_recording = False
-        self._recording_source = "auto"  # "auto" or "manual"
-        self._stream_task: Optional[asyncio.Task] = None
+        self._auto_buffer: list[np.ndarray] = []
+        self._manual_buffer: list[np.ndarray] = []
+        self._auto_start_time: Optional[float] = None
+        self._manual_start_time: Optional[float] = None
+        self._auto_silence_start: Optional[float] = None
+        self._auto_record = True
+
         self._audio_buffer: list[np.ndarray] = []
-        self._recording_buffer: list[np.ndarray] = []
         self._signal_level = -120.0
         self._squelch_level = settings.SQUELCH_LEVEL
-        self._auto_record = True
         self._last_recording_path: Optional[str] = None
-        self._recording_start_time: Optional[float] = None
-        self._silence_start: Optional[float] = None
         self._new_recordings: list[dict] = []
         self._callbacks: list = []
         self._spectrum_callbacks: list = []
@@ -71,10 +79,31 @@ class SDRManager:
         self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
         self._channel_bw: int = self._DEFAULT_CHANNEL_BW
+        self._stream_task: Optional[asyncio.Task] = None
 
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
     @property
     def signal_level(self) -> float:
         return self._signal_level
+
+    @property
+    def is_recording(self) -> bool:
+        """True if EITHER auto or manual recording is active (read-only)."""
+        return self._auto_recording or self._manual_recording
+
+    @property
+    def recording_source(self) -> Optional[str]:
+        """What is currently recording: 'auto', 'manual', 'both', or None."""
+        a, m = self._auto_recording, self._manual_recording
+        if a and m:
+            return "both"
+        if m:
+            return "manual"
+        if a:
+            return "auto"
+        return None
 
     @property
     def status(self) -> dict:
@@ -83,6 +112,9 @@ class SDRManager:
             "mode": self.mode.value,
             "streaming": self.is_streaming,
             "recording": self.is_recording,
+            "recording_source": self.recording_source,
+            "manual_recording": self._manual_recording,
+            "auto_recording": self._auto_recording,
             "signal_level_db": round(self._signal_level, 1),
             "squelch_level": self._squelch_level,
             "auto_record": self._auto_record,
@@ -137,11 +169,7 @@ class SDRManager:
             logger.warning(f"Failed to persist SDR settings: {e}")
 
     def set_connection(self, host: str, port: int) -> dict:
-        """Update RTL-TCP target host/port and persist to disk.
-
-        Takes effect on the next connect(). Caller should disconnect first if
-        currently connected and wants the new endpoint immediately.
-        """
+        """Update RTL-TCP target host/port and persist to disk."""
         self.client.set_connection(host, port)
         self._save_persisted_settings()
         logger.info(f"RTL-TCP target set to {host}:{port}")
@@ -152,20 +180,15 @@ class SDRManager:
     # ------------------------------------------------------------------
     async def connect(self) -> dict:
         """Connect to RTL-TCP server."""
-        # Cleanup any existing connection first
         if self.is_streaming:
             await self.stop_streaming()
         if self.client.connected:
             await self.client.disconnect()
-            await asyncio.sleep(0.5)  # Give RTL-TCP time to cleanup
+            await asyncio.sleep(0.5)
 
         success = await self.client.connect()
-        # Persist latest values (host/port/freq/etc. used for this attempt).
         self._save_persisted_settings()
-        return {
-            "success": success,
-            "status": self.status,
-        }
+        return {"success": success, "status": self.status}
 
     async def disconnect(self):
         """Disconnect from RTL-TCP."""
@@ -173,81 +196,51 @@ class SDRManager:
         await self.client.disconnect()
 
     # FM broadcast band (WBFM) — auto-select wide channel bandwidth when tuning here.
-    # Covers:
-    #   76-95 MHz   (Japan FM broadcast)
-    #   87.5-108 MHz (Worldwide FM broadcast incl. Thailand)
-    #   65.8-74 MHz  (OIRT band, Russia/Eastern Europe)
     WBFM_BANDS = [(65_800_000, 74_000_000), (76_000_000, 95_000_000), (87_500_000, 108_000_000)]
-    WBFM_CHANNEL_BW = 200_000  # 200 kHz — standard WBFM broadcast channel width
+    WBFM_CHANNEL_BW = 200_000
 
     def _is_wbfm_band(self, freq_hz: int) -> bool:
-        """Return True if frequency falls within a known WBFM broadcast band."""
         return any(lo <= freq_hz <= hi for lo, hi in self.WBFM_BANDS)
 
     async def set_frequency(self, freq_hz: int):
-        """Set center frequency.
-
-        Auto-adjusts channel bandwidth for FM broadcast:
-          - Tune into 65.8-108 MHz → channel_bw = 200 kHz (WBFM)
-          - Tune outside that band → channel_bw = 12 kHz (NBFM default)
-        This ensures the FM demodulator picks correct deviation & audio filter
-        without the user having to manually change the BW button.
-        """
+        """Set center frequency (auto-adjusts BW for FM broadcast band)."""
         await self.client.set_frequency(freq_hz)
-
-        # Auto-select WBFM vs NBFM channel bandwidth based on frequency band.
-        # Only auto-switch when the user is in FM mode (don't override manual
-        # BW choices for AM/SSB).
         if self.mode == DemodMode.FM:
             if self._is_wbfm_band(freq_hz) and self._channel_bw != self.WBFM_CHANNEL_BW:
                 self._channel_bw = self.WBFM_CHANNEL_BW
                 logger.info(f"📻 WBFM band detected ({freq_hz/1e6:.1f} MHz) → "
                             f"channel BW auto-set to {self.WBFM_CHANNEL_BW//1000} kHz")
             elif not self._is_wbfm_band(freq_hz) and self._channel_bw == self.WBFM_CHANNEL_BW:
-                # Leaving broadcast band → restore NBFM default
                 self._channel_bw = self._DEFAULT_CHANNEL_BW
                 logger.info(f"📻 Left WBFM band → channel BW restored to "
                             f"{self._DEFAULT_CHANNEL_BW//1000} kHz (NBFM)")
-
         self._save_persisted_settings()
 
     async def set_sample_rate(self, rate: int):
-        """Set sample rate."""
         await self.client.set_sample_rate(rate)
         self._save_persisted_settings()
 
     async def set_gain(self, gain_db: int):
-        """Set gain."""
         await self.client.set_gain(gain_db)
         self._save_persisted_settings()
 
     async def set_freq_correction(self, ppm: int):
-        """Set frequency correction in PPM."""
         await self.client.set_freq_correction(ppm)
         self._save_persisted_settings()
 
     def set_channel_bw(self, bw_hz: int):
-        """Set channel bandwidth in Hz for signal level computation.
-
-        Higher bandwidth = wider filter (e.g. WBFM broadcast 200kHz).
-        Lower bandwidth = narrower filter (e.g. NBFM voice 6kHz).
-        Affects compute_signal_level() channel isolation.
-        """
         if not (1000 <= bw_hz <= 500000):
             raise ValueError(f"Invalid channel BW: {bw_hz}. Must be 1kHz–500kHz")
         self._channel_bw = bw_hz
         logger.info(f"Channel BW set to {bw_hz} Hz ({bw_hz/1e3:.0f} kHz)")
 
     async def set_mode(self, mode: str):
-        """Set demodulation mode."""
         self.mode = DemodMode(mode.upper())
 
     def set_squelch(self, level_db: float):
-        """Set squelch level."""
         self._squelch_level = level_db
 
     def set_fft_bins(self, bins: int):
-        """Set FFT output bins (must be power of 2, range 256-8192)."""
         valid_bins = [256, 512, 1024, 2048, 4096, 8192]
         if bins not in valid_bins:
             raise ValueError(f"Invalid FFT bins: {bins}. Must be one of {valid_bins}")
@@ -256,18 +249,16 @@ class SDRManager:
         logger.info(f"FFT bins set to {bins}")
 
     async def start_streaming(self):
-        """Start streaming and processing IQ data."""
         if self.is_streaming:
             return {"error": "Already streaming"}
         if not self.client.connected:
             return {"error": "Not connected to RTL-TCP"}
-
         self.is_streaming = True
         self._stream_task = asyncio.create_task(self._stream_loop())
         return {"streaming": True}
 
     async def stop_streaming(self):
-        """Stop streaming."""
+        """Stop streaming and finish any ongoing recordings."""
         self.is_streaming = False
         if self._stream_task:
             self._stream_task.cancel()
@@ -276,76 +267,64 @@ class SDRManager:
             except asyncio.CancelledError:
                 pass
             self._stream_task = None
-        # Finish any ongoing recording
-        if self.is_recording:
-            await self._finish_recording()
+        # Finish both auto and manual recordings
+        if self._auto_recording:
+            await self._finish_auto_recording()
+        if self._manual_recording:
+            await self._finish_manual_recording()
         return {"streaming": False}
 
+    # ------------------------------------------------------------------
+    # Manual recording (user-controlled, independent from auto)
+    # ------------------------------------------------------------------
     async def start_recording(self):
-        """Manually start recording (independent from auto-record)."""
-        if self.is_recording:
-            return {"error": "Already recording"}
-        self.is_recording = True
+        """Start manual recording. Works independently from auto-record."""
+        if self._manual_recording:
+            return {"error": "Already recording (manual)"}
         self._manual_recording = True
-        self._recording_source = "manual"
-        self._recording_buffer = []
-        self._recording_start_time = time.time()
-        self._silence_start = None
-        logger.info(f"🎙️ Manual recording started ({self.client._frequency/1e6:.3f} MHz)")
+        self._manual_buffer = []
+        self._manual_start_time = time.time()
+        logger.info(f"🎙️ Manual recording started ({self.client._frequency/1e6:.3f} MHz)"
+                    f" | auto_recording={self._auto_recording}")
         return {"recording": True, "source": "manual"}
 
     async def stop_recording(self):
-        """Manually stop recording (only if currently manual recording)."""
-        if not self.is_recording:
-            return {"error": "Not recording"}
+        """Stop manual recording only (auto continues if active)."""
         if not self._manual_recording:
-            return {"error": "Auto-recording in progress, cannot stop manually"}
-        return await self._finish_recording()
+            return {"error": "No manual recording in progress"}
+        return await self._finish_manual_recording()
 
     def get_new_recordings(self) -> list[dict]:
-        """Get and clear new recordings list."""
         recordings = self._new_recordings.copy()
         self._new_recordings.clear()
         return recordings
 
     def on_new_recording(self, callback):
-        """Register callback for new recordings."""
         self._callbacks.append(callback)
 
     def on_spectrum(self, callback):
-        """Register callback for spectrum data."""
         self._spectrum_callbacks.append(callback)
 
+    # ------------------------------------------------------------------
+    # Main streaming loop — dual-track recording
+    # ------------------------------------------------------------------
     async def _stream_loop(self):
-        """Main streaming loop - reads IQ data, demodulates, handles recording.
-
-        Optimized: FFT/spectrum is computed every Nth iteration to reduce CPU
-        contention with audio demodulation (which must stay realtime).
-        """
         logger.info("Streaming started")
         consecutive_errors = 0
-        max_errors = 50  # Allow up to 50 consecutive read errors before giving up
+        max_errors = 50
         _spectrum_counter = 0
-        _SPECTRUM_INTERVAL = 2  # Compute FFT every 2nd iteration (~15 Hz at 32ms/iter)
+        _SPECTRUM_INTERVAL = 2
         try:
             while self.is_streaming and self.client.connected:
                 try:
-                    # Read IQ samples — time-based chunk for consistent waterfall
-                    # refresh rate regardless of sample rate.
-                    # ~50ms of audio → ~10 Hz spectrum update, audio stays smooth.
-                    #   1.024 MSPS → 51200 samples → 102400 bytes (~100 KB)
-                    #     250 kSPS → 12500 samples →  25000 bytes (~25 KB)
                     samples_per_chunk = max(1024, int(self.client._sample_rate * 0.05))
                     iq_data = await self.client.read_samples(samples_per_chunk * 2)
                     if not iq_data:
-                        # Normal: timeout or no data yet, just wait and retry
                         await asyncio.sleep(0.01)
                         continue
 
-                    consecutive_errors = 0  # Reset on successful read
+                    consecutive_errors = 0
 
-                    # Compute signal level for ONLY the tuned channel bandwidth
-                    # (was: total-bandwidth power, which reacted to nearby signals)
                     self._signal_level = compute_signal_level(
                         iq_data,
                         sample_rate=self.client._sample_rate,
@@ -353,69 +332,60 @@ class SDRManager:
                         channel_bw=self._channel_bw,
                     )
 
-                    # Demodulate FIRST (audio must stay realtime; FFT can wait)
-                    # Pass channel_bw so FM demodulator auto-selects WBFM vs NBFM
                     sample_rate = self.client._sample_rate
                     audio = demodulate(iq_data, self.mode, sample_rate, self.audio_rate,
                                        channel_bw=self._channel_bw)
 
                     if len(audio) > 0:
                         self._audio_buffer.append(audio)
-                        # Keep buffer manageable
                         if len(self._audio_buffer) > 100:
                             self._audio_buffer = self._audio_buffer[-50:]
-
-                        # Live audio streaming to WebSocket subscribers
-                        # (demodulation already done; broadcast is cheap fan-out)
                         if audio_broadcaster.has_listeners:
-                            await audio_broadcaster.broadcast(
-                                audio, self.audio_rate
-                            )
+                            await audio_broadcaster.broadcast(audio, self.audio_rate)
 
-                    # Compute FFT spectrum every Nth iteration to save CPU for audio
                     _spectrum_counter += 1
                     if _spectrum_counter >= _SPECTRUM_INTERVAL:
                         _spectrum_counter = 0
                         self._compute_spectrum(iq_data)
 
-                    # === Manual recording: just append audio, no auto-stop ===
-                    if self._manual_recording and self.is_recording:
+                    # === TRACK 1: Manual recording (independent) ===
+                    if self._manual_recording:
                         if len(audio) > 0:
-                            self._recording_buffer.append(audio)
-                        # Max recording duration check (safety)
-                        if self._recording_start_time:
-                            elapsed = time.time() - self._recording_start_time
+                            self._manual_buffer.append(audio)
+                        if self._manual_start_time:
+                            elapsed = time.time() - self._manual_start_time
                             if elapsed > settings.MAX_RECORDING_DURATION:
                                 logger.info("Manual recording hit MAX_RECORDING_DURATION, finishing")
-                                await self._finish_recording()
+                                await self._finish_manual_recording()
 
-                    # === Auto recording logic (skipped during manual) ===
-                    elif self._auto_record and self.is_streaming:
+                    # === TRACK 2: Auto recording (independent) ===
+                    if self._auto_record and self.is_streaming:
                         above_squelch = self._signal_level > self._squelch_level
 
-                        if above_squelch and not self.is_recording:
-                            # Signal detected, start recording
-                            await self._auto_start_recording()
-                        elif above_squelch and self.is_recording:
-                            # Still receiving signal
-                            self._silence_start = None
+                        if above_squelch and not self._auto_recording:
+                            # Signal detected → start auto recording
+                            self._auto_recording = True
+                            self._auto_buffer = []
+                            self._auto_start_time = time.time()
+                            self._auto_silence_start = None
+                            logger.info(f"🎙️ Auto recording started (signal: {self._signal_level:.1f} dB)"
+                                        f" | manual_recording={self._manual_recording}")
+                        elif above_squelch and self._auto_recording:
+                            self._auto_silence_start = None
                             if len(audio) > 0:
-                                self._recording_buffer.append(audio)
-                        elif not above_squelch and self.is_recording:
-                            # Signal dropped
-                            if self._silence_start is None:
-                                self._silence_start = time.time()
+                                self._auto_buffer.append(audio)
+                        elif not above_squelch and self._auto_recording:
+                            if self._auto_silence_start is None:
+                                self._auto_silence_start = time.time()
                                 if len(audio) > 0:
-                                    self._recording_buffer.append(audio)
-                            elif time.time() - self._silence_start > settings.VAD_SILENCE_TIMEOUT:
-                                # Silence timeout, stop recording
-                                await self._finish_recording()
+                                    self._auto_buffer.append(audio)
+                            elif time.time() - self._auto_silence_start > settings.VAD_SILENCE_TIMEOUT:
+                                await self._finish_auto_recording()
 
-                        # Max recording duration check
-                        if self.is_recording and self._recording_start_time:
-                            elapsed = time.time() - self._recording_start_time
+                        if self._auto_recording and self._auto_start_time:
+                            elapsed = time.time() - self._auto_start_time
                             if elapsed > settings.MAX_RECORDING_DURATION:
-                                await self._finish_recording()
+                                await self._finish_auto_recording()
 
                 except Exception as inner_e:
                     consecutive_errors += 1
@@ -434,14 +404,10 @@ class SDRManager:
             logger.info("Stream loop exited")
 
     def _compute_spectrum(self, iq_data: bytes):
-        """Compute FFT spectrum from IQ data and notify callbacks.
-
-        Optimized: sends base64-encoded int16 binary instead of JSON list,
-        which is ~10x faster than `.tolist()` + JSON serialization.
-        """
+        """Compute FFT spectrum from IQ data and notify callbacks."""
         try:
             raw = np.frombuffer(iq_data, dtype=np.uint8)
-            if len(raw) < 1024:  # Need more data for 1024 bins
+            if len(raw) < 1024:
                 return
 
             iq = (raw.astype(np.float32) - 127.5) / 127.5
@@ -450,43 +416,29 @@ class SDRManager:
             if len(complex_data) < 512:
                 return
 
-            # Larger FFT size for higher resolution
             fft_size = min(4096, len(complex_data))
-
-            # Apply Blackman window to reduce spectral leakage
             window = np.blackman(fft_size)
             windowed = complex_data[:fft_size] * window
-
-            # FFT
             fft_result = np.fft.fftshift(np.abs(np.fft.fft(windowed)) / fft_size)
-
-            # Convert to dB
             fft_db = 20 * np.log10(fft_result + 1e-10)
 
-            # Exponential moving average for smoother waterfall
             if self._spectrum_prev is not None and len(self._spectrum_prev) == len(fft_db):
                 fft_db = self._spectrum_alpha * fft_db + (1 - self._spectrum_alpha) * self._spectrum_prev
             self._spectrum_prev = fft_db.copy()
 
-            # Downsample to configured number of bins for websocket
             target_bins = self._fft_bins
             num_bins = min(target_bins, len(fft_db))
             indices = np.linspace(0, len(fft_db) - 1, num_bins, dtype=int)
             spectrum = fft_db[indices]
 
-            # Pad to target_bins if needed
             if len(spectrum) < target_bins:
                 spectrum = np.pad(spectrum, (0, target_bins - len(spectrum)), mode='edge')
 
-            # Encode as base64 int16 binary (much faster than .tolist() JSON)
-            # Client decodes: atob → charCodeAt pairs → int16
             import base64
             spectrum_int16 = np.clip(spectrum, -32768, 32767).astype(np.int16)
             spectrum_b64 = base64.b64encode(spectrum_int16.tobytes()).decode('ascii')
-
             self._last_spectrum = spectrum_b64
 
-            # Notify callbacks — send base64 string (client decodes)
             for cb in self._spectrum_callbacks:
                 try:
                     cb(spectrum_b64)
@@ -495,33 +447,50 @@ class SDRManager:
         except Exception as e:
             logger.error(f"FFT error: {e}")
 
-    async def _auto_start_recording(self):
-        """Auto-start recording when signal detected."""
-        self.is_recording = True
-        self._manual_recording = False
-        self._recording_source = "auto"
-        self._recording_buffer = []
-        self._recording_start_time = time.time()
-        self._silence_start = None
-        logger.info(f"🎙️ Auto recording started (signal: {self._signal_level:.1f} dB)")
-
-    async def _finish_recording(self) -> dict:
-        """Finish recording and save to file."""
-        if not self._recording_buffer:
-            self.is_recording = False
+    # ------------------------------------------------------------------
+    # Finish recordings — separate for auto and manual
+    # ------------------------------------------------------------------
+    async def _finish_auto_recording(self) -> Optional[dict]:
+        """Finish auto recording and save to file."""
+        if not self._auto_buffer:
+            self._auto_recording = False
+            self._auto_start_time = None
+            self._auto_silence_start = None
             return {"error": "No audio data"}
 
-        # Concatenate audio
-        audio_data = np.concatenate(self._recording_buffer)
-
-        # Check minimum duration
+        audio_data = np.concatenate(self._auto_buffer)
         duration = len(audio_data) / self.audio_rate
+
         if duration < settings.VAD_SILENCE_TIMEOUT:
-            self.is_recording = False
-            self._recording_buffer = []
+            logger.info(f"Auto recording too short ({duration:.1f}s), discarding")
+            self._auto_recording = False
+            self._auto_buffer = []
+            self._auto_start_time = None
+            self._auto_silence_start = None
             return {"error": "Recording too short"}
 
-        # Save to WAV file
+        return await self._save_recording(audio_data, duration, source="auto")
+
+    async def _finish_manual_recording(self) -> Optional[dict]:
+        """Finish manual recording and save to file."""
+        if not self._manual_buffer:
+            self._manual_recording = False
+            self._manual_start_time = None
+            return {"error": "No audio data"}
+
+        audio_data = np.concatenate(self._manual_buffer)
+        duration = len(audio_data) / self.audio_rate
+
+        result = await self._save_recording(audio_data, duration, source="manual")
+
+        # Reset manual state regardless of save result
+        self._manual_recording = False
+        self._manual_buffer = []
+        self._manual_start_time = None
+        return result
+
+    async def _save_recording(self, audio_data: np.ndarray, duration: float, source: str) -> dict:
+        """Save audio data to WAV file and notify callbacks."""
         recordings_dir = Path(settings.RECORDINGS_DIR)
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -529,7 +498,6 @@ class SDRManager:
         filename = f"{timestamp}_{self.client._frequency}_{self.mode.value}.wav"
         filepath = recordings_dir / filename
 
-        # Save as WAV
         sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
 
         recording_info = {
@@ -543,16 +511,23 @@ class SDRManager:
             "signal_level": round(self._signal_level, 1),
             "timestamp": datetime.now().isoformat(),
             "transcription": None,
-            "source": self._recording_source,
+            "source": source,
         }
 
         self._last_recording_path = str(filepath)
         self._new_recordings.append(recording_info)
 
         logger.info(
-            f"✅ Recording saved: {filename} ({duration:.1f}s, "
+            f"✅ Recording saved [{source}]: {filename} ({duration:.1f}s, "
             f"{self.mode.value}, {self.client._frequency/1e6:.3f} MHz)"
         )
+
+        # Reset auto state if this was an auto recording
+        if source == "auto":
+            self._auto_recording = False
+            self._auto_buffer = []
+            self._auto_start_time = None
+            self._auto_silence_start = None
 
         # Notify callbacks
         for cb in self._callbacks:
@@ -560,14 +535,6 @@ class SDRManager:
                 await cb(recording_info)
             except Exception as e:
                 logger.error(f"Callback error: {e}")
-
-        # Reset
-        self.is_recording = False
-        self._manual_recording = False
-        self._recording_source = "auto"
-        self._recording_buffer = []
-        self._recording_start_time = None
-        self._silence_start = None
 
         return recording_info
 

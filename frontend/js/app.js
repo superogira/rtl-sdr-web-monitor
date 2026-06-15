@@ -562,12 +562,30 @@ const App = {
     async _syncRecordingState() {
         try {
             const status = await API.sdr.status();
-            if (status.recording) {
-                this.isRecording = true;
-                const btn = document.getElementById('btn-record');
-                if (btn) btn.classList.add('recording');
-            }
+            // Only sync MANUAL recording state (auto runs independently)
+            this.isRecording = !!status.manual_recording;
+            const btn = document.getElementById('btn-record');
+            if (btn) btn.classList.toggle('recording', this.isRecording);
+            // Show auto-recording indicator if active
+            this.updateAutoRecordIndicator(status.auto_recording, status.recording_source);
         } catch (e) { /* ignore */ }
+    },
+
+    updateAutoRecordIndicator(isAuto, source) {
+        let el = document.getElementById('auto-rec-indicator');
+        if (isAuto) {
+            if (!el) {
+                el = document.createElement('span');
+                el.id = 'auto-rec-indicator';
+                el.style.cssText = 'font-size:0.7rem;color:var(--accent-yellow);margin-left:4px;animation:blink 1s infinite;';
+                const btn = document.getElementById('btn-record');
+                if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
+            }
+            el.textContent = '🔄AUTO';
+            el.title = `กำลังอัดอัตโนมัติ (source: ${source || 'auto'})`;
+        } else if (el) {
+            el.remove();
+        }
     },
 
     // === Volume ===
@@ -663,6 +681,10 @@ const App = {
                 if (el) {
                     el.textContent = data.listeners > 0 ? `👥 ${data.listeners}` : '';
                 }
+            }
+            // Sync auto-recording indicator (independent from manual record button)
+            if (data.auto_recording !== undefined || data.recording_source !== undefined) {
+                this.updateAutoRecordIndicator(data.auto_recording, data.recording_source);
             }
             if (changed) {
                 this.updateUI();
