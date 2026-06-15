@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Float, Integer, Text, DateTime, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -33,11 +33,13 @@ class Recording(Base):
     duration = Column(Float, nullable=True, comment="Duration in seconds")
     transcript = Column(Text, nullable=True)
     transcript_language = Column(String(10), nullable=True, default="th")
+    stt_provider = Column(String(20), nullable=True, comment="STT provider used: speechmatics/whisper")
+    stt_error = Column(Text, nullable=True, comment="Error message if STT failed")
     status = Column(Enum(RecordingStatus), default=RecordingStatus.RECORDING, nullable=False)
     source = Column(String(20), default="auto", nullable=False, comment="auto or manual")
     is_unread = Column(Integer, default=1, nullable=False)
-    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationship to keyword alerts
     alerts = relationship("TelegramAlert", back_populates="recording", lazy="selectin")
@@ -57,9 +59,11 @@ class Recording(Base):
             "duration": self.duration,
             "transcript": self.transcript,
             "transcript_language": self.transcript_language,
+            "stt_provider": self.stt_provider,
+            "stt_error": self.stt_error,
             "status": self.status.value if self.status else None,
             "source": self.source or "auto",
             "is_unread": self.is_unread,
-            "recorded_at": self.recorded_at.isoformat() if self.recorded_at else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "recorded_at": self.recorded_at.isoformat() if self.recorded_at and self.recorded_at.tzinfo else (self.recorded_at.replace(tzinfo=timezone.utc).isoformat() if self.recorded_at else None),
+            "created_at": self.created_at.isoformat() if self.created_at and self.created_at.tzinfo else (self.created_at.replace(tzinfo=timezone.utc).isoformat() if self.created_at else None),
         }

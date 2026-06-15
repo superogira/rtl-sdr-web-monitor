@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +45,7 @@ class UserResponse(BaseModel):
     display_name: str | None
     role: str
     is_active: bool
+    timezone: str | None
     created_at: str | None
     last_login: str | None
 
@@ -72,8 +73,9 @@ def user_to_dict(user: User) -> dict:
         "display_name": user.display_name,
         "role": user.role.value if user.role else "user",
         "is_active": user.is_active,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "last_login": user.last_login.isoformat() if user.last_login else None,
+        "timezone": user.timezone or "Asia/Bangkok",
+        "created_at": user.created_at.isoformat() if user.created_at and user.created_at.tzinfo else (user.created_at.replace(tzinfo=timezone.utc).isoformat() if user.created_at else None),
+        "last_login": user.last_login.isoformat() if user.last_login and user.last_login.tzinfo else (user.last_login.replace(tzinfo=timezone.utc).isoformat() if user.last_login else None),
     }
 
 
@@ -98,7 +100,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         )
 
     # Update last login
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     await db.commit()
 
     # Create tokens
@@ -213,6 +215,33 @@ async def change_password(
     await db.commit()
 
     return {"message": "Password changed successfully"}
+
+
+class UpdateTimezoneRequest(BaseModel):
+    timezone: str
+
+
+@router.put("/me/timezone")
+async def update_timezone(
+    request: UpdateTimezoneRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user's preferred timezone for display."""
+    # Validate timezone using zoneinfo
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(request.timezone)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid timezone: {request.timezone}",
+        )
+    
+    current_user.timezone = request.timezone
+    await db.commit()
+    
+    return {"message": "Timezone updated successfully", "timezone": request.timezone}
 
 
 # === Admin User Management ===

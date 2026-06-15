@@ -7,7 +7,7 @@ import time
 import logging
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
@@ -19,6 +19,8 @@ from backend.audio.demod import DemodMode, demodulate, compute_signal_level
 from backend.audio.broadcaster import audio_broadcaster
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
+from backend.services.app_settings import get_setting
+from backend.services.stt import transcribe, _get_stt_config
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -504,7 +506,7 @@ class SDRManager:
         recordings_dir = Path(settings.RECORDINGS_DIR)
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{self.client._frequency}_{self.mode.value}.wav"
         filepath = recordings_dir / filename
 
@@ -513,7 +515,7 @@ class SDRManager:
         rec_id = str(uuid.uuid4())
         freq_hz = self.client._frequency
         freq_mhz = freq_hz / 1e6
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # === INSERT into database ===
         try:
@@ -581,6 +583,52 @@ class SDRManager:
                 await cb(recording_info)
             except Exception as e:
                 logger.error(f"Callback error: {e}")
+
+        # Auto-transcribe if enabled in global settings
+        try:
+            cfg = await _get_stt_config()
+            if cfg.get("auto_transcribe") and cfg.get("api_key"):
+                logger.info(f"🔄 Auto-transcribing recording {rec_id}...")
+                rec_info_copy = dict(recording_info)
+
+                async def _do_transcribe():
+                    try:
+                        result = await transcribe(str(filepath))
+                        text = (result.get("text") or "").strip()
+                        lang = result.get("language", "th")
+                        provider = result.get("provider", "")
+                        error = result.get("error")
+                        async with async_session() as session:
+                            db_rec = await session.get(Recording, rec_id)
+                            if db_rec:
+                                db_rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
+                                db_rec.transcript_language = lang
+                                db_rec.stt_provider = provider or None
+                                db_rec.stt_error = error or None
+                                db_rec.status = RecordingStatus.COMPLETED
+                                await session.commit()
+                        rec_info_copy["transcript"] = text
+                        rec_info_copy["transcription"] = text
+                        rec_info_copy["stt_provider"] = provider
+                        rec_info_copy["stt_error"] = error
+                        self._new_recordings.append({**rec_info_copy, "_transcribed": True})
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider})")
+                    except Exception as e:
+                        logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
+                        # Store error in DB so user can see what went wrong
+                        try:
+                            async with async_session() as session:
+                                db_rec = await session.get(Recording, rec_id)
+                                if db_rec:
+                                    db_rec.stt_error = str(e)
+                                    db_rec.status = RecordingStatus.FAILED
+                                    await session.commit()
+                        except Exception:
+                            pass
+
+                asyncio.create_task(_do_transcribe())
+        except Exception as e:
+            logger.warning(f"Auto-transcribe check failed: {e}")
 
         return recording_info
 

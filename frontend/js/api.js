@@ -171,7 +171,93 @@ const API = {
         async updateTranscript(id, transcript) {
             return API.request('PUT', `/api/recordings/${id}/transcript`, { transcript });
         },
+        async transcribe(id) {
+            return API.request('POST', `/api/recordings/${id}/transcribe`);
+        },
+    },
+
+    // App Settings (global STT config, etc.)
+    settings: {
+        async getSTT() {
+            return API.request('GET', '/api/settings/stt');
+        },
+        async updateSTT(data) {
+            return API.request('PUT', '/api/settings/stt', data);
+        },
     },
 };
+
+// === Helper Functions ===
+
+/**
+ * Format datetime string to user's timezone
+ * @param {string} isoString - ISO datetime string (UTC or with timezone)
+ * @param {string} userTimezone - User's timezone (e.g., "Asia/Bangkok")
+ * @param {object} options - Intl.DateTimeFormat options
+ * @returns {string} Formatted datetime string
+ */
+function formatDateTime(isoString, userTimezone, options = {}) {
+    if (!isoString) return '--';
+    
+    const defaultOptions = {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        ...options
+    };
+    
+    try {
+        const date = new Date(isoString);
+        return date.toLocaleString('th-TH', {
+            ...defaultOptions,
+            timeZone: userTimezone || 'Asia/Bangkok'
+        });
+    } catch (e) {
+        console.error('Date formatting error:', e);
+        return isoString;
+    }
+}
+
+/**
+ * Format time only (HH:MM)
+ */
+function formatTime(isoString, userTimezone) {
+    return formatDateTime(isoString, userTimezone, {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+}
+
+/**
+ * Format date only (DD/MM/YYYY)
+ */
+function formatDate(isoString, userTimezone) {
+    return formatDateTime(isoString, userTimezone, {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    });
+}
+
+/**
+ * Get user's timezone from localStorage
+ */
+function getUserTimezone() {
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+        try {
+            const user = JSON.parse(userStr);
+            return user.timezone || 'Asia/Bangkok';
+        } catch (e) {
+            console.error('Error parsing user from localStorage:', e);
+        }
+    }
+    return 'Asia/Bangkok';
+}
 
 API.init();

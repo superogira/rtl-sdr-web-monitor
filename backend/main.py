@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from backend.config import settings
 from backend.database import init_db
 from backend.auth.router import router as auth_router
-from backend.sdr.router import router as sdr_router, recordings_router
+from backend.sdr.router import router as sdr_router, recordings_router, settings_router
 
 
 @asynccontextmanager
@@ -88,6 +88,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(sdr_router)
 app.include_router(recordings_router)
+app.include_router(settings_router)
 
 
 # === Health Check ===

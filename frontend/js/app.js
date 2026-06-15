@@ -1306,7 +1306,8 @@ const App = {
 
     createFeedItemHTML(rec) {
         const ts = rec.recorded_at || rec.timestamp;
-        const time = ts ? new Date(ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' }) : '--:--';
+        const userTz = getUserTimezone();
+        const time = ts ? formatTime(ts, userTz) : '--:--';
         const freqHz = rec.frequency || (rec.frequency_mhz ? rec.frequency_mhz * 1e6 : null);
         const freq = freqHz ? (freqHz / 1e6).toFixed(3) + ' MHz' : (rec.frequency_mhz ? rec.frequency_mhz.toFixed(3) + ' MHz' : '');
         const mode = rec.mode || '';

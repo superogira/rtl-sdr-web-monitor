@@ -6,20 +6,29 @@ from pydantic import BaseModel
 from typing import Optional
 from pathlib import Path as FSPath
 import os
+import logging
 
 from backend.auth.dependencies import get_current_user
 from backend.models.user import User
 from backend.sdr.manager import sdr_manager
 from backend.audio.demod import DemodMode
 from backend.database import get_db
-from backend.models.recording import Recording
+from backend.models.recording import Recording, RecordingStatus
 from backend.config import settings
+from backend.services.stt import transcribe, _get_stt_config
+from backend.services.app_settings import get_setting, set_setting
+from backend.models.app_setting import mask_value
 from sqlalchemy import select, func
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sdr", tags=["SDR Control"])
 
 # Separate router for recordings (different prefix)
 recordings_router = APIRouter(prefix="/api/recordings", tags=["Recordings"])
+
+# Router for global app settings (STT config, etc.)
+settings_router = APIRouter(prefix="/api/settings", tags=["App Settings"])
 
 
 # === Schemas ===
@@ -334,3 +343,140 @@ async def update_transcript(
     rec.transcript = req.transcript
     await db.commit()
     return {"success": True, "id": rec_id}
+
+
+# === STT (Speech-to-Text) endpoints ===
+
+@recordings_router.post("/{rec_id}/transcribe")
+async def transcribe_recording(
+    rec_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Transcribe a single recording using the configured STT provider.
+
+    Reads the audio file from disk, sends it to Speechmatics/Whisper,
+    and stores the transcript in the DB.
+    """
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if not rec.audio_file_path or not FSPath(rec.audio_file_path).exists():
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    # Mark as transcribing
+    rec.status = RecordingStatus.TRANSCRIBING
+    await db.commit()
+
+    try:
+        result = await transcribe(rec.audio_file_path)
+        text = result.get("text", "").strip()
+        lang = result.get("language", "th")
+        provider = result.get("provider", "")
+        error = result.get("error")
+
+        rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
+        rec.transcript_language = lang
+        rec.stt_provider = provider or None
+        rec.stt_error = error or None
+        rec.status = RecordingStatus.COMPLETED
+        await db.commit()
+
+        logger.info(f"Transcribed {rec_id}: {len(text)} chars (lang={lang}, provider={provider})")
+        return {
+            "success": True,
+            "id": rec_id,
+            "transcript": text,
+            "language": lang,
+            "provider": provider,
+            "error": error,
+        }
+    except Exception as e:
+        logger.error(f"Transcription failed for {rec_id}: {e}", exc_info=True)
+        rec.status = RecordingStatus.FAILED
+        rec.stt_error = str(e)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+
+
+class STTSettingsRequest(BaseModel):
+    provider: Optional[str] = None  # "speechmatics" | "whisper"
+    api_key: Optional[str] = None  # Speechmatics API key
+    language: Optional[str] = None  # "th" | "en"
+    auto_transcribe: Optional[bool] = None
+    # Speechmatics-specific options
+    operating_point: Optional[str] = None  # "standard" | "enhanced"
+    diarization: Optional[str] = None  # "none" | "speaker" | "channel"
+    enable_entities: Optional[bool] = None
+
+
+@settings_router.get("/stt")
+async def get_stt_settings(current_user: User = Depends(get_current_user)):
+    """Get global STT settings (API key masked)."""
+    cfg = await _get_stt_config()
+    return {
+        "provider": cfg["provider"],
+        "api_key": mask_value(cfg["api_key"]) if cfg["api_key"] else "",
+        "api_key_set": bool(cfg["api_key"]),
+        "language": cfg["language"],
+        "auto_transcribe": cfg["auto_transcribe"],
+        "operating_point": cfg["operating_point"],
+        "diarization": cfg["diarization"],
+        "enable_entities": cfg["enable_entities"],
+    }
+
+
+@settings_router.put("/stt")
+async def update_stt_settings(
+    req: STTSettingsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Update global STT settings.
+
+    Note: if `api_key` is empty or a masked placeholder, the existing key is kept.
+    """
+    if req.provider is not None:
+        if req.provider not in ("speechmatics", "whisper"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics' or 'whisper'")
+        await set_setting("stt_provider", req.provider)
+
+    # Only update API key if a real (non-empty, non-masked) value is provided
+    if req.api_key is not None and req.api_key.strip() and "..." not in req.api_key:
+        await set_setting("stt_speechmatics_api_key", req.api_key.strip())
+
+    if req.language is not None:
+        if req.language not in ("th", "en", "auto"):
+            raise HTTPException(status_code=400, detail="Language must be 'th', 'en', or 'auto'")
+        await set_setting("stt_language", req.language)
+
+    if req.auto_transcribe is not None:
+        await set_setting("stt_auto_transcribe", "true" if req.auto_transcribe else "false")
+
+    # Speechmatics-specific options
+    if req.operating_point is not None:
+        if req.operating_point not in ("standard", "enhanced"):
+            raise HTTPException(status_code=400, detail="operating_point must be 'standard' or 'enhanced'")
+        await set_setting("stt_operating_point", req.operating_point)
+
+    if req.diarization is not None:
+        if req.diarization not in ("none", "speaker", "channel"):
+            raise HTTPException(status_code=400, detail="diarization must be 'none', 'speaker', or 'channel'")
+        await set_setting("stt_diarization", req.diarization)
+
+    if req.enable_entities is not None:
+        await set_setting("stt_enable_entities", "true" if req.enable_entities else "false")
+
+    # Return updated config
+    cfg = await _get_stt_config()
+    return {
+        "success": True,
+        "provider": cfg["provider"],
+        "api_key": mask_value(cfg["api_key"]) if cfg["api_key"] else "",
+        "api_key_set": bool(cfg["api_key"]),
+        "language": cfg["language"],
+        "auto_transcribe": cfg["auto_transcribe"],
+        "operating_point": cfg["operating_point"],
+        "diarization": cfg["diarization"],
+        "enable_entities": cfg["enable_entities"],
+    }

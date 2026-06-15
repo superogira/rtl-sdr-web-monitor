@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -18,7 +18,7 @@ class TelegramAlert(Base):
     is_sent = Column(Boolean, default=False, nullable=False)
     sent_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     recording = relationship("Recording", back_populates="alerts")

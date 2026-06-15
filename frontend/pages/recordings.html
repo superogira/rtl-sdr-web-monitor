@@ -26,6 +26,13 @@
             padding:2px 8px; border-radius:4px; font-size:0.7rem; cursor:pointer;
         }
         .rec-del-btn:hover { background:rgba(239,68,68,0.3); }
+        .rec-stt-btn {
+            background:rgba(34,211,238,0.15); color:#7dd3fc;
+            border:1px solid rgba(34,211,238,0.3);
+            padding:2px 8px; border-radius:4px; font-size:0.7rem; cursor:pointer;
+        }
+        .rec-stt-btn:hover { background:rgba(34,211,238,0.3); }
+        .rec-stt-btn:disabled { opacity:0.5; cursor:wait; }
         .rec-load-more {
             display:block; margin:1rem auto; padding:8px 24px;
             background:var(--bg-card); color:var(--text-primary);
@@ -68,7 +75,7 @@
             </button>
         </div>
     </div>
-    <script src="/js/api.js?v=4"></script>
+    <script src="/js/api.js?v=6"></script>
     <script src="/js/auth.js?v=4"></script>
     <script>
         if (!Auth.isAuthenticated()) window.location.href = '/login';
@@ -79,12 +86,13 @@
         let _allItems = [];
 
         function recHTML(rec) {
+            const userTz = getUserTimezone();
             const time = rec.recorded_at
-                ? new Date(rec.recorded_at).toLocaleString('th-TH', {
+                ? formatDateTime(rec.recorded_at, userTz, {
                     day:'2-digit', month:'2-digit', year:'numeric',
                     hour:'2-digit', minute:'2-digit'
                   })
-                : (rec.timestamp ? new Date(rec.timestamp).toLocaleString('th-TH') : '--');
+                : (rec.timestamp ? formatDateTime(rec.timestamp, userTz) : '--');
             const freq = rec.frequency_mhz
                 ? rec.frequency_mhz.toFixed(4) + ' MHz'
                 : (rec.frequency ? (rec.frequency / 1e6).toFixed(4) + ' MHz' : '');
@@ -92,7 +100,16 @@
             const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
             const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
             const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
-            const transcript = rec.transcript || rec.transcription || '<span class="text-muted">ยังไม่ถอดเสียง</span>';
+            const hasTranscript = !!(rec.transcript || rec.transcription);
+            const providerBadge = rec.stt_provider
+                ? `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px;">[${rec.stt_provider}]</span>`
+                : '';
+            const errorBadge = rec.stt_error
+                ? `<div style="font-size:0.7rem; color:var(--accent-red); margin-top:4px;" title="${(rec.stt_error||'').replace(/"/g,'"')}">⚠️ ${rec.stt_error.length > 80 ? rec.stt_error.slice(0,80) + '…' : rec.stt_error}</div>`
+                : '';
+            const transcriptHtml = hasTranscript
+                ? `<div>${(rec.transcript || rec.transcription)}</div>${providerBadge}${errorBadge}`
+                : (rec.stt_error ? errorBadge : '<span class="text-muted">ยังไม่ถอดเสียง</span>');
             const audioUrl = rec.audio_file_name
                 ? '/recordings/' + rec.audio_file_name
                 : (rec.url || '');
@@ -110,11 +127,12 @@
                         </div>
                         <div class="rec-actions">
                             <span style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>
+                            <button class="rec-stt-btn" id="stt-btn-${rec.id}" onclick="transcribeRec('${rec.id}')" ${hasTranscript ? 'disabled title="ถอดเสียงแล้ว"' : ''}>${hasTranscript ? '✓ ถอดแล้ว' : '📝 ถอดเสียง'}</button>
                             <button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ลบ</button>
                         </div>
                     </div>
                     <div class="feed-text" style="margin-top:6px;">
-                        <div class="transcript" style="font-size:0.85rem; line-height:1.5;">${transcript}</div>
+                        <div class="transcript" id="transcript-${rec.id}" style="font-size:0.85rem; line-height:1.5;">${transcriptHtml}</div>
                     </div>
                     ${audioUrl ? `<audio controls style="width:100%;height:32px;margin-top:8px;" src="${audioUrl}"></audio>` : ''}
                 </div>
@@ -165,6 +183,23 @@
         function loadMore() {
             _offset += PAGE_SIZE;
             loadRecordings(true);
+        }
+
+        async function transcribeRec(id) {
+            const btn = document.getElementById('stt-btn-' + id);
+            const transcriptEl = document.getElementById('transcript-' + id);
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังถอด...'; }
+            if (transcriptEl) transcriptEl.innerHTML = '<span class="text-muted">⏳ กำลังถอดเสียง (อาจใช้เวลา 10–60 วินาที)...</span>';
+            try {
+                const result = await API.recordings.transcribe(id);
+                const text = result.transcript || '(ไม่สามารถถอดเสียงได้)';
+                if (transcriptEl) transcriptEl.textContent = text;
+                if (btn) { btn.textContent = '✓ ถอดแล้ว'; btn.disabled = true; }
+            } catch (err) {
+                if (transcriptEl) transcriptEl.innerHTML = '<span style="color:var(--accent-red);">❌ ถอดเสียงไม่สำเร็จ: ' + (err.detail || err.message || err) + '</span>';
+                if (btn) { btn.disabled = false; btn.textContent = '📝 ถอดเสียง'; }
+                console.error('Transcribe failed:', err);
+            }
         }
 
         async function deleteRec(id) {

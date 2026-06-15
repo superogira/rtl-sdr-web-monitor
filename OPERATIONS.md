@@ -459,7 +459,81 @@ rm -rf data/recordings/*
 
 ---
 
-## 8. Environment Variables (อ้างอิง)
+## 8. ระบบถอดเสียง (Speech-to-Text / STT)
+
+ระบบถอดเสียงแปลงเสียงวิทยุเป็นข้อความ รองรับ 2 provider:
+
+### 8.1 Provider ที่รองรับ
+
+| Provider | รายละเอียด | ต้องติดตั้งเพิ่ม? |
+|----------|-----------|------------------|
+| **Speechmatics** (Cloud) | API แม่นยำ รองรับไทย ต้องมี API Key และอินเทอร์เน็ต | ไม่ (มี `httpx` ใน `requirements.txt`) |
+| **Whisper** (Local) | OpenAI Whisper รันในเครื่อง ไม่ต้องเชื่อมเน็ต แต่กิน CPU/GPU | ต้อง `pip install openai-whisper` |
+
+### 8.2 การตั้งค่า STT (ผ่านหน้าเว็บ)
+
+1. ไปที่ **⚙️ ตั้งค่า → 📝 ถอดเสียง**
+2. เลือก Provider (Speechmatics หรือ Whisper)
+3. สำหรับ Speechmatics:
+   - ใส่ API Key (สมัครได้ที่ https://speechmatics.com)
+   - เลือก Language: ไทย / English / Auto
+   - **Operating Point**: `standard` (เร็ว ประหยัดเครดิต) หรือ `enhanced` (แม่นยำ ช้า)
+   - **Diarization**: `none` (ไม่แยก) / `speaker` (แยกผู้พูด) / `channel` (แยกช่องสัญญาณ — เหมาะกับวิทยุสื่อสาร)
+   - **Enable Entities**: ดึง named entities (ชื่อคน/สถานที่/องค์กร)
+4. **ถอดเสียงอัตโนมัติ**: เปิดเพื่อถอดทุกครั้งที่อัดเสร็จ หรือปิดเพื่อกดถอดเองในหน้า Recordings
+5. กด **💾 บันทึก**
+
+> 💡 ค่าทั้งหมดเก็บในฐานข้อมูล (ตาราง `app_settings`) ใช้ร่วมกันสำหรับผู้ใช้ทุกคน
+
+### 8.3 การใช้งาน
+
+- **ถอดอัตโนมัติ**: เปิดใน Settings → STT → ระบบจะถอดทุก recording ที่อัดเสร็จอัตโนมัติ (แสดงสถานะ `🔄AUTO`)
+- **ถอดเอง**: ไปที่หน้า **📋 รายการบันทึก** → กดปุ่ม `📝 ถอดเสียง` ที่รายการใดก็ได้
+- ดูผลลัพธ์: transcript จะแสดงในหน้า Recordings พร้อม badge บอก provider เช่น `[speechmatics]`
+- ถ้าถอดล้มเหลว: จะแสดง `⚠️ <error message>` สีแดง
+
+### 8.4 การติดตั้ง Whisper (Optional)
+
+```bash
+# ติดตั้ง Whisper (ใช้เฉพาะกรณีเลือก provider=whisper)
+cd /root/workspace/rtl-sdr-web
+./venv/bin/pip install openai-whisper
+
+# ตั้งค่า model size ใน .env (optional, default=base)
+# WHISPER_MODEL_SIZE=base    # tiny/base/small/medium/large
+# WHISPER_LANGUAGE=th
+
+# รีสตาร์ท backend หลังติดตั้ง
+pkill -f "uvicorn backend.main"; sleep 2
+nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info > /tmp/uvicorn.log 2>&1 &
+disown
+```
+
+### 8.5 การตรวจสอบ STT ผ่าน API
+
+```bash
+# ดูการตั้งค่า STT ปัจจุบัน
+curl -s http://localhost:8000/api/settings/stt \
+  -H "Authorization: Bearer <token>" | python3 -m json.tool
+
+# ถอดเสียง recording ใดก็ได้ด้วย API
+curl -s -X POST http://localhost:8000/api/recordings/<recording_id>/transcribe \
+  -H "Authorization: Bearer <token>" | python3 -m json.tool
+```
+
+### 8.6 Troubleshooting STT
+
+| ปัญหา | สาเหตุ / แก้ไข |
+|-------|---------------|
+| "Speechmatics API key not configured" | ยังไม่ได้ใส่ API Key → ไปตั้งค่าที่หน้า Settings |
+| "Job rejected/failed" | ไฟล์เสียงเงียบเกินไป หรือ format ไม่รองรับ → ลองอัดใหม่ให้นานขึ้น |
+| "Polling timed out" | ใช้เวลาถอดเกิน 5 นาที → ไฟล์ยาวเกินไป หรือ Speechmatives ไม่ตอบ |
+| "Whisper not installed" | เลือก provider=whisper แต่ไม่ได้ติดตั้ง → ดู section 8.4 |
+| ถอดเสียงไม่ตรง | ลองเปลี่ยน operating_point=enhanced หรือตรวจสอบ language setting |
+
+---
+
+## 9. Environment Variables (อ้างอิง)
 
 | Variable                    | Default                  | ความหมาย                              |
 |-----------------------------|--------------------------|---------------------------------------|
@@ -478,7 +552,7 @@ rm -rf data/recordings/*
 
 ---
 
-## 9. โครงสร้างไฟล์สำคัญ
+## 10. โครงสร้างไฟล์สำคัญ
 
 ```
 rtl-sdr-web/

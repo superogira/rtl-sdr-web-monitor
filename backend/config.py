@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 import os
+from zoneinfo import ZoneInfo
 
 
 class Settings(BaseSettings):
@@ -56,6 +57,9 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str = ""
     TELEGRAM_ENABLED: bool = False
 
+    # Timezone Settings
+    TIMEZONE: str = "Asia/Bangkok"  # Default timezone for display
+    
     # Recordings
     RECORDINGS_DIR: str = "./frontend/assets/audio"
     MAX_RECORDING_DURATION: int = 300

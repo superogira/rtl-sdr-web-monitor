@@ -66,6 +66,8 @@ def _run_migrations(conn):
         ("is_unread", "INTEGER DEFAULT 1 NOT NULL"),
         ("recorded_at", "DATETIME"),
         ("frequency_mhz", "FLOAT"),
+        ("stt_provider", "VARCHAR(20)"),
+        ("stt_error", "TEXT"),
     ]
 
     for col_name, col_type in migrations:
@@ -76,9 +78,46 @@ def _run_migrations(conn):
             print(f"[migration] Added '{col_name}' column to recordings table")
 
 
+def _seed_app_settings(conn):
+    """Seed default global app settings (STT config, etc.) if not present.
+
+    Idempotent: only inserts rows that don't exist yet.
+    NOTE: MUST be sync (def) — called via conn.run_sync().
+    """
+    from sqlalchemy import text
+
+    defaults = {
+        "stt_provider": "speechmatics",
+        "stt_speechmatics_api_key": "XJ4zppb60QnkpznSfpy59udFfp9iK22O",
+        "stt_language": "th",
+        "stt_auto_transcribe": "false",
+        "stt_operating_point": "standard",
+        "stt_diarization": "none",
+        "stt_enable_entities": "false",
+    }
+
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for key, value in defaults.items():
+        result = conn.execute(text("SELECT value FROM app_settings WHERE key = :key"), {"key": key})
+        if result.fetchone() is None:
+            conn.execute(
+                text("INSERT INTO app_settings (key, value, updated_at) VALUES (:key, :value, :ts)"),
+                {"key": key, "value": value, "ts": now_iso},
+            )
+            print(f"[seed] App setting '{key}' initialized")
+
+
 async def init_db():
     """Initialize database (create tables if needed)."""
+    # Import models so Base.metadata.create_all picks them up.
+    from backend.models import app_setting  # noqa: F401  (register AppSetting model)
+    from backend.models import recording  # noqa: F401  (register Recording model)
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Run migrations (add columns to existing tables)
         await conn.run_sync(_run_migrations)
+        # Seed default app settings
+        await conn.run_sync(_seed_app_settings)

@@ -49,6 +49,7 @@
 
         <!-- Tabs -->
         <div class="nav-tabs">
+            <div class="nav-tab" onclick="Settings.showTab('general')">🌐 ทั่วไป</div>
             <div class="nav-tab active" onclick="Settings.showTab('sdr')">📡 RTL-TCP</div>
             <div class="nav-tab" onclick="Settings.showTab('recording')">🎙️ การอัดเสียง</div>
             <div class="nav-tab" onclick="Settings.showTab('stt')">📝 ถอดเสียง</div>
@@ -173,25 +174,18 @@
         <!-- STT Settings -->
         <div class="tab-content" id="tab-stt" style="display:none;">
             <div class="settings-section">
-                <h2>📝 Speech-to-Text</h2>
+                <h2>📝 Speech-to-Text (Global)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    ค่าเหล่านี้เก็บในฐานข้อมูล ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน
+                </p>
                 <div class="form-group">
                     <label>Provider</label>
                     <select id="stt-provider">
+                        <option value="speechmatics">Speechmatics API (Cloud)</option>
                         <option value="whisper">Whisper (Local)</option>
-                        <option value="speechmatics">Speechmatics API</option>
                     </select>
                 </div>
                 <div class="form-row">
-                    <div class="form-group">
-                        <label>Whisper Model</label>
-                        <select id="stt-whisper-model">
-                            <option value="tiny">tiny</option>
-                            <option value="base">base</option>
-                            <option value="small">small</option>
-                            <option value="medium">medium</option>
-                            <option value="large">large</option>
-                        </select>
-                    </div>
                     <div class="form-group">
                         <label>Language</label>
                         <select id="stt-lang">
@@ -200,10 +194,44 @@
                             <option value="auto">Auto detect</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label>ถอดเสียงอัตโนมัติเมื่ออัดเสร็จ</label>
+                        <select id="stt-auto">
+                            <option value="true">เปิด (ถอดอัตโนมัติทุกครั้ง)</option>
+                            <option value="false">ปิด (กดถอดเองในหน้า Recordings)</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Speechmatics API Key</label>
-                    <input type="password" id="stt-api-key" placeholder="ใส่ API Key ถ้าใช้ Speechmatics">
+                    <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
+                    <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
+                    </p>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Operating Point (คุณภาพการถอด)</label>
+                        <select id="stt-operating-point">
+                            <option value="standard">Standard (เร็ว ประหยัดเครดิต)</option>
+                            <option value="enhanced">Enhanced (แม่นยำ ใช้เครดิตมาก)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Diarization (แยกลำโพง)</label>
+                        <select id="stt-diarization">
+                            <option value="none">None (ไม่แยก)</option>
+                            <option value="speaker">Speaker (แยกตามผู้พูด)</option>
+                            <option value="channel">Channel (แยกตามช่องสัญญาณ)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Enable Entities (จับคำสำคัญ เช่น ชื่อบุคคล/สถานที่/วันที่)</label>
+                    <select id="stt-enable-entities">
+                        <option value="false">ปิด</option>
+                        <option value="true">เปิด</option>
+                    </select>
                 </div>
                 <div class="form-actions">
                     <button class="btn btn-primary" onclick="Settings.saveSTT()">💾 บันทึก</button>
@@ -326,6 +354,46 @@
             </div>
         </div>
 
+        <!-- General Settings -->
+        <div class="tab-content" id="tab-general" style="display:none;">
+            <div class="settings-section">
+                <h2>🕐 Timezone สำหรับแสดงผล</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    เลือก timezone ที่ต้องการใช้แสดงเวลาในระบบ (เช่น 15:30 น. แทน 08:30 UTC)
+                </p>
+                <div class="form-group">
+                    <label>Timezone ของคุณ</label>
+                    <select id="user-timezone" style="padding: 8px 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); font-size: 0.85rem; width: 100%; max-width: 400px;">
+                        <option value="Asia/Bangkok">🇹🇭 Asia/Bangkok (UTC+7)</option>
+                        <option value="Asia/Ho_Chi_Minh">🇻🇳 Asia/Ho_Chi_Minh (UTC+7)</option>
+                        <option value="Asia/Jakarta">🇮🇩 Asia/Jakarta (UTC+7)</option>
+                        <option value="Asia/Singapore">🇸🇬 Asia/Singapore (UTC+8)</option>
+                        <option value="Asia/Kuala_Lumpur">🇲🇾 Asia/Kuala_Lumpur (UTC+8)</option>
+                        <option value="Asia/Hong_Kong">🇭🇰 Asia/Hong_Kong (UTC+8)</option>
+                        <option value="Asia/Tokyo">🇯🇵 Asia/Tokyo (UTC+9)</option>
+                        <option value="Asia/Seoul">🇰🇷 Asia/Seoul (UTC+9)</option>
+                        <option value="Asia/Shanghai">🇨🇳 Asia/Shanghai (UTC+8)</option>
+                        <option value="Asia/Manila">🇵🇭 Asia/Manila (UTC+8)</option>
+                        <option value="Australia/Sydney">🇦🇺 Australia/Sydney (UTC+10/+11)</option>
+                        <option value="Pacific/Auckland">🇳🇿 Pacific/Auckland (UTC+12/+13)</option>
+                        <option value="Europe/London">🇬🇧 Europe/London (UTC+0/+1)</option>
+                        <option value="Europe/Paris">🇫🇷 Europe/Paris (UTC+1/+2)</option>
+                        <option value="Europe/Berlin">🇩🇪 Europe/Berlin (UTC+1/+2)</option>
+                        <option value="America/New_York">🇺🇸 America/New_York (UTC-5/-4)</option>
+                        <option value="America/Los_Angeles">🇺🇸 America/Los_Angeles (UTC-8/-7)</option>
+                        <option value="America/Chicago">🇺🇸 America/Chicago (UTC-6/-5)</option>
+                        <option value="UTC">🌍 UTC (UTC+0)</option>
+                    </select>
+                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        💡 เวลาที่บันทึกในระบบจะเป็น UTC เสมอ แต่จะแสดงผลตาม timezone ที่เลือก
+                    </p>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveTimezone()">💾 บันทึก Timezone</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Users Settings (Admin) -->
         <div class="tab-content" id="tab-users" style="display:none;">
             <div class="settings-section">
@@ -348,8 +416,8 @@
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
-    <script src="/js/auth.js"></script>
+    <script src="/js/api.js?v=7"></script>
+    <script src="/js/auth.js?v=5"></script>
     <script>
     const Settings = {
         keywords: ['ฉุกเฉิน', 'เหตุด่วน', 'help', 'emergency'],
@@ -360,8 +428,10 @@
             if (user) {
                 document.getElementById('user-display').textContent = `👤 ${user.display_name || user.username}`;
             }
+            this.loadTimezoneSetting();
             this.loadSDRSettings();
             this.loadDisplaySettings();
+            this.loadSTTSettings();
             this.renderKeywords();
             this.refreshStatus();
             this.loadUsers();
@@ -530,7 +600,64 @@
             } catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
         },
 
-        saveSTT() { alert('✅ บันทึก STT settings แล้ว (จะใช้ในโหมด production)'); },
+        // === STT Settings ===
+        async loadSTTSettings() {
+            try {
+                const cfg = await API.settings.getSTT();
+                const elProvider = document.getElementById('stt-provider');
+                const elLang = document.getElementById('stt-lang');
+                const elAuto = document.getElementById('stt-auto');
+                const elKey = document.getElementById('stt-api-key');
+                const elHint = document.getElementById('stt-api-key-hint');
+                if (elProvider && cfg.provider) elProvider.value = cfg.provider;
+                if (elLang && cfg.language) elLang.value = cfg.language;
+                if (elAuto && typeof cfg.auto_transcribe === 'boolean') {
+                    elAuto.value = cfg.auto_transcribe ? 'true' : 'false';
+                }
+                if (elKey) elKey.value = '';  // Don't show real key; user types new to change
+                if (elHint) {
+                    elHint.textContent = cfg.api_key_set
+                        ? `✅ API Key ถูกตั้งไว้แล้ว (${cfg.api_key}) ปล่อยว่างถ้าไม่ต้องการเปลี่ยน`
+                        : '⚠️ ยังไม่มี API Key ใส่เพื่อบันทึก';
+                }
+                const elOp = document.getElementById('stt-operating-point');
+                const elDia = document.getElementById('stt-diarization');
+                const elEnt = document.getElementById('stt-enable-entities');
+                if (elOp && cfg.operating_point) elOp.value = cfg.operating_point;
+                if (elDia && cfg.diarization) elDia.value = cfg.diarization;
+                if (elEnt) elEnt.value = cfg.enable_entities ? 'true' : 'false';
+            } catch (e) {
+                console.warn('Could not load STT settings:', e);
+            }
+        },
+
+        async saveSTT() {
+            const provider = document.getElementById('stt-provider').value;
+            const language = document.getElementById('stt-lang').value;
+            const auto_transcribe = document.getElementById('stt-auto').value === 'true';
+            const apiKeyInput = document.getElementById('stt-api-key').value;
+            const operating_point = document.getElementById('stt-operating-point').value;
+            const diarization = document.getElementById('stt-diarization').value;
+            const enable_entities = document.getElementById('stt-enable-entities').value === 'true';
+
+            const payload = { provider, language, auto_transcribe, operating_point, diarization, enable_entities };
+            // Only send api_key if user typed something new
+            if (apiKeyInput && apiKeyInput.trim() && !apiKeyInput.includes('...')) {
+                payload.api_key = apiKeyInput.trim();
+            }
+
+            try {
+                const result = await API.settings.updateSTT(payload);
+                const msg = result.api_key_set
+                    ? `✅ บันทึก STT settings สำเร็จ!\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? 'เปิด' : 'ปิด'}\nAPI Key: ${result.api_key}`
+                    : '✅ บันทึก STT settings สำเร็จ! (แต่ยังไม่มี API Key)';
+                alert(msg);
+                // Reload to update hint
+                this.loadSTTSettings();
+            } catch (e) {
+                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+            }
+        },
         saveTelegram() { alert('✅ บันทึก Telegram settings แล้ว'); },
         testTelegram() { alert('🧪 กำลังทดสอบ... (ต้องตั้ง Bot Token และ Chat ID ก่อน)'); },
 
@@ -584,6 +711,33 @@
             const warning = document.getElementById('fft-warning');
             if (!el || !warning) return;
             warning.style.display = (parseInt(el.value) >= 4096) ? '' : 'none';
+        },
+
+        // === Timezone Settings ===
+        async loadTimezoneSetting() {
+            const user = Auth.getUser();
+            if (user && user.timezone) {
+                const select = document.getElementById('user-timezone');
+                if (select) {
+                    select.value = user.timezone;
+                }
+            }
+        },
+        
+        async saveTimezone() {
+            const timezone = document.getElementById('user-timezone').value;
+            try {
+                const result = await API.request('PUT', '/api/auth/me/timezone', { timezone });
+                alert('✅ บันทึก Timezone เรียบร้อย!\nเวลาจะแสดงตาม timezone ที่เลือก');
+                // Update local storage
+                const user = Auth.getUser();
+                if (user) {
+                    user.timezone = timezone;
+                    localStorage.setItem('user', JSON.stringify(user));
+                }
+            } catch(e) {
+                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+            }
         },
 
         async saveDisplay() {
