@@ -539,12 +539,22 @@ const App = {
 
     async toggleRecording() {
         const btn = document.getElementById('btn-record');
+        // Guard: prevent manual record if not streaming
+        if (!this.isRecording && !this.isStreaming) {
+            alert('กรุณากด "▶ รับสัญญาณ" ก่อน แล้วค่อยกดบันทึก');
+            return;
+        }
         try {
             if (this.isRecording) {
-                await API.sdr.recordStop();
+                const result = await API.sdr.recordStop();
+                // Always reset state after stop attempt (even if buffer was empty)
                 this.isRecording = false;
                 if (btn) btn.classList.remove('recording');
-                console.log('⏹ Manual recording stopped');
+                if (result.note) {
+                    console.log('⏹ Manual recording stopped (no audio captured)');
+                } else {
+                    console.log('⏹ Manual recording stopped');
+                }
             } else {
                 await API.sdr.recordStart();
                 this.isRecording = true;
@@ -552,7 +562,9 @@ const App = {
                 console.log('⏺ Manual recording started');
             }
         } catch (err) {
-            if (btn) btn.classList.toggle('recording', this.isRecording);
+            // Force reset state — backend error means we're not recording
+            this.isRecording = false;
+            if (btn) btn.classList.remove('recording');
             const msg = err.detail || err.message || err;
             console.error('Recording toggle failed:', msg);
             alert('ไม่สามารถบันทึกได้: ' + msg);

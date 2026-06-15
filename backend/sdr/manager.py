@@ -279,6 +279,8 @@ class SDRManager:
     # ------------------------------------------------------------------
     async def start_recording(self):
         """Start manual recording. Works independently from auto-record."""
+        if not self.is_streaming:
+            return {"error": "กรุณากด รับสัญญาณ ก่อนบันทึก"}
         if self._manual_recording:
             return {"error": "Already recording (manual)"}
         self._manual_recording = True
@@ -292,6 +294,11 @@ class SDRManager:
         """Stop manual recording only (auto continues if active)."""
         if not self._manual_recording:
             return {"error": "No manual recording in progress"}
+        # If buffer is empty (e.g. no audio received yet), reset state silently
+        if not self._manual_buffer:
+            self._manual_recording = False
+            self._manual_start_time = None
+            return {"recording": False, "source": "manual", "note": "No audio captured"}
         return await self._finish_manual_recording()
 
     def get_new_recordings(self) -> list[dict]:
