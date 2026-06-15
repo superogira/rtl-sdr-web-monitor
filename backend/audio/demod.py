@@ -8,7 +8,11 @@ This dramatically reduces CPU usage in the stream loop, fixing audio stutter.
 import numpy as np
 import logging
 from enum import Enum
-from scipy.signal import lfilter, butter, sosfiltfilt
+from typing import Optional
+from scipy.signal import (
+    lfilter, butter, sosfiltfilt, sosfilt,
+    lfilter_zi, sosfilt_zi,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -343,3 +347,302 @@ def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
 
     iq = iq_to_complex(iq_bytes)
     return compute_channel_power(iq, sample_rate, mode, channel_bw)
+
+
+# ============================================================================
+# Streaming demodulator — keeps filter state across chunks
+# ============================================================================
+#
+# WHY THIS EXISTS
+# --------------
+# The stateless demod_fm/demod_am/demod_ssb/demodulate functions above re-run
+# every scipy filter with a ZERO initial state on each 50 ms chunk. That means:
+#
+#   - lfilter (deemphasis / AM LPF / SSB LPF) "recharges" from 0 every chunk
+#     → a low-frequency step/thump at every chunk boundary.
+#   - sosfiltfilt is zero-phase forward+backward filtering that assumes each
+#     block is self-contained; reflecting a short block at its edges produces
+#     a transient spike every chunk.
+#   - np.diff(phase) loses the single connecting sample between chunks.
+#
+# At a 50 ms chunk cadence those per-chunk transients land at ~20 Hz — exactly
+# the rhythmic "ตึกๆๆๆ / ตุบๆๆ รัวๆ" clicking/stutter heard in both live audio
+# AND in saved recordings (recordings are fed the same demod output).
+#
+# FIX
+# ---
+# StreamingDemodulator runs the SAME filters but carries their internal state
+# (zi) from chunk to chunk using lfilter(..., zi=...) / sosfilt(..., zi=...).
+# This is the standard way every realtime SDR (OpenWebRX, GNU Radio blocks,
+# rtl_fm) avoids block-boundary clicks.
+#
+# Trade-off: causal sosfilt (used here) has a small phase delay vs the old
+# zero-phase sosfiltfilt, but in a realtime monitor that is irrelevant and
+# the absence of clicks is a massive net win.
+
+def _deemphasis_alpha(sample_rate: float, wbfm: bool) -> float:
+    """Deemphasis filter alpha for a given sample rate / band."""
+    tau = 50e-6 if wbfm else 530e-6
+    dt = 1.0 / sample_rate
+    return dt / (tau + dt)
+
+
+def _expected_dev(wbfm: bool) -> float:
+    return 75000.0 if wbfm else 5000.0
+
+
+class StreamingDemodulator:
+    """Stateful demodulator that preserves filter state across chunks.
+
+    Use one instance per live stream. Call reset() whenever mode, sample_rate,
+    audio_rate, or channel_bw changes so the filter state matches the new
+    configuration. process() is not async (it is pure CPU) and is meant to be
+    called from the single SDR stream loop task.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Clear all carried filter state.
+
+        Called at construction and whenever mode / sample_rate / channel_bw
+        changes (config transitions must restart the filters cleanly).
+        """
+        # FM: phase continuity across chunks
+        self._last_phase: Optional[float] = None
+        # deemphasis lfilter state
+        self._deemph_b: Optional[list] = None
+        self._deemph_a: Optional[list] = None
+        self._deemph_zi: Optional[np.ndarray] = None
+        # AM uses one LPF state; SSB needs separate states for the real and
+        # imag branches (they are independent signals in the phasing method).
+        self._lpf_b: Optional[list] = None
+        self._lpf_a: Optional[list] = None
+        self._lpf_zi: Optional[np.ndarray] = None        # AM / SSB-real
+        self._lpf_zi_imag: Optional[np.ndarray] = None    # SSB-imag only
+        # Streaming DC blocker (IIR high-pass) — replaces per-chunk mean
+        # subtraction which caused a DC step at every chunk boundary.
+        self._dc_b: list = [1.0, -1.0]
+        self._dc_a: list = [1.0, -0.995]
+        self._dc_zi: Optional[np.ndarray] = None
+        # voice-band HP/BP (SOS) state, per (audio_rate, wbfm)
+        self._hp_sos = None
+        self._bp_sos = None
+        self._hp_zi: Optional[np.ndarray] = None
+        self._bp_zi: Optional[np.ndarray] = None
+        # SSB mixer phase accumulator (keeps LO continuous across chunks)
+        self._ssb_lo_phase: float = 0.0
+        # remember config so we can detect changes that need a reset
+        self._mode: Optional[DemodMode] = None
+        self._sample_rate: Optional[float] = None
+        self._audio_rate: Optional[float] = None
+        self._wbfm: Optional[bool] = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_fm_state(self, sample_rate: float, audio_rate: float, wbfm: bool):
+        first = (
+            self._deemph_b is None
+            or self._sample_rate != sample_rate
+            or self._audio_rate != audio_rate
+            or self._wbfm != wbfm
+        )
+        if first:
+            alpha = _deemphasis_alpha(sample_rate, wbfm)
+            self._deemph_b = [alpha]
+            self._deemph_a = [1.0, -(1.0 - alpha)]
+            self._deemph_zi = lfilter_zi(self._deemph_b, self._deemph_a).astype(np.float32)
+            self._sample_rate = sample_rate
+            self._audio_rate = audio_rate
+            self._wbfm = wbfm
+            # (re)build voice filters for this (audio_rate, wbfm)
+            self._hp_sos, self._bp_sos = _get_voice_filters(audio_rate, wbfm=wbfm)
+            self._hp_zi = sosfilt_zi(self._hp_sos).astype(np.float32)
+            self._bp_zi = sosfilt_zi(self._bp_sos).astype(np.float32)
+            # restart FM phase continuity & deemphasis state on (re)build
+            self._last_phase = None
+
+    def _ensure_lpf_state(self, sample_rate: float, audio_rate: float, rebuild: bool):
+        if rebuild or self._lpf_b is None or self._sample_rate != sample_rate \
+                or self._audio_rate != audio_rate:
+            alpha = 0.05
+            self._lpf_b = [alpha]
+            self._lpf_a = [1.0, -(1.0 - alpha)]
+            self._lpf_zi = lfilter_zi(self._lpf_b, self._lpf_a).astype(np.float32)
+            self._lpf_zi_imag = lfilter_zi(self._lpf_b, self._lpf_a).astype(np.float32)
+            self._dc_zi = lfilter_zi(self._dc_b, self._dc_a).astype(np.float32)
+            self._sample_rate = sample_rate
+            self._audio_rate = audio_rate
+            # rebuild voice filters too (shared cache keyed by audio_rate)
+            self._hp_sos, self._bp_sos = _get_voice_filters(audio_rate, wbfm=False)
+            self._hp_zi = sosfilt_zi(self._hp_sos).astype(np.float32)
+            self._bp_zi = sosfilt_zi(self._bp_sos).astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # Main entry
+    # ------------------------------------------------------------------
+    def process(self, iq_bytes: bytes, mode: DemodMode, sample_rate: float,
+                audio_rate: float, channel_bw: int = 0) -> np.ndarray:
+        """Demodulate one chunk, carrying filter state across calls.
+
+        Returns float32 audio in [-1, 1]. Returns an empty array on short input.
+        """
+        if len(iq_bytes) < 4:
+            return np.array([], dtype=np.float32)
+
+        # Any change to mode or core config → full reset for safety.
+        if self._mode != mode or self._sample_rate != sample_rate \
+                or self._audio_rate != audio_rate:
+            self.reset()
+            self._mode = mode
+
+        iq = iq_to_complex(iq_bytes)
+        if len(iq) < 8:
+            return np.array([], dtype=np.float32)
+
+        try:
+            if mode == DemodMode.FM:
+                return self._process_fm(iq, sample_rate, audio_rate, channel_bw)
+            elif mode == DemodMode.AM:
+                return self._process_am(iq, sample_rate, audio_rate)
+            elif mode == DemodMode.USB:
+                return self._process_ssb(iq, sample_rate, audio_rate, "usb")
+            elif mode == DemodMode.LSB:
+                return self._process_ssb(iq, sample_rate, audio_rate, "lsb")
+            else:
+                return self._process_fm(iq, sample_rate, audio_rate, channel_bw)
+        except ValueError:
+            # Too few samples for the filters this round — degrade gracefully
+            # (equivalent to the old stateless behaviour for tiny blocks).
+            return np.array([], dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # FM
+    # ------------------------------------------------------------------
+    def _process_fm(self, iq: np.ndarray, sample_rate: float,
+                    audio_rate: float, channel_bw: int) -> np.ndarray:
+        wbfm = bool(channel_bw) and channel_bw >= _WBFM_BW_THRESHOLD
+        self._ensure_fm_state(sample_rate, audio_rate, wbfm)
+
+        phase = np.angle(iq).astype(np.float64)
+
+        # Build the differential phase array. If we have a carried last-phase
+        # from the previous chunk, prepend it so np.diff also produces the
+        # connecting sample at the boundary (no missing sample → no click).
+        if self._last_phase is not None:
+            full = np.empty(len(phase) + 1, dtype=np.float64)
+            full[0] = self._last_phase
+            full[1:] = phase
+            demod = np.diff(full)
+        else:
+            demod = np.diff(phase)
+        self._last_phase = float(phase[-1])
+
+        # Wrap the whole demod array into [-pi, pi] (handles phase roll-over
+        # at ±π which np.diff of principal-value angles produces).
+        demod = np.where(demod > np.pi, demod - 2 * np.pi, demod)
+        demod = np.where(demod < -np.pi, demod + 2 * np.pi, demod)
+
+        # Deemphasis with carried state
+        filtered, self._deemph_zi = lfilter(
+            self._deemph_b, self._deemph_a, demod, zi=self._deemph_zi
+        )
+        filtered = filtered.astype(np.float32)
+
+        # Decimate to audio rate
+        decim_factor = max(1, int(sample_rate / audio_rate))
+        audio = filtered[::decim_factor]
+
+        # Gain
+        audio = audio * sample_rate / (2.0 * np.pi * _expected_dev(wbfm))
+        audio = np.clip(audio, -1.0, 1.0)
+
+        # Voice-band filters with carried SOS state (causal, no edge reflection)
+        if len(audio) > 64 and self._hp_sos is not None:
+            audio, self._hp_zi = sosfilt(self._hp_sos, audio, zi=self._hp_zi)
+            audio, self._bp_zi = sosfilt(self._bp_sos, audio, zi=self._bp_zi)
+
+        return audio.astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # AM
+    # ------------------------------------------------------------------
+    def _process_am(self, iq: np.ndarray, sample_rate: float,
+                    audio_rate: float) -> np.ndarray:
+        rebuild = self._mode != DemodMode.AM
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild)
+        self._mode = DemodMode.AM
+
+        magnitude = np.abs(iq).astype(np.float32)
+
+        filtered, self._lpf_zi = lfilter(
+            self._lpf_b, self._lpf_a, magnitude, zi=self._lpf_zi
+        )
+        filtered = filtered.astype(np.float32)
+
+        # Streaming DC blocker (carries state) — replaces per-chunk mean
+        # subtraction which caused a DC step at every chunk boundary.
+        filtered, self._dc_zi = lfilter(self._dc_b, self._dc_a, filtered, zi=self._dc_zi)
+
+        decim_factor = max(1, int(sample_rate / audio_rate))
+        audio = filtered[::decim_factor]
+        audio = audio * 3.0
+        audio = np.clip(audio, -1.0, 1.0)
+
+        # Optional voice-band BP to tighten audio (state carried)
+        if len(audio) > 64 and self._hp_sos is not None:
+            audio, self._hp_zi = sosfilt(self._hp_sos, audio, zi=self._hp_zi)
+            audio, self._bp_zi = sosfilt(self._bp_sos, audio, zi=self._bp_zi)
+
+        return audio
+
+    # ------------------------------------------------------------------
+    # SSB (USB / LSB)
+    # ------------------------------------------------------------------
+    def _process_ssb(self, iq: np.ndarray, sample_rate: float,
+                     audio_rate: float, sideband: str) -> np.ndarray:
+        wanted_mode = DemodMode.USB if sideband == "usb" else DemodMode.LSB
+        rebuild = self._mode != wanted_mode
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild)
+        self._mode = wanted_mode
+
+        n = len(iq)
+        # Continuous local oscillator: reuse accumulated phase so the mixer
+        # doesn't jump at chunk boundaries. 1500 Hz shift as in the stateless
+        # version.
+        sign = -1.0 if sideband == "lsb" else 1.0
+        dphase = sign * 2.0 * np.pi * 1500.0 / sample_rate
+        phases = self._ssb_lo_phase + dphase * np.arange(n, dtype=np.float64)
+        lo = np.exp(1j * phases)
+        self._ssb_lo_phase = float(phases[-1])
+        iq_shifted = iq * lo
+
+        real_part = np.real(iq_shifted).astype(np.float32)
+        imag_part = np.imag(iq_shifted).astype(np.float32)
+
+        # Independent LPF states for the real and imag branches (the phasing
+        # method treats them as two separate signals; sharing one state would
+        # leave the imag branch's filter stuck at its initial condition).
+        filtered_real, self._lpf_zi = lfilter(
+            self._lpf_b, self._lpf_a, real_part, zi=self._lpf_zi
+        )
+        filtered_imag, self._lpf_zi_imag = lfilter(
+            self._lpf_b, self._lpf_a, imag_part, zi=self._lpf_zi_imag
+        )
+
+        audio = filtered_real if sideband == "usb" else -filtered_imag
+
+        decim_factor = max(1, int(sample_rate / audio_rate))
+        audio = audio[::decim_factor]
+        # Streaming DC blocker (carries state) — replaces per-chunk mean.
+        audio, self._dc_zi = lfilter(self._dc_b, self._dc_a, audio, zi=self._dc_zi)
+        audio = audio * 3.0
+        audio = np.clip(audio, -1.0, 1.0)
+
+        if len(audio) > 64 and self._hp_sos is not None:
+            audio, self._hp_zi = sosfilt(self._hp_sos, audio, zi=self._hp_zi)
+            audio, self._bp_zi = sosfilt(self._bp_sos, audio, zi=self._bp_zi)
+
+        return audio.astype(np.float32)

@@ -15,7 +15,9 @@ import soundfile as sf
 
 from backend.config import settings
 from backend.sdr.rtl_tcp import RtlTcpClient
-from backend.audio.demod import DemodMode, demodulate, compute_signal_level
+from backend.audio.demod import (
+    DemodMode, demodulate, compute_signal_level, StreamingDemodulator,
+)
 from backend.audio.broadcaster import audio_broadcaster
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
@@ -85,6 +87,14 @@ class SDRManager:
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
         self._channel_bw: int = self._DEFAULT_CHANNEL_BW
         self._stream_task: Optional[asyncio.Task] = None
+        # Stateful streaming demodulator — carries filter state across chunks
+        # to eliminate per-chunk boundary clicks (~20 Hz buzz) in live audio
+        # and recordings. Reset whenever mode/sample_rate/audio_rate/channel_bw
+        # (NBFM↔WBFM) changes.
+        # StreamingDemodulator self-detects mode/sample_rate/audio_rate/NBFM↔WBFM
+        # changes and resets its filter state internally, so no extra tracking
+        # fields are needed here.
+        self._demod = StreamingDemodulator()
 
     # ------------------------------------------------------------------
     # Properties
@@ -345,8 +355,14 @@ class SDRManager:
                     )
 
                     sample_rate = self.client._sample_rate
-                    audio = demodulate(iq_data, self.mode, sample_rate, self.audio_rate,
-                                       channel_bw=self._channel_bw)
+                    # Use the stateful streaming demodulator: it carries filter
+                    # state (deemphasis zi, voice-band SOS zi, FM phase, SSB LO
+                    # phase) across chunks, eliminating the ~20 Hz per-chunk
+                    # boundary clicks that the stateless demodulate() produced.
+                    audio = self._demod.process(
+                        iq_data, self.mode, sample_rate, self.audio_rate,
+                        channel_bw=self._channel_bw,
+                    )
 
                     if len(audio) > 0:
                         self._audio_buffer.append(audio)
