@@ -391,6 +391,43 @@ def _expected_dev(wbfm: bool) -> float:
     return 75000.0 if wbfm else 5000.0
 
 
+def _channel_lpf_cutoff(wbfm: bool) -> float:
+    """One-sided IF low-pass cutoff (Hz) applied on raw IQ to isolate the
+    desired channel and reject adjacent stations BEFORE the discriminator.
+
+    - WBFM: 100 kHz (200 kHz channel, ±75 kHz deviation + guard)
+    - NBFM: 8 kHz   (12.5-25 kHz channel, ±5 kHz deviation + guard)
+    """
+    return 100_000.0 if wbfm else 8_000.0
+
+
+def _design_channel_lpf(sample_rate: float, cutoff: float, order: int = 8):
+    """Design a Butterworth low-pass for IQ channel selection (returns sos).
+
+    Returns SOS form (numerically stable even at narrow normalized cutoffs
+    like 6 kHz @ 2 MSPS → Wn=0.003). Since the filter has real coefficients,
+    filtering complex IQ == filtering its real and imag parts separately
+    with the same SOS, which is exactly how we apply it (sosfilt needs real
+    input anyway).
+    """
+    nyq = sample_rate / 2.0
+    wn = max(min(cutoff / nyq, 0.99), 1e-4)
+    return butter(order, wn, btype='low', output='sos')
+
+
+def _design_decim_lpf(sample_rate: float, audio_rate: float, order: int = 8):
+    """Anti-alias low-pass (SOS) applied on real audio BEFORE decimation.
+
+    Cutoff = audio_rate/2 so nothing above the new Nyquist folds back in.
+    Returns (sos, zi) sized for sosfilt.
+    """
+    nyq = sample_rate / 2.0
+    wn = max(min((audio_rate / 2.0) / nyq, 0.99), 1e-4)
+    sos = butter(order, wn, btype='low', output='sos')
+    zi = sosfilt_zi(sos).astype(np.float32)
+    return sos, zi
+
+
 class StreamingDemodulator:
     """Stateful demodulator that preserves filter state across chunks.
 
@@ -431,6 +468,18 @@ class StreamingDemodulator:
         self._bp_sos = None
         self._hp_zi: Optional[np.ndarray] = None
         self._bp_zi: Optional[np.ndarray] = None
+        # Channel selectivity filter (applied on raw IQ to reject adjacent
+        # stations BEFORE the discriminator/envelope). Crucial for WBFM at
+        # 2 MSPS where ±1 MHz of spectrum otherwise leaks into the audio.
+        # Stored as SOS (numerically stable for very narrow normalized cutoffs).
+        self._chan_sos = None
+        self._chan_zi: Optional[np.ndarray] = None        # real branch
+        self._chan_zi_imag: Optional[np.ndarray] = None    # imag branch
+        # Anti-alias decimation filter (applied on real audio AFTER the
+        # discriminator, BEFORE naive [::decim_factor] decimation). Prevents
+        # out-of-band energy from folding into the audio band.
+        self._decim_sos = None
+        self._decim_zi: Optional[np.ndarray] = None
         # SSB mixer phase accumulator (keeps LO continuous across chunks)
         self._ssb_lo_phase: float = 0.0
         # remember config so we can detect changes that need a reset
@@ -442,6 +491,38 @@ class StreamingDemodulator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _filter_iq_channel(self, iq: np.ndarray) -> np.ndarray:
+        """Apply the channel-selectivity LPF to complex IQ.
+
+        Real-coeff SOS → filtering real and imag parts separately is
+        mathematically identical to filtering the complex signal, and is
+        the only way to use sosfilt (which requires real input) here.
+        Filter state is carried chunk-to-chunk in _chan_zi / _chan_zi_imag.
+        """
+        if self._chan_sos is None:
+            return iq
+        re, self._chan_zi = sosfilt(
+            self._chan_sos, np.real(iq).astype(np.float32), zi=self._chan_zi
+        )
+        im, self._chan_zi_imag = sosfilt(
+            self._chan_sos, np.imag(iq).astype(np.float32), zi=self._chan_zi_imag
+        )
+        return (re.astype(np.float32) + 1j * im.astype(np.float32))
+
+    def _decimate_audio(self, audio: np.ndarray, sample_rate: float,
+                        audio_rate: float) -> np.ndarray:
+        """Anti-alias filter then decimate real audio to audio_rate.
+
+        Without the pre-decimation LPF, the naive [::N] stride folds
+        high-frequency discriminator/envelope noise into the audio band,
+        giving a muddy "telephone" quality. Filter state is carried.
+        """
+        decim_factor = max(1, int(sample_rate / audio_rate))
+        if decim_factor <= 1 or self._decim_sos is None:
+            return audio
+        audio, self._decim_zi = sosfilt(self._decim_sos, audio, zi=self._decim_zi)
+        return audio[::decim_factor]
+
     def _ensure_fm_state(self, sample_rate: float, audio_rate: float, wbfm: bool):
         first = (
             self._deemph_b is None
@@ -461,10 +542,20 @@ class StreamingDemodulator:
             self._hp_sos, self._bp_sos = _get_voice_filters(audio_rate, wbfm=wbfm)
             self._hp_zi = sosfilt_zi(self._hp_sos).astype(np.float32)
             self._bp_zi = sosfilt_zi(self._bp_sos).astype(np.float32)
+            # Channel selectivity LPF on raw IQ (reject adjacent stations
+            # before the discriminator). Real-coeff SOS applied separately
+            # to real/imag == filtering complex IQ.
+            self._chan_sos = _design_channel_lpf(sample_rate, _channel_lpf_cutoff(wbfm))
+            self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
+            self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
+            # Anti-alias decimation LPF (applied on demod audio before
+            # [::decim_factor] to stop out-of-band energy folding in).
+            self._decim_sos, self._decim_zi = _design_decim_lpf(sample_rate, audio_rate)
             # restart FM phase continuity & deemphasis state on (re)build
             self._last_phase = None
 
-    def _ensure_lpf_state(self, sample_rate: float, audio_rate: float, rebuild: bool):
+    def _ensure_lpf_state(self, sample_rate: float, audio_rate: float,
+                          rebuild: bool, mode: Optional[DemodMode] = None):
         if rebuild or self._lpf_b is None or self._sample_rate != sample_rate \
                 or self._audio_rate != audio_rate:
             alpha = 0.05
@@ -479,6 +570,16 @@ class StreamingDemodulator:
             self._hp_sos, self._bp_sos = _get_voice_filters(audio_rate, wbfm=False)
             self._hp_zi = sosfilt_zi(self._hp_sos).astype(np.float32)
             self._bp_zi = sosfilt_zi(self._bp_sos).astype(np.float32)
+            # Channel selectivity LPF. For AM this is an IF filter on raw IQ
+            # (~5 kHz). For SSB it is applied POST-mixer as the sideband
+            # isolator (~2.5 kHz, one-sided audio bandwidth).
+            is_ssb = mode in (DemodMode.USB, DemodMode.LSB)
+            chan_cutoff = 2_500.0 if is_ssb else 5_000.0
+            self._chan_sos = _design_channel_lpf(sample_rate, chan_cutoff)
+            self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
+            self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
+            # Anti-alias decimation LPF
+            self._decim_sos, self._decim_zi = _design_decim_lpf(sample_rate, audio_rate)
 
     # ------------------------------------------------------------------
     # Main entry
@@ -526,6 +627,12 @@ class StreamingDemodulator:
         wbfm = bool(channel_bw) and channel_bw >= _WBFM_BW_THRESHOLD
         self._ensure_fm_state(sample_rate, audio_rate, wbfm)
 
+        # Channel selectivity LPF on raw IQ — rejects adjacent stations
+        # (e.g. 92.5 / 94.0 MHz when tuned to 93.0) BEFORE the discriminator.
+        # This is what was missing: at 2 MSPS the discriminator saw ±1 MHz
+        # of spectrum and turned strong adjacent carriers into noise.
+        iq = self._filter_iq_channel(iq)
+
         phase = np.angle(iq).astype(np.float64)
 
         # Build the differential phase array. If we have a carried last-phase
@@ -551,9 +658,8 @@ class StreamingDemodulator:
         )
         filtered = filtered.astype(np.float32)
 
-        # Decimate to audio rate
-        decim_factor = max(1, int(sample_rate / audio_rate))
-        audio = filtered[::decim_factor]
+        # Decimate to audio rate (anti-alias filtered)
+        audio = self._decimate_audio(filtered, sample_rate, audio_rate)
 
         # Gain
         audio = audio * sample_rate / (2.0 * np.pi * _expected_dev(wbfm))
@@ -572,8 +678,12 @@ class StreamingDemodulator:
     def _process_am(self, iq: np.ndarray, sample_rate: float,
                     audio_rate: float) -> np.ndarray:
         rebuild = self._mode != DemodMode.AM
-        self._ensure_lpf_state(sample_rate, audio_rate, rebuild)
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=DemodMode.AM)
         self._mode = DemodMode.AM
+
+        # Channel selectivity LPF on raw IQ — rejects adjacent stations
+        # (~5 kHz envelope bandwidth) before envelope detection.
+        iq = self._filter_iq_channel(iq)
 
         magnitude = np.abs(iq).astype(np.float32)
 
@@ -586,8 +696,8 @@ class StreamingDemodulator:
         # subtraction which caused a DC step at every chunk boundary.
         filtered, self._dc_zi = lfilter(self._dc_b, self._dc_a, filtered, zi=self._dc_zi)
 
-        decim_factor = max(1, int(sample_rate / audio_rate))
-        audio = filtered[::decim_factor]
+        # Anti-alias decimation
+        audio = self._decimate_audio(filtered, sample_rate, audio_rate)
         audio = audio * 3.0
         audio = np.clip(audio, -1.0, 1.0)
 
@@ -605,7 +715,7 @@ class StreamingDemodulator:
                      audio_rate: float, sideband: str) -> np.ndarray:
         wanted_mode = DemodMode.USB if sideband == "usb" else DemodMode.LSB
         rebuild = self._mode != wanted_mode
-        self._ensure_lpf_state(sample_rate, audio_rate, rebuild)
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=wanted_mode)
         self._mode = wanted_mode
 
         n = len(iq)
@@ -622,20 +732,23 @@ class StreamingDemodulator:
         real_part = np.real(iq_shifted).astype(np.float32)
         imag_part = np.imag(iq_shifted).astype(np.float32)
 
-        # Independent LPF states for the real and imag branches (the phasing
-        # method treats them as two separate signals; sharing one state would
-        # leave the imag branch's filter stuck at its initial condition).
-        filtered_real, self._lpf_zi = lfilter(
-            self._lpf_b, self._lpf_a, real_part, zi=self._lpf_zi
+        # Channel selectivity / sideband isolator LPF (~2.5 kHz) applied
+        # post-mixer to the real and imag branches. This is the proper SSB
+        # sideband filter (replaces the old one-pole alpha LPF which was far
+        # too wide and let the opposite sideband through). Uses _chan_zi /
+        # _chan_zi_imag carried state.
+        filtered_real, self._chan_zi = sosfilt(
+            self._chan_sos, real_part, zi=self._chan_zi
         )
-        filtered_imag, self._lpf_zi_imag = lfilter(
-            self._lpf_b, self._lpf_a, imag_part, zi=self._lpf_zi_imag
+        filtered_imag, self._chan_zi_imag = sosfilt(
+            self._chan_sos, imag_part, zi=self._chan_zi_imag
         )
 
         audio = filtered_real if sideband == "usb" else -filtered_imag
+        audio = audio.astype(np.float32)
 
-        decim_factor = max(1, int(sample_rate / audio_rate))
-        audio = audio[::decim_factor]
+        # Anti-alias decimation
+        audio = self._decimate_audio(audio, sample_rate, audio_rate)
         # Streaming DC blocker (carries state) — replaces per-chunk mean.
         audio, self._dc_zi = lfilter(self._dc_b, self._dc_a, audio, zi=self._dc_zi)
         audio = audio * 3.0

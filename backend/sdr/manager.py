@@ -37,6 +37,12 @@ _DEFAULT_SDR_SETTINGS = {
     "sample_rate": settings.RTL_TCP_SAMPLE_RATE,
     "gain": settings.RTL_TCP_GAIN,
     "freq_correction_ppm": settings.RTL_TCP_FREQ_CORRECTION_PPM,
+    # Recording settings (global — shared by all users)
+    "squelch_level": settings.SQUELCH_LEVEL,
+    "vad_silence_timeout": settings.VAD_SILENCE_TIMEOUT,
+    "max_recording_duration": settings.MAX_RECORDING_DURATION,
+    "min_recording_duration": 2,
+    "auto_record": True,
 }
 
 
@@ -72,11 +78,14 @@ class SDRManager:
         self._auto_start_time: Optional[float] = None
         self._manual_start_time: Optional[float] = None
         self._auto_silence_start: Optional[float] = None
-        self._auto_record = True
+        self._auto_record = persisted["auto_record"]
 
         self._audio_buffer: list[np.ndarray] = []
         self._signal_level = -120.0
-        self._squelch_level = settings.SQUELCH_LEVEL
+        self._squelch_level = persisted["squelch_level"]
+        self._vad_silence_timeout = persisted["vad_silence_timeout"]
+        self._max_recording_duration = persisted["max_recording_duration"]
+        self._min_recording_duration = persisted["min_recording_duration"]
         self._last_recording_path: Optional[str] = None
         self._new_recordings: list[dict] = []
         self._callbacks: list = []
@@ -162,6 +171,17 @@ class SDRManager:
                     data["gain"] = int(saved["gain"])
                 if isinstance(saved.get("freq_correction_ppm"), (int, str)):
                     data["freq_correction_ppm"] = int(saved["freq_correction_ppm"])
+                # Recording settings (global)
+                if isinstance(saved.get("squelch_level"), (int, float, str)):
+                    data["squelch_level"] = float(saved["squelch_level"])
+                if isinstance(saved.get("vad_silence_timeout"), (int, str)):
+                    data["vad_silence_timeout"] = int(saved["vad_silence_timeout"])
+                if isinstance(saved.get("max_recording_duration"), (int, str)):
+                    data["max_recording_duration"] = int(saved["max_recording_duration"])
+                if isinstance(saved.get("min_recording_duration"), (int, str)):
+                    data["min_recording_duration"] = int(saved["min_recording_duration"])
+                if isinstance(saved.get("auto_record"), bool):
+                    data["auto_record"] = bool(saved["auto_record"])
         except Exception as e:
             logger.warning(f"Failed to load SDR settings file, using defaults: {e}")
         return data
@@ -177,6 +197,12 @@ class SDRManager:
                 "sample_rate": self.client._sample_rate,
                 "gain": self.client._gain,
                 "freq_correction_ppm": self.client._ppm,
+                # Recording settings (global)
+                "squelch_level": self._squelch_level,
+                "vad_silence_timeout": self._vad_silence_timeout,
+                "max_recording_duration": self._max_recording_duration,
+                "min_recording_duration": self._min_recording_duration,
+                "auto_record": self._auto_record,
             }
             with open(SDR_SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
@@ -254,6 +280,45 @@ class SDRManager:
 
     def set_squelch(self, level_db: float):
         self._squelch_level = level_db
+        self._save_persisted_settings()
+
+    def set_recording_config(
+        self,
+        auto_record: Optional[bool] = None,
+        squelch_level: Optional[float] = None,
+        vad_silence_timeout: Optional[int] = None,
+        max_recording_duration: Optional[int] = None,
+        min_recording_duration: Optional[int] = None,
+    ) -> dict:
+        """Update global recording config and persist to disk (shared by all users)."""
+        if auto_record is not None:
+            self._auto_record = bool(auto_record)
+        if squelch_level is not None:
+            self._squelch_level = float(squelch_level)
+        if vad_silence_timeout is not None:
+            if vad_silence_timeout < 1:
+                raise ValueError("vad_silence_timeout must be >= 1 second")
+            self._vad_silence_timeout = int(vad_silence_timeout)
+        if max_recording_duration is not None:
+            if max_recording_duration < 1:
+                raise ValueError("max_recording_duration must be >= 1 second")
+            self._max_recording_duration = int(max_recording_duration)
+        if min_recording_duration is not None:
+            if min_recording_duration < 0:
+                raise ValueError("min_recording_duration must be >= 0 seconds")
+            self._min_recording_duration = int(min_recording_duration)
+        self._save_persisted_settings()
+        return self.get_recording_config()
+
+    def get_recording_config(self) -> dict:
+        """Return current global recording config."""
+        return {
+            "auto_record": self._auto_record,
+            "squelch_level": self._squelch_level,
+            "vad_silence_timeout": self._vad_silence_timeout,
+            "max_recording_duration": self._max_recording_duration,
+            "min_recording_duration": self._min_recording_duration,
+        }
 
     def set_fft_bins(self, bins: int):
         valid_bins = [256, 512, 1024, 2048, 4096, 8192]
@@ -382,8 +447,8 @@ class SDRManager:
                             self._manual_buffer.append(audio)
                         if self._manual_start_time:
                             elapsed = time.time() - self._manual_start_time
-                            if elapsed > settings.MAX_RECORDING_DURATION:
-                                logger.info("Manual recording hit MAX_RECORDING_DURATION, finishing")
+                            if elapsed > self._max_recording_duration:
+                                logger.info(f"Manual recording hit max duration ({self._max_recording_duration}s), finishing")
                                 await self._finish_manual_recording()
 
                     # === TRACK 2: Auto recording (independent) ===
@@ -407,12 +472,12 @@ class SDRManager:
                                 self._auto_silence_start = time.time()
                                 if len(audio) > 0:
                                     self._auto_buffer.append(audio)
-                            elif time.time() - self._auto_silence_start > settings.VAD_SILENCE_TIMEOUT:
+                            elif time.time() - self._auto_silence_start > self._vad_silence_timeout:
                                 await self._finish_auto_recording()
 
                         if self._auto_recording and self._auto_start_time:
                             elapsed = time.time() - self._auto_start_time
-                            if elapsed > settings.MAX_RECORDING_DURATION:
+                            if elapsed > self._max_recording_duration:
                                 await self._finish_auto_recording()
 
                 except Exception as inner_e:
@@ -489,8 +554,8 @@ class SDRManager:
         audio_data = np.concatenate(self._auto_buffer)
         duration = len(audio_data) / self.audio_rate
 
-        if duration < settings.VAD_SILENCE_TIMEOUT:
-            logger.info(f"Auto recording too short ({duration:.1f}s), discarding")
+        if duration < self._min_recording_duration:
+            logger.info(f"Auto recording too short ({duration:.1f}s < min {self._min_recording_duration}s), discarding")
             self._auto_recording = False
             self._auto_buffer = []
             self._auto_start_time = None

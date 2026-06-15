@@ -62,6 +62,15 @@ class ConnectionRequest(BaseModel):
     port: int = 1234
 
 
+class RecordingConfigRequest(BaseModel):
+    """Global recording config (shared by all users)."""
+    auto_record: Optional[bool] = None
+    squelch_level: Optional[float] = None
+    vad_silence_timeout: Optional[int] = None  # seconds
+    max_recording_duration: Optional[int] = None  # seconds
+    min_recording_duration: Optional[int] = None  # seconds
+
+
 # === Endpoints ===
 
 @router.get("/status")
@@ -200,6 +209,30 @@ async def set_freq_correction(
     """Set frequency correction in PPM (parts per million)."""
     await sdr_manager.set_freq_correction(req.ppm)
     return {"ppm": req.ppm}
+
+
+@router.get("/recording-config")
+async def get_recording_config(current_user: User = Depends(get_current_user)):
+    """Get global recording config (shared by all users, persisted across restarts)."""
+    return sdr_manager.get_recording_config()
+
+
+@router.post("/recording-config")
+async def set_recording_config(
+    req: RecordingConfigRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Update global recording config (persisted across restarts)."""
+    try:
+        return sdr_manager.set_recording_config(
+            auto_record=req.auto_record,
+            squelch_level=req.squelch_level,
+            vad_silence_timeout=req.vad_silence_timeout,
+            max_recording_duration=req.max_recording_duration,
+            min_recording_duration=req.min_recording_duration,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/stream/start")

@@ -111,6 +111,12 @@ const API = {
         async setSquelch(level) {
             return API.request('POST', '/api/sdr/squelch', { level });
         },
+        async getRecordingConfig() {
+            return API.request('GET', '/api/sdr/recording-config');
+        },
+        async setRecordingConfig(data) {
+            return API.request('POST', '/api/sdr/recording-config', data);
+        },
         async setFFTSize(size) {
             return API.request('POST', '/api/sdr/fft-size', { fft_size: size });
         },

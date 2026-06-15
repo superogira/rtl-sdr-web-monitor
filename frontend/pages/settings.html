@@ -432,6 +432,7 @@
             this.loadSDRSettings();
             this.loadDisplaySettings();
             this.loadSTTSettings();
+            this.loadRecordingSettings();
             this.renderKeywords();
             this.refreshStatus();
             this.loadUsers();
@@ -593,10 +594,50 @@
             }
         },
 
-        async saveRecording() {
+        async loadRecordingSettings() {
             try {
-                await API.sdr.setSquelch(parseFloat(document.getElementById('rec-squelch').value));
-                alert('✅ บันทึกสำเร็จ!');
+                const cfg = await API.sdr.getRecordingConfig();
+                const elAuto = document.getElementById('rec-auto');
+                const elSquelch = document.getElementById('rec-squelch');
+                const elSilence = document.getElementById('rec-silence');
+                const elMin = document.getElementById('rec-min');
+                const elMax = document.getElementById('rec-max');
+                if (elAuto && typeof cfg.auto_record === 'boolean') {
+                    elAuto.value = cfg.auto_record ? 'true' : 'false';
+                }
+                if (elSquelch && typeof cfg.squelch_level === 'number') {
+                    elSquelch.value = cfg.squelch_level;
+                }
+                if (elSilence && cfg.vad_silence_timeout !== undefined) {
+                    elSilence.value = cfg.vad_silence_timeout;
+                }
+                if (elMin && cfg.min_recording_duration !== undefined) {
+                    elMin.value = cfg.min_recording_duration;
+                }
+                if (elMax && cfg.max_recording_duration !== undefined) {
+                    elMax.value = cfg.max_recording_duration;
+                }
+            } catch (e) {
+                console.warn('Could not load recording settings:', e);
+            }
+        },
+
+        async saveRecording() {
+            const auto_record = document.getElementById('rec-auto').value === 'true';
+            const squelch_level = parseFloat(document.getElementById('rec-squelch').value);
+            const vad_silence_timeout = parseInt(document.getElementById('rec-silence').value);
+            const min_recording_duration = parseInt(document.getElementById('rec-min').value);
+            const max_recording_duration = parseInt(document.getElementById('rec-max').value);
+            try {
+                const result = await API.sdr.setRecordingConfig({
+                    auto_record,
+                    squelch_level,
+                    vad_silence_timeout,
+                    min_recording_duration,
+                    max_recording_duration,
+                });
+                alert('✅ บันทึกการตั้งค่าการอัดเสียงสำเร็จ!\n' +
+                      '(ค่านี้ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน และจะถูกเก็บไว้แม้ restart server)');
             } catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
         },
 
