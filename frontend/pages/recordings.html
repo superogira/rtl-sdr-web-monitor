@@ -1,4 +1,4 @@
-<![CDATA[<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
@@ -12,13 +12,15 @@
             margin-bottom:1rem; padding:8px;
             background:rgba(255,255,255,0.03); border-radius:8px;
         }
-        .rec-filter-bar select, .rec-filter-bar button {
+        .rec-filter-bar select, .rec-filter-bar button, .rec-filter-bar input {
             padding:6px 12px; border-radius:6px;
             background:var(--bg-card); color:var(--text-primary);
-            border:1px solid var(--border); cursor:pointer; font-size:0.85rem;
+            border:1px solid var(--border); font-size:0.85rem;
         }
+        .rec-filter-bar button { cursor:pointer; }
         .rec-filter-bar button:hover { background:var(--bg-hover); }
         .rec-filter-bar .spacer { flex:1; }
+        .rec-search-input { min-width:200px; }
         .rec-actions { display:flex; gap:4px; }
         .rec-del-btn {
             background:rgba(239,68,68,0.15); color:#fca5a5;
@@ -33,12 +35,18 @@
         }
         .rec-stt-btn:hover { background:rgba(34,211,238,0.3); }
         .rec-stt-btn:disabled { opacity:0.5; cursor:wait; }
-        .rec-load-more {
-            display:block; margin:1rem auto; padding:8px 24px;
-            background:var(--bg-card); color:var(--text-primary);
-            border:1px solid var(--border); border-radius:6px; cursor:pointer;
+        .rec-pagination {
+            display:flex; gap:8px; align-items:center; justify-content:center;
+            margin:1rem 0; flex-wrap:wrap;
         }
-        .rec-load-more:hover { background:var(--bg-hover); }
+        .rec-pagination button {
+            padding:6px 12px; border-radius:6px;
+            background:var(--bg-card); color:var(--text-primary);
+            border:1px solid var(--border); cursor:pointer; font-size:0.85rem;
+        }
+        .rec-pagination button:hover:not(:disabled) { background:var(--bg-hover); }
+        .rec-pagination button:disabled { opacity:0.4; cursor:not-allowed; }
+        .rec-pagination .page-info { font-size:0.85rem; color:var(--text-muted); }
     </style>
 </head>
 <body>
@@ -57,10 +65,24 @@
 
             <div class="rec-filter-bar">
                 <label style="font-size:0.85rem;">ประเภท:</label>
-                <select id="filter-source" onchange="resetAndLoad()">
+                <select id="filter-source" onchange="onSourceChange()">
                     <option value="">ทั้งหมด</option>
                     <option value="auto">🔄 อัตโนมัติ</option>
                     <option value="manual">✋ บันทึกเอง</option>
+                </select>
+                <label style="font-size:0.85rem;">ความถี่:</label>
+                <select id="filter-frequency" onchange="resetAndLoad()">
+                    <option value="">ทุกความถี่</option>
+                </select>
+                <input type="text" id="search-input" class="rec-search-input"
+                       placeholder="🔍 ค้นหา (ข้อความถอดเสียง, ความถี่ MHz, โหมด, ชื่อไฟล์)"
+                       oninput="onSearchInput(this.value)" />
+                <label style="font-size:0.85rem;">ต่อหน้า:</label>
+                <select id="page-size" onchange="onPageSizeChange(this.value)">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
                 </select>
                 <span class="spacer"></span>
                 <span id="rec-count" style="font-size:0.85rem; color:var(--text-muted);">--</span>
@@ -70,21 +92,35 @@
                 กำลังโหลด...
             </div>
 
-            <button id="load-more-btn" class="rec-load-more" style="display:none;" onclick="loadMore()">
-                ⬇ โหลดเพิ่มเติม
-            </button>
+            <div id="pagination" class="rec-pagination" style="display:none;">
+                <button id="page-first" onclick="goToPage(1)" title="หน้าแรก">«</button>
+                <button id="page-prev" onclick="changePage(-1)" title="ก่อนหน้า">‹ ก่อนหน้า</button>
+                <span class="page-info" id="page-info">--</span>
+                <button id="page-next" onclick="changePage(1)" title="ถัดไป">ถัดไป ›</button>
+                <button id="page-last" onclick="goToLastPage()" title="หน้าสุดท้าย">»</button>
+            </div>
         </div>
     </div>
-    <script src="/js/api.js?v=6"></script>
+    <script src="/js/api.js?v=7"></script>
     <script src="/js/auth.js?v=4"></script>
+    <script src="/js/websocket.js?v=5"></script>
     <script>
         if (!Auth.isAuthenticated()) window.location.href = '/login';
 
-        const PAGE_SIZE = 50;
-        let _offset = 0;
-        let _total = 0;
-        let _allItems = [];
+        const REFRESH_INTERVAL_MS = 10000; // auto-refresh ทุก 10 วินาที
+        const SEARCH_DEBOUNCE_MS = 400;    // debounce การค้นหา
+        let _page = 1;            // หน้าปัจจุบัน (1-based)
+        let _pageSize = 50;       // จำนวนรายการต่อหน้า
+        let _total = 0;           // จำนวนรายการทั้งหมดที่ตรง filter/search
+        let _allItems = [];       // รายการในหน้าปัจจุบัน
+        let _recCache = new Map(); // id -> rec (สำหรับ diff reconciliation)
+        let _refreshTimer = null;
+        let _searchTimer = null;
+        let _loading = false;
 
+        // === HTML builders ===
+
+        // สร้าง HTML ของแถวรายการ (ใช้ทั้งตอนสร้างใหม่และตอนอัพเดต field)
         function recHTML(rec) {
             const userTz = getUserTimezone();
             const time = rec.recorded_at
@@ -100,34 +136,32 @@
             const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
             const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
             const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
-            const hasTranscript = !!(rec.transcript || rec.transcription);
-            const providerBadge = rec.stt_provider
-                ? `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px;">[${rec.stt_provider}]</span>`
-                : '';
-            const errorBadge = rec.stt_error
-                ? `<div style="font-size:0.7rem; color:var(--accent-red); margin-top:4px;" title="${(rec.stt_error||'').replace(/"/g,'"')}">⚠️ ${rec.stt_error.length > 80 ? rec.stt_error.slice(0,80) + '…' : rec.stt_error}</div>`
-                : '';
-            const transcriptHtml = hasTranscript
-                ? `<div>${(rec.transcript || rec.transcription)}</div>${providerBadge}${errorBadge}`
-                : (rec.stt_error ? errorBadge : '<span class="text-muted">ยังไม่ถอดเสียง</span>');
-            const audioUrl = rec.audio_file_name
-                ? '/recordings/' + rec.audio_file_name
-                : (rec.url || '');
+            const metaHtml = `<span class="rec-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>`;
+            const btnHtml = sttBtnHTML(rec);
             const source = rec.source || 'auto';
             const badgeClass = source === 'manual' ? 'manual' : 'auto';
             const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
             const badgeTitle = source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ';
+            const transcriptHtml = transcriptHTML(rec);
+            const hasAudio = rec.has_audio != null ? rec.has_audio : (!!(rec.audio_file_name || rec.url) && !rec.audio_deleted);
+            const audioUrl = hasAudio
+                ? (rec.audio_file_name ? '/recordings/' + rec.audio_file_name : (rec.url || ''))
+                : '';
+            const audioDeletedBadge = rec.audio_deleted
+                ? `<span class="rec-audio-deleted-badge" title="ไฟล์เสียงถูกลบโดยนโยบายการเก็บรักษา" style="font-size:0.7rem; color:var(--text-muted); background:rgba(156,163,175,0.15); border:1px solid var(--border); padding:2px 8px; border-radius:4px; margin-left:4px;">🔇 ลบไฟล์แล้ว</span>`
+                : '';
 
             return `
                 <div class="feed-item" id="rec-${rec.id}" style="margin-bottom: 8px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
                         <div style="display:flex; gap:8px; align-items:center;">
                             <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
-                            <span style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
+                            <span class="rec-time" style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
+                            ${audioDeletedBadge}
                         </div>
                         <div class="rec-actions">
-                            <span style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>
-                            <button class="rec-stt-btn" id="stt-btn-${rec.id}" onclick="transcribeRec('${rec.id}')" ${hasTranscript ? 'disabled title="ถอดเสียงแล้ว"' : ''}>${hasTranscript ? '✓ ถอดแล้ว' : '📝 ถอดเสียง'}</button>
+                            ${metaHtml}
+                            ${btnHtml}
                             <button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ลบ</button>
                         </div>
                     </div>
@@ -139,50 +173,264 @@
             `;
         }
 
-        async function loadRecordings(append = false) {
+        // สร้าง HTML ของส่วน transcript (แยกไว้เพื่อ re-render ตอน diff)
+        function transcriptHTML(rec) {
+            const hasTranscript = !!(rec.transcript || rec.transcription);
+            const providerBadge = rec.stt_provider
+                ? `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px;">[${rec.stt_provider}]</span>`
+                : '';
+            const errorBadge = rec.stt_error
+                ? `<div style="font-size:0.7rem; color:var(--accent-red); margin-top:4px;" title="${(rec.stt_error||'').replace(/"/g,'"')}">⚠️ ${rec.stt_error.length > 80 ? rec.stt_error.slice(0,80) + '…' : rec.stt_error}</div>`
+                : '';
+            if (hasTranscript) {
+                return `<div>${(rec.transcript || rec.transcription)}</div>${providerBadge}${errorBadge}`;
+            }
+            return rec.stt_error ? errorBadge : '<span class="text-muted">ยังไม่ถอดเสียง</span>';
+        }
+
+        // สร้าง HTML ของปุ่มถอดเสียง (แยกไว้เพื่อ re-render ตอน diff)
+        function sttBtnHTML(rec) {
+            const hasTranscript = !!(rec.transcript || rec.transcription);
+            const hasAudio = rec.has_audio != null ? rec.has_audio : (!!(rec.audio_file_name || rec.url) && !rec.audio_deleted);
+            // ถ้าไม่มีไฟล์เสียง → ซ่อนปุ่ม (ไม่สามารถถอดได้)
+            if (!hasAudio) return '';
+            return `<button class="rec-stt-btn" id="stt-btn-${rec.id}" onclick="transcribeRec('${rec.id}')" ${hasTranscript ? 'disabled title="ถอดเสียงแล้ว"' : ''}>${hasTranscript ? '✓ ถอดแล้ว' : '📝 ถอดเสียง'}</button>`;
+        }
+
+        // === Keyed reconciliation (diff + patch DOM โดยไม่ rebuild <audio>) ===
+
+        // อัพเดต field ที่เปลี่ยนในแถวที่มีอยู่แล้ว โดยไม่ทำลาย <audio> element
+        function updateRowFields(rowEl, oldRec, newRec) {
+            // เปรียบเทียบ field ที่อาจเปลี่ยนและอัพเดตเฉพาะส่วนนั้น
+            const audioDeletedChanged = (oldRec.audio_deleted ?? false) !== (newRec.audio_deleted ?? false);
+            const fields = ['transcript','transcription','stt_provider','stt_error'];
+            const sttChanged = audioDeletedChanged || fields.some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
+            if (sttChanged) {
+                const trEl = rowEl.querySelector('.transcript');
+                if (trEl) trEl.innerHTML = transcriptHTML(newRec);
+                const btnContainer = rowEl.querySelector('.rec-actions');
+                const oldBtn = btnContainer && btnContainer.querySelector('.rec-stt-btn');
+                if (oldBtn && btnContainer) {
+                    oldBtn.outerHTML = sttBtnHTML(newRec);
+                }
+            }
+            // signal/duration/meta
+            const metaChanged = ['signal_strength','signal_level','duration','frequency_mhz','frequency','mode']
+                .some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
+            if (metaChanged) {
+                const metaEl = rowEl.querySelector('.rec-meta');
+                if (metaEl) {
+                    const freq = newRec.frequency_mhz
+                        ? newRec.frequency_mhz.toFixed(4) + ' MHz'
+                        : (newRec.frequency ? (newRec.frequency / 1e6).toFixed(4) + ' MHz' : '');
+                    const mode = newRec.mode || '';
+                    const dur = newRec.duration ? newRec.duration.toFixed(1) + 's' : '';
+                    const sigVal = newRec.signal_strength != null ? newRec.signal_strength : newRec.signal_level;
+                    const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
+                    metaEl.textContent = `${freq} ${mode} | ${dur} | ${sig}`;
+                }
+            }
+        }
+
+        // Reconcile: ปรับ DOM ให้ตรงกับ items โดย preserve <audio> ที่กำลังเล่น
+        function applyRecordings(items) {
+            const container = document.getElementById('recordings-list');
+            const newIds = new Set(items.map(r => r.id));
+            const newCache = new Map(items.map(r => [r.id, r]));
+
+            // ลบแถวที่ไม่มีใน list ใหม่
+            const existingRows = Array.from(container.querySelectorAll('.feed-item'));
+            for (const row of existingRows) {
+                const id = row.id.replace('rec-', '');
+                if (!newIds.has(id)) {
+                    row.remove();
+                }
+            }
+
+            // จัดเรียง/เพิ่ม/อัพเดต ตามลำดับของ items
+            let refNode = container.firstChild; // cursor สำหรับ insertBefore
+            for (const rec of items) {
+                const expectedId = `rec-${rec.id}`;
+                // หาแถวที่มีอยู่แล้ว
+                let rowEl = container.querySelector(`#rec-${CSS.escape(rec.id)}`);
+
+                if (rowEl) {
+                    // มีอยู่แล้ว → อัพเดต field ถ้าเปลี่ยน, แล้วย้ายตำแหน่งถ้าจำเป็น
+                    const oldRec = _recCache.get(rec.id);
+                    if (oldRec) updateRowFields(rowEl, oldRec, rec);
+                    if (rowEl !== refNode) {
+                        container.insertBefore(rowEl, refNode);
+                    } else {
+                        refNode = refNode.nextSibling;
+                    }
+                } else {
+                    // แถวใหม่ → สร้างแล้ว insert ก่อน refNode
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = recHTML(rec).trim();
+                    const newRow = wrapper.firstChild;
+                    container.insertBefore(newRow, refNode);
+                    // refNode ยังชี้ที่เดิม (แถวใหม่แทรกก่อนหน้า)
+                }
+            }
+
+            // ลบข้อความ placeholder ถ้ามี (เช่น "ยังไม่มีรายการบันทึก")
+            if (items.length > 0) {
+                const placeholder = container.querySelector('p.text-muted');
+                if (placeholder && !placeholder.closest('.feed-item')) {
+                    placeholder.remove();
+                }
+            }
+
+            _recCache = newCache;
+            _allItems = items;
+        }
+
+        // === Frequency dropdown ===
+
+        async function loadFrequencies() {
+            const select = document.getElementById('filter-frequency');
+            const currentVal = select.value; // preserve selection
             const source = document.getElementById('filter-source').value;
             try {
-                const data = await API.recordings.list({
-                    limit: PAGE_SIZE,
-                    offset: _offset,
+                const data = await API.recordings.listFrequencies({
                     source: source || undefined,
+                });
+                const items = data.items || [];
+                // rebuild options แบบ preserve ค่าที่เลือกไว้ (ถ้ายังมีอยู่)
+                select.innerHTML = '<option value="">ทุกความถี่</option>';
+                for (const item of items) {
+                    const opt = document.createElement('option');
+                    opt.value = item.frequency_mhz;
+                    opt.textContent = `${item.frequency_mhz.toFixed(4)} MHz (${item.count})`;
+                    select.appendChild(opt);
+                }
+                // ถ้าค่าเดิมยังอยู่ใน list ให้เลือกคืน
+                if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+                    select.value = currentVal;
+                } else if (currentVal) {
+                    // ค่าที่เลือกไว้หายไปจาก list → reset แล้ว reload
+                    select.value = '';
+                }
+            } catch (e) {
+                console.warn('Failed to load frequencies:', e);
+            }
+        }
+
+        async function onSourceChange() {
+            // เมื่อเปลี่ยน source ให้ re-fetch frequency options (sync) แล้วค่อย load
+            await loadFrequencies();
+            resetAndLoad();
+        }
+
+        // === Data loading ===
+
+        async function loadRecordings() {
+            if (_loading) return; // กัน fetch ซ้อนทับ
+            _loading = true;
+            const source = document.getElementById('filter-source').value;
+            const search = document.getElementById('search-input').value.trim();
+            const freqVal = document.getElementById('filter-frequency').value;
+            const frequencyMhz = freqVal ? parseFloat(freqVal) : null;
+            const offset = (_page - 1) * _pageSize;
+            try {
+                const data = await API.recordings.list({
+                    limit: _pageSize,
+                    offset: offset,
+                    source: source || undefined,
+                    search: search || undefined,
+                    frequency_mhz: isNaN(frequencyMhz) ? undefined : frequencyMhz,
                 });
                 const items = data.items || [];
                 _total = data.total || 0;
                 const container = document.getElementById('recordings-list');
 
-                if (!append) {
-                    _allItems = items;
-                    if (!items.length) {
-                        container.innerHTML = '<p class="text-muted">ยังไม่มีรายการบันทึก</p>';
+                if (!items.length) {
+                    container.innerHTML = '<p class="text-muted">ยังไม่มีรายการบันทึก</p>';
+                    _recCache.clear();
+                    _allItems = [];
+                } else {
+                    // ถ้าเป็นการโหลดหน้า/หน้าที่เปลี่ยน → rebuild (เพราะเป็นคนละเซ็ตรายการ)
+                    // ถ้าเป็น refresh หน้าเดิม → reconcile (preserve audio)
+                    const sameSet = _allItems.length > 0 && items.every((it, i) => _allItems[i] && _allItems[i].id === it.id);
+                    if (sameSet) {
+                        applyRecordings(items);
                     } else {
                         container.innerHTML = items.map(recHTML).join('');
+                        _recCache = new Map(items.map(r => [r.id, r]));
+                        _allItems = items;
                     }
-                } else {
-                    _allItems = _allItems.concat(items);
-                    container.insertAdjacentHTML('beforeend', items.map(recHTML).join(''));
                 }
 
-                // Update count + load-more visibility
-                document.getElementById('rec-count').textContent =
-                    `${_allItems.length} / ${_total} รายการ`;
-                const loadMoreBtn = document.getElementById('load-more-btn');
-                loadMoreBtn.style.display = (_allItems.length < _total) ? '' : 'none';
+                updateCountAndPagination();
             } catch (err) {
                 console.error('Failed to load recordings:', err);
-                document.getElementById('recordings-list').innerHTML =
-                    '<p class="text-muted">เกิดข้อผิดพลาดในการโหลด: ' + (err.detail || err.message || err) + '</p>';
+                // แสดง error เฉพาะตอนที่ยังไม่มีข้อมูล (silent refresh ไม่โชว์)
+                if (_allItems.length === 0) {
+                    document.getElementById('recordings-list').innerHTML =
+                        '<p class="text-muted">เกิดข้อผิดพลาดในการโหลด: ' + (err.detail || err.message || err) + '</p>';
+                }
+            } finally {
+                _loading = false;
             }
         }
 
-        function resetAndLoad() {
-            _offset = 0;
-            loadRecordings(false);
+        function updateCountAndPagination() {
+            document.getElementById('rec-count').textContent =
+                `${_allItems.length} / ${_total} รายการ`;
+            const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
+            const pag = document.getElementById('pagination');
+            if (_total === 0) {
+                pag.style.display = 'none';
+                return;
+            }
+            pag.style.display = '';
+            document.getElementById('page-info').textContent = `หน้า ${_page} / ${totalPages}`;
+            document.getElementById('page-prev').disabled = (_page <= 1);
+            document.getElementById('page-first').disabled = (_page <= 1);
+            document.getElementById('page-next').disabled = (_page >= totalPages);
+            document.getElementById('page-last').disabled = (_page >= totalPages);
         }
 
-        function loadMore() {
-            _offset += PAGE_SIZE;
-            loadRecordings(true);
+        // === Controls ===
+
+        function resetAndLoad() {
+            _page = 1;
+            loadRecordings();
+        }
+
+        function changePage(delta) {
+            const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
+            const newPage = Math.min(Math.max(1, _page + delta), totalPages);
+            if (newPage === _page) return;
+            _page = newPage;
+            loadRecordings();
+        }
+
+        function goToPage(p) {
+            const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
+            _page = Math.min(Math.max(1, p), totalPages);
+            loadRecordings();
+        }
+
+        function goToLastPage() {
+            const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
+            goToPage(totalPages);
+        }
+
+        function onPageSizeChange(val) {
+            _pageSize = parseInt(val) || 50;
+            // พยายามรักษาตำแหน่งหน้าใกล้เคียงเดิม
+            const firstItemIdx = (_page - 1) * _pageSize;
+            _page = Math.floor(firstItemIdx / _pageSize) + 1;
+            _page = Math.max(1, _page);
+            loadRecordings();
+        }
+
+        function onSearchInput(val) {
+            if (_searchTimer) clearTimeout(_searchTimer);
+            _searchTimer = setTimeout(() => {
+                resetAndLoad();
+            }, SEARCH_DEBOUNCE_MS);
         }
 
         async function transcribeRec(id) {
@@ -195,6 +443,13 @@
                 const text = result.transcript || '(ไม่สามารถถอดเสียงได้)';
                 if (transcriptEl) transcriptEl.textContent = text;
                 if (btn) { btn.textContent = '✓ ถอดแล้ว'; btn.disabled = true; }
+                // อัพเดต cache เพื่อให้ reconciliation ไม่เขียนทับ
+                const cached = _recCache.get(id);
+                if (cached) {
+                    cached.transcript = text;
+                    cached.stt_provider = result.provider || cached.stt_provider;
+                    cached.stt_error = result.error || cached.stt_error;
+                }
             } catch (err) {
                 if (transcriptEl) transcriptEl.innerHTML = '<span style="color:var(--accent-red);">❌ ถอดเสียงไม่สำเร็จ: ' + (err.detail || err.message || err) + '</span>';
                 if (btn) { btn.disabled = false; btn.textContent = '📝 ถอดเสียง'; }
@@ -206,19 +461,122 @@
             if (!confirm('ต้องการลบรายการนี้ใช่ไหม?')) return;
             try {
                 await API.recordings.delete(id);
-                const el = document.getElementById('rec-' + id);
-                if (el) el.remove();
-                _total--;
-                _allItems = _allItems.filter(r => r.id !== id);
-                document.getElementById('rec-count').textContent =
-                    `${_allItems.length} / ${_total} รายการ`;
+                _total = Math.max(0, _total - 1);
+                // โหลดหน้าใหม่เพื่อเติมรายการ (pagination ต้องการ item แทน)
+                loadRecordings();
             } catch (err) {
                 alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
             }
         }
 
+        // === Auto-refresh logic ===
+
+        // ตรวจสอบว่าสภาพแวดล้อมปัจจุบัน "ปลอดภัย" ที่จะ auto-refresh หรือไม่
+        // - ต้องอยู่หน้า 1 (เพื่อไม่ให้กระทบสถานะผู้ใช้ที่เลื่อนไปดูหน้าอื่น)
+        // - ไม่กำลังค้นหา/กรอง (filter ปกติโอเค แต่ search จะกวนผลลัพธ์)
+        // - ไม่กำลังโหลดอยู่แล้ว
+        const FREQ_TOLERANCE_MHZ = 0.005; // ±5 kHz (ต้องตรงกับ backend FREQ_TOLERANCE_KHZ)
+
+        function canAutoRefresh() {
+            if (_loading) return false;
+            if (_page !== 1) return false;
+            const search = document.getElementById('search-input').value.trim();
+            if (search) return false;
+            const freq = document.getElementById('filter-frequency').value;
+            if (freq) return false;
+            return true;
+        }
+
+        // Silent refresh: โหลดใหม่ด้วย reconciliation เพื่อ preserve <audio>
+        function autoRefresh() {
+            if (!canAutoRefresh()) return;
+            loadRecordings();
+        }
+
+        function startAutoRefresh() {
+            stopAutoRefresh();
+            _refreshTimer = setInterval(autoRefresh, REFRESH_INTERVAL_MS);
+        }
+
+        function stopAutoRefresh() {
+            if (_refreshTimer) {
+                clearInterval(_refreshTimer);
+                _refreshTimer = null;
+            }
+        }
+
+        // หยุด polling เมื่อ tab ไม่ visible, resume เมื่อกลับมา
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopAutoRefresh();
+            } else {
+                autoRefresh();
+                startAutoRefresh();
+            }
+        });
+
+        // === Real-time via WebSocket ===
+        function setupWS() {
+            try {
+                WS.connect();
+                WS.on('new_recording', (rec) => {
+                    // ต้องอยู่หน้า 1, ไม่มี search, filter ต้องตรง
+                    if (!canAutoRefresh()) return;
+                    const filterVal = document.getElementById('filter-source').value;
+                    const recSource = rec.source || 'auto';
+                    if (filterVal && filterVal !== recSource) return;
+                    // ตรวจ frequency filter (ถ้าเลือกไว้) ด้วย tolerance ±5 kHz
+                    const freqFilter = document.getElementById('filter-frequency').value;
+                    if (freqFilter) {
+                        const recMhz = rec.frequency_mhz || (rec.frequency ? rec.frequency / 1e6 : null);
+                        if (recMhz == null || Math.abs(recMhz - parseFloat(freqFilter)) > FREQ_TOLERANCE_MHZ) {
+                            return; // ไม่ตรงความถี่ที่เลือก → ไม่ prepend
+                        }
+                    }
+
+                    // กัน duplicate
+                    if (_recCache.has(rec.id)) return;
+
+                    _total = (_total || 0) + 1;
+                    const container = document.getElementById('recordings-list');
+                    // ลบ placeholder "ยังไม่มีรายการบันทึก" ถ้ามี
+                    const placeholder = container.querySelector('p.text-muted');
+                    if (placeholder && !placeholder.closest('.feed-item')) placeholder.remove();
+
+                    // prepend แถวใหม่ด้านบน
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = recHTML(rec).trim();
+                    container.insertBefore(wrapper.firstChild, container.firstChild);
+
+                    _recCache.set(rec.id, rec);
+                    _allItems.unshift(rec);
+                    // ถ้าเกิน page size ให้ตัดท้าย
+                    if (_allItems.length > _pageSize) {
+                        const removed = _allItems.pop();
+                        if (removed) {
+                            const tailRow = document.getElementById(`rec-${removed.id}`);
+                            if (tailRow) tailRow.remove();
+                            _recCache.delete(removed.id);
+                        }
+                    }
+                    updateCountAndPagination();
+                });
+            } catch (e) {
+                console.warn('WS setup failed, relying on polling only:', e);
+            }
+        }
+
+        // === Bootstrap ===
+        loadFrequencies();  // โหลดรายการความถี่สำหรับ dropdown
         resetAndLoad();
+        startAutoRefresh();
+        setupWS();
+
+        // ทำความสะอาดตอนปล่อยหน้า
+        window.addEventListener('beforeunload', () => {
+            stopAutoRefresh();
+            try { WS.disconnect(); } catch (e) {}
+        });
     </script>
 </body>
 </html>
-]]>

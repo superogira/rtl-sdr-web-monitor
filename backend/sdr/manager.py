@@ -23,7 +23,7 @@ from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
 from backend.services.app_settings import get_setting
 from backend.services.stt import transcribe, _get_stt_config
-from sqlalchemy import select
+from sqlalchemy import select, func, delete
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ _DEFAULT_SDR_SETTINGS = {
     "max_recording_duration": settings.MAX_RECORDING_DURATION,
     "min_recording_duration": 2,
     "auto_record": True,
+    # Retention policy (0 = unlimited)
+    "retention_max_count": 0,
+    "retention_max_total_duration_sec": 0,
+    "retention_max_age_days": 0,
+    "retention_action": "keep_transcript",  # keep_transcript | delete_record
 }
 
 
@@ -86,6 +91,10 @@ class SDRManager:
         self._vad_silence_timeout = persisted["vad_silence_timeout"]
         self._max_recording_duration = persisted["max_recording_duration"]
         self._min_recording_duration = persisted["min_recording_duration"]
+        self._retention_max_count = persisted["retention_max_count"]
+        self._retention_max_total_duration_sec = persisted["retention_max_total_duration_sec"]
+        self._retention_max_age_days = persisted["retention_max_age_days"]
+        self._retention_action = persisted["retention_action"]
         self._last_recording_path: Optional[str] = None
         self._new_recordings: list[dict] = []
         self._callbacks: list = []
@@ -182,6 +191,15 @@ class SDRManager:
                     data["min_recording_duration"] = int(saved["min_recording_duration"])
                 if isinstance(saved.get("auto_record"), bool):
                     data["auto_record"] = bool(saved["auto_record"])
+                # Retention policy
+                if isinstance(saved.get("retention_max_count"), (int, str)):
+                    data["retention_max_count"] = int(saved["retention_max_count"])
+                if isinstance(saved.get("retention_max_total_duration_sec"), (int, str)):
+                    data["retention_max_total_duration_sec"] = int(saved["retention_max_total_duration_sec"])
+                if isinstance(saved.get("retention_max_age_days"), (int, str)):
+                    data["retention_max_age_days"] = int(saved["retention_max_age_days"])
+                if isinstance(saved.get("retention_action"), str) and saved["retention_action"] in ("keep_transcript", "delete_record"):
+                    data["retention_action"] = saved["retention_action"]
         except Exception as e:
             logger.warning(f"Failed to load SDR settings file, using defaults: {e}")
         return data
@@ -203,6 +221,10 @@ class SDRManager:
                 "max_recording_duration": self._max_recording_duration,
                 "min_recording_duration": self._min_recording_duration,
                 "auto_record": self._auto_record,
+                "retention_max_count": self._retention_max_count,
+                "retention_max_total_duration_sec": self._retention_max_total_duration_sec,
+                "retention_max_age_days": self._retention_max_age_days,
+                "retention_action": self._retention_action,
             }
             with open(SDR_SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
@@ -289,6 +311,10 @@ class SDRManager:
         vad_silence_timeout: Optional[int] = None,
         max_recording_duration: Optional[int] = None,
         min_recording_duration: Optional[int] = None,
+        retention_max_count: Optional[int] = None,
+        retention_max_total_duration_sec: Optional[int] = None,
+        retention_max_age_days: Optional[int] = None,
+        retention_action: Optional[str] = None,
     ) -> dict:
         """Update global recording config and persist to disk (shared by all users)."""
         if auto_record is not None:
@@ -307,7 +333,25 @@ class SDRManager:
             if min_recording_duration < 0:
                 raise ValueError("min_recording_duration must be >= 0 seconds")
             self._min_recording_duration = int(min_recording_duration)
+        if retention_max_count is not None:
+            if retention_max_count < 0:
+                raise ValueError("retention_max_count must be >= 0")
+            self._retention_max_count = int(retention_max_count)
+        if retention_max_total_duration_sec is not None:
+            if retention_max_total_duration_sec < 0:
+                raise ValueError("retention_max_total_duration_sec must be >= 0")
+            self._retention_max_total_duration_sec = int(retention_max_total_duration_sec)
+        if retention_max_age_days is not None:
+            if retention_max_age_days < 0:
+                raise ValueError("retention_max_age_days must be >= 0")
+            self._retention_max_age_days = int(retention_max_age_days)
+        if retention_action is not None:
+            if retention_action not in ("keep_transcript", "delete_record"):
+                raise ValueError("retention_action must be 'keep_transcript' or 'delete_record'")
+            self._retention_action = retention_action
         self._save_persisted_settings()
+        # หลังเปลี่ยน config ให้ enforce ทันที (ผู้ใช้อาจลด limit)
+        asyncio.create_task(self._enforce_retention())
         return self.get_recording_config()
 
     def get_recording_config(self) -> dict:
@@ -318,6 +362,10 @@ class SDRManager:
             "vad_silence_timeout": self._vad_silence_timeout,
             "max_recording_duration": self._max_recording_duration,
             "min_recording_duration": self._min_recording_duration,
+            "retention_max_count": self._retention_max_count,
+            "retention_max_total_duration_sec": self._retention_max_total_duration_sec,
+            "retention_max_age_days": self._retention_max_age_days,
+            "retention_action": self._retention_action,
         }
 
     def set_fft_bins(self, bins: int):
@@ -658,6 +706,9 @@ class SDRManager:
             self._auto_start_time = None
             self._auto_silence_start = None
 
+        # === Enforce retention policy (fire-and-forget) ===
+        asyncio.create_task(self._enforce_retention())
+
         # Notify callbacks
         for cb in self._callbacks:
             try:
@@ -711,7 +762,82 @@ class SDRManager:
         except Exception as e:
             logger.warning(f"Auto-transcribe check failed: {e}")
 
-        return recording_info
+            # ------------------------------------------------------------------
+    # Retention policy enforcement
+    # ------------------------------------------------------------------
+    async def _enforce_retention(self) -> None:
+        """Enforce retention policy: delete old audio files / records as needed."""
+        max_count = self._retention_max_count
+        max_dur = self._retention_max_total_duration_sec
+        max_age = self._retention_max_age_days
+        action = self._retention_action
+
+        if max_count <= 0 and max_dur <= 0 and max_age <= 0:
+            return
+        if action not in ("keep_transcript", "delete_record"):
+            return
+
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Recording).order_by(Recording.recorded_at.asc())
+                )
+                all_recs = result.scalars().all()
+                if not all_recs:
+                    return
+
+                now = datetime.now(timezone.utc)
+                to_remove = []
+
+                if max_age > 0:
+                    from datetime import timedelta
+                    cutoff = now - timedelta(days=max_age)
+                    for rec in all_recs:
+                        if rec.recorded_at and rec.recorded_at < cutoff:
+                            if rec not in to_remove:
+                                to_remove.append(rec)
+
+                kept_ids = set()
+                count = 0
+                total_dur = 0.0
+                for rec in reversed(all_recs):
+                    new_count = count + 1
+                    new_dur = total_dur + (rec.duration or 0)
+                    over = (max_count > 0 and new_count > max_count) or (max_dur > 0 and new_dur > max_dur)
+                    if over:
+                        break
+                    count, total_dur = new_count, new_dur
+                    kept_ids.add(rec.id)
+
+                for rec in all_recs:
+                    if rec.id not in kept_ids and rec not in to_remove:
+                        to_remove.append(rec)
+
+                if not to_remove:
+                    return
+
+                logger.info(f"Retention: removing {len(to_remove)} recording(s) "
+                            f"(action={action}, max_count={max_count}, max_dur={max_dur}s, max_age={max_age}d)")
+
+                for rec in to_remove:
+                    if rec.audio_file_path:
+                        try:
+                            fpath = Path(rec.audio_file_path)
+                            if fpath.exists():
+                                fpath.unlink()
+                        except Exception as e:
+                            logger.warning(f"Failed to delete audio file: {e}")
+                    if action == "delete_record":
+                        await session.delete(rec)
+                    else:
+                        rec.audio_file_path = None
+                        rec.audio_file_name = None
+                        rec.audio_deleted = 1
+
+                await session.commit()
+                logger.info(f"Retention complete ({len(to_remove)} affected)")
+        except Exception as e:
+            logger.error(f"Retention failed: {e}", exc_info=True)
 
 
 # Global SDR manager instance

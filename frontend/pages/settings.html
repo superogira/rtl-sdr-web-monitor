@@ -168,6 +168,32 @@
                 <div class="form-actions">
                     <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึก</button>
                 </div>
+
+                <h2 style="margin-top:2rem;">🗂️ การเก็บรักษา (Retention)</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    ระบบจะลบรายการเก่าอัตโนมัติตามเงื่อนไขด้านล่าง (อันไหนเข้าเงื่อนไขก่อนก็ลบก่อน) ค่า 0 = ไม่จำกัด
+                </p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>จำนวนรายการสูงสุด (0 = ไม่จำกัด)</label>
+                        <input type="number" id="retention-max-count" value="0" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label>เวลารวมสูงสุด — วินาที (0 = ไม่จำกัด)</label>
+                        <input type="number" id="retention-max-duration" value="0" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label>อายุสูงสุด — วัน (0 = ไม่จำกัด)</label>
+                        <input type="number" id="retention-max-age" value="0" min="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>เมื่อถึงเงื่อนไขการเก็บรักษา</label>
+                    <select id="retention-action">
+                        <option value="keep_transcript">เก็บข้อความถอดเสียงไว้ (ลบเฉพาะไฟล์เสียง)</option>
+                        <option value="delete_record">ลบ record ทั้งหมด (ไฟล์เสียง + ข้อมูล)</option>
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -617,6 +643,15 @@
                 if (elMax && cfg.max_recording_duration !== undefined) {
                     elMax.value = cfg.max_recording_duration;
                 }
+                // Retention
+                const elRCount = document.getElementById('retention-max-count');
+                const elRDur = document.getElementById('retention-max-duration');
+                const elRAge = document.getElementById('retention-max-age');
+                const elRAct = document.getElementById('retention-action');
+                if (elRCount && cfg.retention_max_count !== undefined) elRCount.value = cfg.retention_max_count;
+                if (elRDur && cfg.retention_max_total_duration_sec !== undefined) elRDur.value = cfg.retention_max_total_duration_sec;
+                if (elRAge && cfg.retention_max_age_days !== undefined) elRAge.value = cfg.retention_max_age_days;
+                if (elRAct && cfg.retention_action) elRAct.value = cfg.retention_action;
             } catch (e) {
                 console.warn('Could not load recording settings:', e);
             }
@@ -628,6 +663,10 @@
             const vad_silence_timeout = parseInt(document.getElementById('rec-silence').value);
             const min_recording_duration = parseInt(document.getElementById('rec-min').value);
             const max_recording_duration = parseInt(document.getElementById('rec-max').value);
+            const retention_max_count = parseInt(document.getElementById('retention-max-count').value) || 0;
+            const retention_max_total_duration_sec = parseInt(document.getElementById('retention-max-duration').value) || 0;
+            const retention_max_age_days = parseInt(document.getElementById('retention-max-age').value) || 0;
+            const retention_action = document.getElementById('retention-action').value;
             try {
                 const result = await API.sdr.setRecordingConfig({
                     auto_record,
@@ -635,6 +674,10 @@
                     vad_silence_timeout,
                     min_recording_duration,
                     max_recording_duration,
+                    retention_max_count,
+                    retention_max_total_duration_sec,
+                    retention_max_age_days,
+                    retention_action,
                 });
                 alert('✅ บันทึกการตั้งค่าการอัดเสียงสำเร็จ!\n' +
                       '(ค่านี้ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน และจะถูกเก็บไว้แม้ restart server)');

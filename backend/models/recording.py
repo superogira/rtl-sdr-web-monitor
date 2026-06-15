@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, Integer, Text, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Float, Integer, Text, DateTime, Enum, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from backend.database import Base
 import enum
@@ -38,6 +38,7 @@ class Recording(Base):
     status = Column(Enum(RecordingStatus), default=RecordingStatus.RECORDING, nullable=False)
     source = Column(String(20), default="auto", nullable=False, comment="auto or manual")
     is_unread = Column(Integer, default=1, nullable=False)
+    audio_deleted = Column(Boolean, default=0, nullable=False, comment="Audio file deleted by retention policy (keep_transcript mode)")
     recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -48,6 +49,8 @@ class Recording(Base):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"
 
     def to_dict(self):
+        audio_deleted = bool(self.audio_deleted)
+        has_audio = bool(self.audio_file_name) and not audio_deleted
         return {
             "id": self.id,
             "frequency": self.frequency,
@@ -56,6 +59,8 @@ class Recording(Base):
             "signal_strength": self.signal_strength,
             "audio_file_path": self.audio_file_path,
             "audio_file_name": self.audio_file_name,
+            "audio_deleted": audio_deleted,
+            "has_audio": has_audio,
             "duration": self.duration,
             "transcript": self.transcript,
             "transcript_language": self.transcript_language,

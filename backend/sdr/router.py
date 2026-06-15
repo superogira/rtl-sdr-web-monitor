@@ -18,7 +18,7 @@ from backend.config import settings
 from backend.services.stt import transcribe, _get_stt_config
 from backend.services.app_settings import get_setting, set_setting
 from backend.models.app_setting import mask_value
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,10 @@ class RecordingConfigRequest(BaseModel):
     vad_silence_timeout: Optional[int] = None  # seconds
     max_recording_duration: Optional[int] = None  # seconds
     min_recording_duration: Optional[int] = None  # seconds
+    retention_max_count: Optional[int] = None  # 0 = unlimited
+    retention_max_total_duration_sec: Optional[int] = None  # 0 = unlimited
+    retention_max_age_days: Optional[int] = None  # 0 = unlimited
+    retention_action: Optional[str] = None  # keep_transcript | delete_record
 
 
 # === Endpoints ===
@@ -230,6 +234,10 @@ async def set_recording_config(
             vad_silence_timeout=req.vad_silence_timeout,
             max_recording_duration=req.max_recording_duration,
             min_recording_duration=req.min_recording_duration,
+            retention_max_count=req.retention_max_count,
+            retention_max_total_duration_sec=req.retention_max_total_duration_sec,
+            retention_max_age_days=req.retention_max_age_days,
+            retention_action=req.retention_action,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -270,26 +278,80 @@ async def stop_recording(current_user: User = Depends(get_current_user)):
 
 # === Recordings endpoints (from DB) ===
 
+FREQ_TOLERANCE_KHZ = 5.0  # tolerance สำหรับ frequency filter (±5 kHz)
+
+
 @recordings_router.get("")
 async def list_recordings(
     limit: int = 50,
     offset: int = 0,
     source: Optional[str] = None,
+    search: Optional[str] = None,
+    frequency_mhz: Optional[float] = None,
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """List recordings from database (paginated, newest first)."""
+    """List recordings from database (paginated, newest first).
+
+    Optional filters:
+    - source: "auto" | "manual"
+    - search: case-insensitive substring match on transcript, audio_file_name, mode, frequency (kHz)
+    - frequency_mhz: filter by center frequency with ±5 kHz tolerance (e.g. 145.5 matches 145.4975–145.5025 MHz)
+    """
     query = select(Recording).order_by(Recording.recorded_at.desc())
     if source:
         query = query.where(Recording.source == source)
+    if frequency_mhz is not None:
+        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
+        center_hz = frequency_mhz * 1e6
+        query = query.where(
+            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
+        )
+    if search:
+        s = f"%{search}%"
+        # frequency search by kHz (e.g. "145" matches 145500000 Hz)
+        freq_search = None
+        try:
+            freq_search = float(search) * 1e6
+        except (ValueError, TypeError):
+            pass
+        clauses = [
+            Recording.transcript.ilike(s),
+            Recording.audio_file_name.ilike(s),
+            Recording.mode.ilike(s),
+        ]
+        if freq_search is not None:
+            clauses.append(Recording.frequency == freq_search)
+        query = query.where(or_(*clauses))
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)
     recordings = result.scalars().all()
 
-    # Count total
+    # Count total (must apply same filters)
     count_q = select(func.count(Recording.id))
     if source:
         count_q = count_q.where(Recording.source == source)
+    if frequency_mhz is not None:
+        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
+        center_hz = frequency_mhz * 1e6
+        count_q = count_q.where(
+            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
+        )
+    if search:
+        s = f"%{search}%"
+        freq_search = None
+        try:
+            freq_search = float(search) * 1e6
+        except (ValueError, TypeError):
+            pass
+        clauses = [
+            Recording.transcript.ilike(s),
+            Recording.audio_file_name.ilike(s),
+            Recording.mode.ilike(s),
+        ]
+        if freq_search is not None:
+            clauses.append(Recording.frequency == freq_search)
+        count_q = count_q.where(or_(*clauses))
     total_result = await db.execute(count_q)
     total = total_result.scalar()
 
@@ -299,6 +361,66 @@ async def list_recordings(
         "limit": limit,
         "offset": offset,
     }
+
+
+@recordings_router.get("/meta/frequencies")
+async def list_frequencies(
+    source: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Return distinct frequencies with recording counts (for filter dropdown).
+
+    Groups recordings within ±5 kHz tolerance so that drift-friendly buckets
+    appear as a single option.
+    """
+    query = select(
+        Recording.frequency,
+        Recording.frequency_mhz,
+        func.count(Recording.id).label("count"),
+    ).group_by(Recording.frequency, Recording.frequency_mhz)
+    if source:
+        query = query.where(Recording.source == source)
+    query = query.order_by(Recording.frequency.asc())
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Bucket ความถี่ที่ใกล้กัน (tolerance ±5 kHz) เป็นก้อนเดียว
+    tol_mhz = FREQ_TOLERANCE_KHZ / 1000.0
+    buckets = []  # [{frequency_mhz, count, min_mhz, max_mhz}]
+    for freq_hz, freq_mhz, count in rows:
+        mhz = freq_mhz if freq_mhz is not None else (freq_hz / 1e6 if freq_hz else None)
+        if mhz is None:
+            continue
+        merged = False
+        for b in buckets:
+            if abs(mhz - b["frequency_mhz"]) <= tol_mhz:
+                b["count"] += count
+                b["min_mhz"] = min(b["min_mhz"], mhz)
+                b["max_mhz"] = max(b["max_mhz"], mhz)
+                # ถ่วงน้ำหนักค่ากลางด้วย count
+                total = b["count"]
+                b["frequency_mhz"] = (
+                    (b["frequency_mhz"] * (total - count)) + (mhz * count)
+                ) / total
+                merged = True
+                break
+        if not merged:
+            buckets.append({
+                "frequency_mhz": mhz,
+                "count": count,
+                "min_mhz": mhz,
+                "max_mhz": mhz,
+            })
+
+    # เรียงตามความถี่
+    buckets.sort(key=lambda b: b["frequency_mhz"])
+    # ปัดทศนิยมให้สวย
+    for b in buckets:
+        b["frequency_mhz"] = round(b["frequency_mhz"], 4)
+        b["min_mhz"] = round(b["min_mhz"], 4)
+        b["max_mhz"] = round(b["max_mhz"], 4)
+    return {"items": buckets, "tolerance_khz": FREQ_TOLERANCE_KHZ}
 
 
 @recordings_router.get("/{rec_id}")

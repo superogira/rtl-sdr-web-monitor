@@ -160,10 +160,20 @@ const API = {
             qs.set('limit', params.limit || 50);
             if (params.offset) qs.set('offset', params.offset);
             if (params.source) qs.set('source', params.source);
+            if (params.search) qs.set('search', params.search);
+            if (params.frequency_mhz != null) qs.set('frequency_mhz', params.frequency_mhz);
             try {
                 const resp = await API.request('GET', `/api/recordings?${qs.toString()}`);
                 return resp;  // {items, total, limit, offset}
             } catch { return { items: [], total: 0, limit: 50, offset: 0 }; }
+        },
+        async listFrequencies(params = {}) {
+            const qs = new URLSearchParams();
+            if (params.source) qs.set('source', params.source);
+            try {
+                const resp = await API.request('GET', `/api/recordings/meta/frequencies?${qs.toString()}`);
+                return resp;  // {items: [{frequency_mhz, count, min_mhz, max_mhz}], tolerance_khz}
+            } catch { return { items: [], tolerance_khz: 5 }; }
         },
         async get(id) {
             return API.request('GET', `/api/recordings/${id}`);
