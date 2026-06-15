@@ -4,13 +4,22 @@ SDR API Routes - control RTL-TCP, streaming, recording.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from pathlib import Path as FSPath
+import os
 
 from backend.auth.dependencies import get_current_user
 from backend.models.user import User
 from backend.sdr.manager import sdr_manager
 from backend.audio.demod import DemodMode
+from backend.database import get_db
+from backend.models.recording import Recording
+from backend.config import settings
+from sqlalchemy import select, func
 
 router = APIRouter(prefix="/api/sdr", tags=["SDR Control"])
+
+# Separate router for recordings (different prefix)
+recordings_router = APIRouter(prefix="/api/recordings", tags=["Recordings"])
 
 
 # === Schemas ===
@@ -215,3 +224,113 @@ async def stop_recording(current_user: User = Depends(get_current_user)):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# === Recordings endpoints (from DB) ===
+
+@recordings_router.get("")
+async def list_recordings(
+    limit: int = 50,
+    offset: int = 0,
+    source: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """List recordings from database (paginated, newest first)."""
+    query = select(Recording).order_by(Recording.recorded_at.desc())
+    if source:
+        query = query.where(Recording.source == source)
+    query = query.limit(limit).offset(offset)
+    result = await db.execute(query)
+    recordings = result.scalars().all()
+
+    # Count total
+    count_q = select(func.count(Recording.id))
+    if source:
+        count_q = count_q.where(Recording.source == source)
+    total_result = await db.execute(count_q)
+    total = total_result.scalar()
+
+    return {
+        "items": [r.to_dict() for r in recordings],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@recordings_router.get("/{rec_id}")
+async def get_recording(
+    rec_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Get a single recording by ID."""
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return rec.to_dict()
+
+
+@recordings_router.delete("/{rec_id}")
+async def delete_recording(
+    rec_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Delete a recording (DB row + audio file)."""
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    # Delete audio file from disk
+    if rec.audio_file_path:
+        try:
+            fpath = FSPath(rec.audio_file_path)
+            if fpath.exists():
+                os.remove(fpath)
+        except Exception as e:
+            pass  # log but don't fail
+
+    await db.delete(rec)
+    await db.commit()
+    return {"success": True, "id": rec_id}
+
+
+@recordings_router.post("/{rec_id}/read")
+async def mark_as_read(
+    rec_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Mark a recording as read (is_unread=0)."""
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    rec.is_unread = 0
+    await db.commit()
+    return {"success": True, "id": rec_id, "is_unread": 0}
+
+
+class TranscriptRequest(BaseModel):
+    transcript: str
+
+
+@recordings_router.put("/{rec_id}/transcript")
+async def update_transcript(
+    rec_id: str,
+    req: TranscriptRequest,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Update transcript for a recording (after STT processing)."""
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    rec.transcript = req.transcript
+    await db.commit()
+    return {"success": True, "id": rec_id}

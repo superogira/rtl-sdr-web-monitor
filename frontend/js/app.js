@@ -1305,13 +1305,16 @@ const App = {
     },
 
     createFeedItemHTML(rec) {
-        const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' }) : '--:--';
-        const freq = rec.frequency ? (rec.frequency / 1e6).toFixed(3) + ' MHz' : '';
+        const ts = rec.recorded_at || rec.timestamp;
+        const time = ts ? new Date(ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' }) : '--:--';
+        const freqHz = rec.frequency || (rec.frequency_mhz ? rec.frequency_mhz * 1e6 : null);
+        const freq = freqHz ? (freqHz / 1e6).toFixed(3) + ' MHz' : (rec.frequency_mhz ? rec.frequency_mhz.toFixed(3) + ' MHz' : '');
         const mode = rec.mode || '';
         const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
-        const sig = rec.signal_level ? rec.signal_level.toFixed(0) + ' dB' : '';
-        const transcript = rec.transcription || '<span class="text-muted">กำลังถอดเสียง...</span>';
-        const audioUrl = rec.url || '';
+        const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
+        const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
+        const transcript = rec.transcript || rec.transcription || '<span class="text-muted">กำลังถอดเสียง...</span>';
+        const audioUrl = rec.url || (rec.audio_file_name ? `/recordings/${rec.audio_file_name}` : '');
         const source = rec.source || 'auto';
         const badgeClass = source === 'manual' ? 'manual' : 'auto';
         const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';

@@ -17,6 +17,9 @@ from backend.config import settings
 from backend.sdr.rtl_tcp import RtlTcpClient
 from backend.audio.demod import DemodMode, demodulate, compute_signal_level
 from backend.audio.broadcaster import audio_broadcaster
+from backend.database import async_session
+from backend.models.recording import Recording, RecordingStatus
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -497,7 +500,7 @@ class SDRManager:
         return result
 
     async def _save_recording(self, audio_data: np.ndarray, duration: float, source: str) -> dict:
-        """Save audio data to WAV file and notify callbacks."""
+        """Save audio data to WAV file, insert into DB, and notify callbacks."""
         recordings_dir = Path(settings.RECORDINGS_DIR)
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -507,18 +510,54 @@ class SDRManager:
 
         sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
 
+        rec_id = str(uuid.uuid4())
+        freq_hz = self.client._frequency
+        freq_mhz = freq_hz / 1e6
+        now = datetime.utcnow()
+
+        # === INSERT into database ===
+        try:
+            async with async_session() as session:
+                rec = Recording(
+                    id=rec_id,
+                    frequency=freq_hz,
+                    frequency_mhz=freq_mhz,
+                    mode=self.mode,
+                    signal_strength=round(self._signal_level, 1),
+                    audio_file_path=str(filepath),
+                    audio_file_name=filename,
+                    duration=round(duration, 2),
+                    transcript=None,
+                    status=RecordingStatus.COMPLETED,
+                    source=source,
+                    is_unread=1,
+                    recorded_at=now,
+                    created_at=now,
+                )
+                session.add(rec)
+                await session.commit()
+                logger.info(f"💾 Recording saved to DB: {rec_id}")
+        except Exception as db_err:
+            logger.error(f"DB insert failed (file still saved): {db_err}")
+
         recording_info = {
-            "id": str(uuid.uuid4()),
+            "id": rec_id,
             "filename": filename,
             "filepath": str(filepath),
             "url": f"/recordings/{filename}",
             "duration": round(duration, 2),
-            "frequency": self.client._frequency,
+            "frequency": freq_hz,
+            "frequency_mhz": freq_mhz,
             "mode": self.mode.value,
             "signal_level": round(self._signal_level, 1),
-            "timestamp": datetime.now().isoformat(),
+            "signal_strength": round(self._signal_level, 1),
+            "timestamp": now.isoformat(),
+            "recorded_at": now.isoformat(),
             "transcription": None,
+            "transcript": None,
             "source": source,
+            "status": "completed",
+            "is_unread": 1,
         }
 
         self._last_recording_path = str(filepath)
@@ -526,7 +565,7 @@ class SDRManager:
 
         logger.info(
             f"✅ Recording saved [{source}]: {filename} ({duration:.1f}s, "
-            f"{self.mode.value}, {self.client._frequency/1e6:.3f} MHz)"
+            f"{self.mode.value}, {freq_mhz:.3f} MHz)"
         )
 
         # Reset auto state if this was an auto recording

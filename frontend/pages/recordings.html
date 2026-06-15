@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<![CDATA[<!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
@@ -6,6 +6,33 @@
     <title>Recordings - RTL-SDR Monitor</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/app.css?v=13">
+    <style>
+        .rec-filter-bar {
+            display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+            margin-bottom:1rem; padding:8px;
+            background:rgba(255,255,255,0.03); border-radius:8px;
+        }
+        .rec-filter-bar select, .rec-filter-bar button {
+            padding:6px 12px; border-radius:6px;
+            background:var(--bg-card); color:var(--text-primary);
+            border:1px solid var(--border); cursor:pointer; font-size:0.85rem;
+        }
+        .rec-filter-bar button:hover { background:var(--bg-hover); }
+        .rec-filter-bar .spacer { flex:1; }
+        .rec-actions { display:flex; gap:4px; }
+        .rec-del-btn {
+            background:rgba(239,68,68,0.15); color:#fca5a5;
+            border:1px solid rgba(239,68,68,0.3);
+            padding:2px 8px; border-radius:4px; font-size:0.7rem; cursor:pointer;
+        }
+        .rec-del-btn:hover { background:rgba(239,68,68,0.3); }
+        .rec-load-more {
+            display:block; margin:1rem auto; padding:8px 24px;
+            background:var(--bg-card); color:var(--text-primary);
+            border:1px solid var(--border); border-radius:6px; cursor:pointer;
+        }
+        .rec-load-more:hover { background:var(--bg-hover); }
+    </style>
 </head>
 <body>
     <div class="app-container">
@@ -20,9 +47,25 @@
         </header>
         <div class="app-main" style="padding: 2rem; overflow-y: auto;">
             <h2 style="margin-bottom: 1rem;">📋 รายการบันทึกทั้งหมด</h2>
+
+            <div class="rec-filter-bar">
+                <label style="font-size:0.85rem;">ประเภท:</label>
+                <select id="filter-source" onchange="resetAndLoad()">
+                    <option value="">ทั้งหมด</option>
+                    <option value="auto">🔄 อัตโนมัติ</option>
+                    <option value="manual">✋ บันทึกเอง</option>
+                </select>
+                <span class="spacer"></span>
+                <span id="rec-count" style="font-size:0.85rem; color:var(--text-muted);">--</span>
+            </div>
+
             <div id="recordings-list" class="text-center text-muted p-2">
                 กำลังโหลด...
             </div>
+
+            <button id="load-more-btn" class="rec-load-more" style="display:none;" onclick="loadMore()">
+                ⬇ โหลดเพิ่มเติม
+            </button>
         </div>
     </div>
     <script src="/js/api.js?v=4"></script>
@@ -30,63 +73,117 @@
     <script>
         if (!Auth.isAuthenticated()) window.location.href = '/login';
 
-        async function loadRecordings() {
+        const PAGE_SIZE = 50;
+        let _offset = 0;
+        let _total = 0;
+        let _allItems = [];
+
+        function recHTML(rec) {
+            const time = rec.recorded_at
+                ? new Date(rec.recorded_at).toLocaleString('th-TH', {
+                    day:'2-digit', month:'2-digit', year:'numeric',
+                    hour:'2-digit', minute:'2-digit'
+                  })
+                : (rec.timestamp ? new Date(rec.timestamp).toLocaleString('th-TH') : '--');
+            const freq = rec.frequency_mhz
+                ? rec.frequency_mhz.toFixed(4) + ' MHz'
+                : (rec.frequency ? (rec.frequency / 1e6).toFixed(4) + ' MHz' : '');
+            const mode = rec.mode || '';
+            const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
+            const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
+            const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
+            const transcript = rec.transcript || rec.transcription || '<span class="text-muted">ยังไม่ถอดเสียง</span>';
+            const audioUrl = rec.audio_file_name
+                ? '/recordings/' + rec.audio_file_name
+                : (rec.url || '');
+            const source = rec.source || 'auto';
+            const badgeClass = source === 'manual' ? 'manual' : 'auto';
+            const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
+            const badgeTitle = source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ';
+
+            return `
+                <div class="feed-item" id="rec-${rec.id}" style="margin-bottom: 8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
+                            <span style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
+                        </div>
+                        <div class="rec-actions">
+                            <span style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>
+                            <button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ลบ</button>
+                        </div>
+                    </div>
+                    <div class="feed-text" style="margin-top:6px;">
+                        <div class="transcript" style="font-size:0.85rem; line-height:1.5;">${transcript}</div>
+                    </div>
+                    ${audioUrl ? `<audio controls style="width:100%;height:32px;margin-top:8px;" src="${audioUrl}"></audio>` : ''}
+                </div>
+            `;
+        }
+
+        async function loadRecordings(append = false) {
+            const source = document.getElementById('filter-source').value;
             try {
-                const data = await API.recordings.list({ limit: 100 });
-                const recordings = data.items || data || [];
+                const data = await API.recordings.list({
+                    limit: PAGE_SIZE,
+                    offset: _offset,
+                    source: source || undefined,
+                });
+                const items = data.items || [];
+                _total = data.total || 0;
                 const container = document.getElementById('recordings-list');
 
-                if (!recordings.length) {
-                    container.innerHTML = '<p class="text-muted">ยังไม่มีรายการบันทึก</p>';
-                    return;
+                if (!append) {
+                    _allItems = items;
+                    if (!items.length) {
+                        container.innerHTML = '<p class="text-muted">ยังไม่มีรายการบันทึก</p>';
+                    } else {
+                        container.innerHTML = items.map(recHTML).join('');
+                    }
+                } else {
+                    _allItems = _allItems.concat(items);
+                    container.insertAdjacentHTML('beforeend', items.map(recHTML).join(''));
                 }
 
-                container.innerHTML = recordings.map(rec => {
-                    const time = rec.recorded_at
-                        ? new Date(rec.recorded_at).toLocaleString('th-TH', {
-                            day:'2-digit', month:'2-digit', year:'numeric',
-                            hour:'2-digit', minute:'2-digit'
-                          })
-                        : (rec.timestamp ? new Date(rec.timestamp).toLocaleString('th-TH') : '--');
-                    const freq = rec.frequency_mhz
-                        ? rec.frequency_mhz.toFixed(4) + ' MHz'
-                        : (rec.frequency ? (rec.frequency / 1e6).toFixed(4) + ' MHz' : '');
-                    const mode = rec.mode || '';
-                    const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
-                    const sig = rec.signal_strength ? rec.signal_strength.toFixed(0) + ' dB' : '';
-                    const transcript = rec.transcript || rec.transcription || '<span class="text-muted">ยังไม่ถอดเสียง</span>';
-                    const audioUrl = rec.audio_file_path
-                        ? '/recordings/' + rec.audio_file_name
-                        : (rec.url || '');
-                    const source = rec.source || 'auto';
-                    const badgeClass = source === 'manual' ? 'manual' : 'auto';
-                    const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
-                    const badgeTitle = source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ';
-
-                    return `
-                        <div class="feed-item" style="margin-bottom: 8px;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                                <div style="display:flex; gap:8px; align-items:center;">
-                                    <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
-                                    <span style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
-                                </div>
-                                <span style="font-size:0.75rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
-                            </div>
-                            <div class="feed-text" style="margin-top:6px;">
-                                <div class="transcript" style="font-size:0.85rem; line-height:1.5;">${transcript}</div>
-                            </div>
-                            ${audioUrl ? `<audio controls style="width:100%;height:32px;margin-top:8px;" src="${audioUrl}"></audio>` : ''}
-                        </div>
-                    `;
-                }).join('');
+                // Update count + load-more visibility
+                document.getElementById('rec-count').textContent =
+                    `${_allItems.length} / ${_total} รายการ`;
+                const loadMoreBtn = document.getElementById('load-more-btn');
+                loadMoreBtn.style.display = (_allItems.length < _total) ? '' : 'none';
             } catch (err) {
                 console.error('Failed to load recordings:', err);
                 document.getElementById('recordings-list').innerHTML =
-                    '<p class="text-muted">เกิดข้อผิดพลาดในการโหลด: ' + (err.message || err) + '</p>';
+                    '<p class="text-muted">เกิดข้อผิดพลาดในการโหลด: ' + (err.detail || err.message || err) + '</p>';
             }
         }
 
-        loadRecordings();
+        function resetAndLoad() {
+            _offset = 0;
+            loadRecordings(false);
+        }
+
+        function loadMore() {
+            _offset += PAGE_SIZE;
+            loadRecordings(true);
+        }
+
+        async function deleteRec(id) {
+            if (!confirm('ต้องการลบรายการนี้ใช่ไหม?')) return;
+            try {
+                await API.recordings.delete(id);
+                const el = document.getElementById('rec-' + id);
+                if (el) el.remove();
+                _total--;
+                _allItems = _allItems.filter(r => r.id !== id);
+                document.getElementById('rec-count').textContent =
+                    `${_allItems.length} / ${_total} รายการ`;
+            } catch (err) {
+                alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
+            }
+        }
+
+        resetAndLoad();
     </script>
 </body>
 </html>
+]]>

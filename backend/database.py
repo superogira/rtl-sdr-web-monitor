@@ -38,27 +38,42 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
-async def _run_migrations(conn):
+def _run_migrations(conn):
     """Run manual migrations (add columns to existing tables).
+
+    NOTE: This function MUST be synchronous (def, not async def) because it is
+    called via conn.run_sync(). The previous async version silently failed with
+    'coroutine was never awaited'.
 
     SQLite < 3.35 doesn't support ALTER TABLE ... ADD COLUMN ... IF NOT EXISTS,
     so we check pragma_table_info first.
     """
     from sqlalchemy import text
 
-    # Migration: add 'source' column to recordings table
-    result = conn.execute(
-        text("PRAGMA table_info(recordings)")
-    )
+    result = conn.execute(text("PRAGMA table_info(recordings)"))
     columns = [row[1] for row in result]
-    if "source" not in columns:
-        conn.execute(
-            text(
-                "ALTER TABLE recordings ADD COLUMN source VARCHAR(20) "
-                "DEFAULT 'auto' NOT NULL"
+
+    # Define all columns that might need adding (column_name, SQL type)
+    migrations = [
+        ("source", "VARCHAR(20) DEFAULT 'auto' NOT NULL"),
+        ("signal_strength", "FLOAT"),
+        ("audio_file_path", "VARCHAR(500)"),
+        ("audio_file_name", "VARCHAR(255)"),
+        ("duration", "FLOAT"),
+        ("transcript", "TEXT"),
+        ("transcript_language", "VARCHAR(10) DEFAULT 'th'"),
+        ("status", "VARCHAR(20) DEFAULT 'completed' NOT NULL"),
+        ("is_unread", "INTEGER DEFAULT 1 NOT NULL"),
+        ("recorded_at", "DATETIME"),
+        ("frequency_mhz", "FLOAT"),
+    ]
+
+    for col_name, col_type in migrations:
+        if col_name not in columns:
+            conn.execute(
+                text(f"ALTER TABLE recordings ADD COLUMN {col_name} {col_type}")
             )
-        )
-        print("[migration] Added 'source' column to recordings table")
+            print(f"[migration] Added '{col_name}' column to recordings table")
 
 
 async def init_db():

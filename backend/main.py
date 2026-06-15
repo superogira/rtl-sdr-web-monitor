@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from backend.config import settings
 from backend.database import init_db
 from backend.auth.router import router as auth_router
-from backend.sdr.router import router as sdr_router
+from backend.sdr.router import router as sdr_router, recordings_router
 
 
 @asynccontextmanager
@@ -28,6 +28,44 @@ async def lifespan(app: FastAPI):
     print(f"📡 RTL-TCP: {settings.RTL_TCP_HOST}:{settings.RTL_TCP_PORT}")
     print(f"🌐 Server: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
     print(f"🔧 Environment: {settings.APP_ENV}")
+
+    # Auto-start streaming in background (24/7 operation)
+    if settings.AUTO_START_STREAMING:
+        import asyncio
+        from backend.sdr.manager import sdr_manager
+
+        async def _autostart_loop():
+            retries = 0
+            max_retries = settings.AUTO_START_MAX_RETRIES
+            interval = settings.AUTO_START_RETRY_INTERVAL
+            while True:
+                if max_retries == 0 or retries < max_retries:
+                    try:
+                        print(f"🔄 [autostart] Connecting to RTL-TCP "
+                              f"{settings.RTL_TCP_HOST}:{settings.RTL_TCP_PORT} "
+                              f"(attempt {retries + 1}" +
+                              (f"/{max_retries}" if max_retries > 0 else "") + ")")
+                        connect_result = await sdr_manager.connect()
+                        if connect_result.get("success"):
+                            print("✅ [autostart] Connected to RTL-TCP")
+                            start_result = await sdr_manager.start_streaming()
+                            if "error" not in start_result:
+                                print("✅ [autostart] Streaming started (background 24/7)")
+                                if sdr_manager._auto_recording:
+                                    print("🎙️ [autostart] Auto-record active")
+                                return  # Success — exit loop
+                            else:
+                                print(f"⚠️ [autostart] Streaming failed: {start_result['error']}")
+                                await sdr_manager.disconnect()
+                        else:
+                            print(f"⚠️ [autostart] Connect failed: {connect_result}")
+                    except Exception as e:
+                        print(f"⚠️ [autostart] Error: {e}")
+                    retries += 1
+                await asyncio.sleep(interval)
+
+        # Run autostart in background task
+        asyncio.create_task(_autostart_loop())
 
     yield
 
@@ -49,6 +87,7 @@ app = FastAPI(
 # === API Routes ===
 app.include_router(auth_router)
 app.include_router(sdr_router)
+app.include_router(recordings_router)
 
 
 # === Health Check ===

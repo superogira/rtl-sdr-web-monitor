@@ -147,10 +147,29 @@ const API = {
         },
     },
 
-    // Recordings (placeholder)
+    // Recordings (from DB)
     recordings: {
         async list(params = {}) {
-            try { return await API.request('GET', `/api/recordings?limit=${params.limit || 20}`); } catch { return []; }
+            const qs = new URLSearchParams();
+            qs.set('limit', params.limit || 50);
+            if (params.offset) qs.set('offset', params.offset);
+            if (params.source) qs.set('source', params.source);
+            try {
+                const resp = await API.request('GET', `/api/recordings?${qs.toString()}`);
+                return resp;  // {items, total, limit, offset}
+            } catch { return { items: [], total: 0, limit: 50, offset: 0 }; }
+        },
+        async get(id) {
+            return API.request('GET', `/api/recordings/${id}`);
+        },
+        async delete(id) {
+            return API.request('DELETE', `/api/recordings/${id}`);
+        },
+        async markRead(id) {
+            return API.request('POST', `/api/recordings/${id}/read`);
+        },
+        async updateTranscript(id, transcript) {
+            return API.request('PUT', `/api/recordings/${id}/transcript`, { transcript });
         },
     },
 };

@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     MAX_RECORDING_DURATION: int = 300
     AUTO_PLAY_NEW: bool = True
 
+    # Auto-start streaming on server startup (background 24/7 operation)
+    AUTO_START_STREAMING: bool = True
+    AUTO_START_RETRY_INTERVAL: int = 10  # seconds between retry if RTL-TCP offline
+    AUTO_START_MAX_RETRIES: int = 0  # 0 = unlimited
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
