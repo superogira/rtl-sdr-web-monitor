@@ -118,8 +118,7 @@ async def transcribe_speechmatics(
 
         logger.info(f"Speechmatics job submitted: {job_id} (lang={sm_lang})")
 
-        # Step 2: Poll for transcript (up to ~5 min)
-        result_url = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}/transcript?format=txt-v2"
+        # Step 2: Poll job status (up to ~5 min)
         job_url = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}"
         for attempt in range(150):
             await asyncio.sleep(2)
@@ -136,32 +135,82 @@ async def transcribe_speechmatics(
                         err_detail = json.dumps(errors, ensure_ascii=False)[:500] if errors else job_status
                         logger.error(f"Speechmatics job {job_status}: {err_detail}")
                         return {"text": "", "error": f"Job {job_status}: {err_detail}"}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Speechmatics status poll error (attempt {attempt}): {e}")
         else:
             return {"text": "", "error": "Polling timed out after 300s"}
 
         # Step 3: Fetch transcript
-        for _ in range(5):
-            result_resp = await client.get(result_url, headers={"Authorization": f"Bearer {key}"})
-            if result_resp.status_code == 200:
-                data = result_resp.json()
-                results = data.get("results", [])
-                if results:
-                    alternatives = results[0].get("alternatives", [])
-                    if alternatives:
-                        content = alternatives[0].get("content", "")
-                        if content:
-                            return {"text": content.strip(), "error": None}
-                text = " ".join(
-                    r.get("alternatives", [{}])[0].get("content", "")
-                    for r in results
-                    if r.get("alternatives")
-                ).strip()
-                return {"text": text, "error": None}
-            await asyncio.sleep(1)
+        # NOTE: Valid format values are only: json-v2, txt, srt.
+        # (Older code used "txt-v2" which the API rejects with HTTP 422, causing
+        #  a misleading "Transcript fetch timed out".)
+        transcript_base = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}/transcript"
+        last_err = ""
+        for attempt in range(30):
+            # First try structured JSON (json-v2) so we can parse per-word results.
+            # Fall back to plain text (txt) which returns the raw transcript body.
+            for fmt in ("json-v2", "txt"):
+                url = f"{transcript_base}?format={fmt}"
+                try:
+                    result_resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
+                except Exception as e:
+                    last_err = f"fetch error ({fmt}): {e}"
+                    logger.warning(f"Speechmatics transcript fetch error ({fmt}): {e}")
+                    continue
 
-    return {"text": "", "error": "Transcript fetch timed out"}
+                if result_resp.status_code == 200:
+                    if fmt == "txt":
+                        # Plain text body — return as-is.
+                        text = result_resp.text.strip()
+                        logger.info(f"Speechmatics transcript (txt): {len(text)} chars")
+                        return {"text": text, "error": None}
+
+                    # json-v2: parse results -> alternatives -> content
+                    try:
+                        data = result_resp.json()
+                    except Exception as e:
+                        last_err = f"json decode error: {e}"
+                        logger.warning(f"Speechmatics transcript JSON decode error: {e}")
+                        continue
+
+                    results = data.get("results", [])
+                    if results:
+                        # Concatenate all alternatives' content (one word/token each).
+                        text = " ".join(
+                            (r.get("alternatives", [{}])[0].get("content", "") or "")
+                            for r in results
+                            if r.get("alternatives")
+                        ).strip()
+                        if text:
+                            logger.info(f"Speechmatics transcript (json-v2): {len(text)} chars")
+                            return {"text": text, "error": None}
+
+                    # Job done but no words recognized.
+                    logger.info("Speechmatics job done but no speech recognized")
+                    return {"text": "", "error": None}
+
+                # Non-200: log it (don't silently swallow like before).
+                body = result_resp.text[:300]
+                last_err = f"HTTP {result_resp.status_code} ({fmt}): {body}"
+                logger.warning(
+                    f"Speechmatics transcript fetch failed (attempt {attempt}, {fmt}): "
+                    f"HTTP {result_resp.status_code}: {body}"
+                )
+
+                # 422 = bad format/params — don't retry the same format.
+                if result_resp.status_code == 422:
+                    continue
+                # 404 / 410 = transcript gone — no point retrying.
+                if result_resp.status_code in (404, 410):
+                    return {"text": "", "error": f"Transcript unavailable: {last_err}"}
+
+            await asyncio.sleep(2)
+
+    return {
+        "text": "",
+        "error": f"Transcript fetch failed after retries: {last_err}" if last_err
+        else "Transcript fetch failed",
+    }
 
 
 async def transcribe_whisper(audio_path: str, language: str = None) -> dict:
