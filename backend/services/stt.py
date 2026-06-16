@@ -362,17 +362,16 @@ async def transcribe_whisper_local(
     task: str = None,
     temperature: float = None,
 ) -> dict:
-    """Transcribe audio using a local Whisper server (faster-whisper-server
-    exposed via Gradio API).
+    """Transcribe audio using a local faster-whisper-server.
 
-    The server is a Gradio app whose `/predict` endpoint takes:
-        (file_path, model, task, temperature, stream) -> str
-    We use `gradio_client` which speaks the Gradio SSE protocol.
+    Uses the **OpenAI-compatible REST API** (`/v1/audio/transcriptions` or
+    `/v1/audio/translations`) instead of the Gradio `/predict` endpoint, so
+    we can pass the `language` parameter to force a specific language (e.g.
+    ``"th"``) instead of relying on auto-detection.
 
     Args:
         audio_path: Path to a WAV file on disk.
-        language: Unused for this provider (kept for API compatibility) —
-                  the model auto-detects, and `task` controls transcribe/translate.
+        language: ISO 639-1 code (e.g. "th", "en") or "auto".
         host: Override server host (default: from DB/settings).
         port: Override server port (default: from DB/settings).
         model: Override model name (default: from DB/settings).
@@ -394,33 +393,58 @@ async def transcribe_whisper_local(
         logger.error(msg)
         return {"text": "", "error": msg}
 
-    try:
-        from gradio_client import Client, handle_file
-    except ImportError:
-        msg = "gradio_client not installed. Install with: pip install gradio_client"
-        logger.error(msg)
-        return {"text": "", "error": msg}
+    # Determine the language to send (only for transcribe; translate → always English)
+    lang = (language or cfg.get("language") or "auto").lower()
+    if srv_task == "translate":
+        # Translation always outputs English — no language param needed.
+        endpoint = f"http://{srv_host}:{srv_port}/v1/audio/translations"
+        lang_for_api = None
+    else:
+        endpoint = f"http://{srv_host}:{srv_port}/v1/audio/transcriptions"
+        # Only send language if explicitly set (not "auto" / empty)
+        lang_for_api = lang if lang and lang != "auto" else None
 
-    def _run() -> str:
-        """Blocking call to the Gradio Whisper server — run in executor."""
-        client = Client(f"http://{srv_host}:{srv_port}", verbose=False)
-        result = client.predict(
-            file_path=handle_file(audio_path),
-            model=srv_model,
-            task=srv_task,
-            temperature=float(srv_temp),
-            stream=False,
-            api_name="/predict",
-        )
-        # `result` is a single string (the transcript).
-        return (result or "").strip()
+    # Build multipart form data.
+    form_fields = {
+        "model": srv_model,
+        "temperature": str(srv_temp),
+        "response_format": "json",
+        "stream": "false",
+    }
+    if lang_for_api:
+        form_fields["language"] = lang_for_api
+
+    logger.info(
+        f"Whisper Local request: endpoint={endpoint}, model={srv_model}, "
+        f"task={srv_task}, language={lang_for_api or 'auto'}, temp={srv_temp}"
+    )
 
     try:
-        loop = asyncio.get_event_loop()
-        text = await loop.run_in_executor(None, _run)
+        async with httpx.AsyncClient(timeout=600) as client:
+            with open(audio_path, "rb") as f:
+                resp = await client.post(
+                    endpoint,
+                    data=form_fields,
+                    files={"file": (audio_path.rsplit("/", 1)[-1], f, "audio/wav")},
+                )
+
+        if resp.status_code != 200:
+            err = f"HTTP {resp.status_code}: {resp.text[:500]}"
+            logger.error(f"Whisper Local API error: {err}")
+            return {"text": "", "error": err}
+
+        # Response is JSON with {"text": "..."} when response_format=json.
+        try:
+            data = resp.json()
+            text = (data.get("text") or "").strip()
+        except Exception:
+            # Fallback: treat entire body as plain text.
+            text = resp.text.strip()
+
         logger.info(
             f"Whisper Local transcript: {len(text)} chars "
-            f"(host={srv_host}:{srv_port}, model={srv_model}, task={srv_task})"
+            f"(host={srv_host}:{srv_port}, model={srv_model}, task={srv_task}, "
+            f"lang={lang_for_api or 'auto'})"
         )
         return {"text": text, "error": None}
     except Exception as e:
