@@ -355,9 +355,38 @@ async def list_recordings(
     total_result = await db.execute(count_q)
     total = total_result.scalar()
 
+    # Sum of duration (same filters) — ใช้สำหรับแสดงเวลารวมในหน้ารายการ
+    dur_q = select(func.coalesce(func.sum(Recording.duration), 0.0))
+    if source:
+        dur_q = dur_q.where(Recording.source == source)
+    if frequency_mhz is not None:
+        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
+        center_hz = frequency_mhz * 1e6
+        dur_q = dur_q.where(
+            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
+        )
+    if search:
+        s = f"%{search}%"
+        freq_search = None
+        try:
+            freq_search = float(search) * 1e6
+        except (ValueError, TypeError):
+            pass
+        clauses = [
+            Recording.transcript.ilike(s),
+            Recording.audio_file_name.ilike(s),
+            Recording.mode.ilike(s),
+        ]
+        if freq_search is not None:
+            clauses.append(Recording.frequency == freq_search)
+        dur_q = dur_q.where(or_(*clauses))
+    dur_result = await db.execute(dur_q)
+    total_duration = dur_result.scalar() or 0.0
+
     return {
         "items": [r.to_dict() for r in recordings],
         "total": total,
+        "total_duration": round(total_duration, 1),
         "limit": limit,
         "offset": offset,
     }

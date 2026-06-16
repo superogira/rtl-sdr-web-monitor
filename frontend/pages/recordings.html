@@ -86,6 +86,7 @@
                 </select>
                 <span class="spacer"></span>
                 <span id="rec-count" style="font-size:0.85rem; color:var(--text-muted);">--</span>
+                <span id="rec-total-duration" style="font-size:0.85rem; color:var(--text-muted);"></span>
             </div>
 
             <div id="recordings-list" class="text-center text-muted p-2">
@@ -112,11 +113,23 @@
         let _page = 1;            // หน้าปัจจุบัน (1-based)
         let _pageSize = 50;       // จำนวนรายการต่อหน้า
         let _total = 0;           // จำนวนรายการทั้งหมดที่ตรง filter/search
+        let _totalDuration = 0;   // ระยะเวลารวม (วินาที) ของรายการทั้งหมดที่ตรง filter/search
         let _allItems = [];       // รายการในหน้าปัจจุบัน
         let _recCache = new Map(); // id -> rec (สำหรับ diff reconciliation)
         let _refreshTimer = null;
         let _searchTimer = null;
         let _loading = false;
+
+        // === Utility: format duration (seconds → human readable) ===
+        function formatDuration(sec) {
+            if (!sec || sec <= 0) return '0s';
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.round(sec % 60);
+            if (h > 0) return `${h}ชม ${m}น ${s}วิ`;
+            if (m > 0) return `${m}น ${s}วิ`;
+            return `${s}วิ`;
+        }
 
         // === HTML builders ===
 
@@ -342,6 +355,7 @@
                 });
                 const items = data.items || [];
                 _total = data.total || 0;
+                _totalDuration = data.total_duration || 0;
                 const container = document.getElementById('recordings-list');
 
                 if (!items.length) {
@@ -377,6 +391,8 @@
         function updateCountAndPagination() {
             document.getElementById('rec-count').textContent =
                 `${_allItems.length} / ${_total} รายการ`;
+            document.getElementById('rec-total-duration').textContent =
+                _totalDuration > 0 ? `⏱ ${formatDuration(_totalDuration)}` : '';
             const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
             const pag = document.getElementById('pagination');
             if (_total === 0) {
