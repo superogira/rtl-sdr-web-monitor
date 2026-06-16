@@ -107,6 +107,15 @@ const API = {
         async setVFO(freq) {
             return API.request('POST', '/api/sdr/vfo', { frequency: freq });
         },
+        /**
+         * Set the VFO passband margin ratio (admin only).
+         * Controls how far the VFO can tune from center: max_offset = sample_rate * ratio.
+         * Accepts 0.40–0.49. Lower = safer (less aliasing near band edge),
+         * higher = wider tunable range.
+         */
+        async setVFOMargin(ratio) {
+            return API.request('POST', '/api/sdr/vfo-margin', { ratio: parseFloat(ratio) });
+        },
         async setSampleRate(rate) {
             return API.request('POST', '/api/sdr/sample-rate', { sample_rate: rate });
         },
@@ -145,6 +154,19 @@ const API = {
         },
         async recordStop() {
             return API.request('POST', '/api/sdr/record/stop');
+        },
+        /**
+         * Get whether manual recording is enabled for regular (role=user) users.
+         * Admins always have access (admin_bypass=true).
+         */
+        async getRecordingEnabled() {
+            return API.request('GET', '/api/sdr/recording-enabled');
+        },
+        /**
+         * Enable/disable manual recording for regular users (admin only).
+         */
+        async setRecordingEnabled(enabled) {
+            return API.request('POST', '/api/sdr/recording-enabled', { enabled: !!enabled });
         },
     },
 

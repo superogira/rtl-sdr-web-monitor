@@ -38,6 +38,9 @@ async def _get_stt_config() -> dict:
     operating_point = await get_setting("stt_operating_point", "standard")
     diarization = await get_setting("stt_diarization", "none")
     enable_entities_raw = await get_setting("stt_enable_entities", "false")
+    # Azure-specific settings
+    azure_key = await get_setting("stt_azure_key", settings.AZURE_SPEECH_KEY or "")
+    azure_region = await get_setting("stt_azure_region", settings.AZURE_SPEECH_REGION or "southeastasia")
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",
@@ -46,6 +49,8 @@ async def _get_stt_config() -> dict:
         "operating_point": operating_point if operating_point in _VALID_OPERATING_POINTS else "standard",
         "diarization": diarization if diarization in _VALID_DIARIZATION else "none",
         "enable_entities": (enable_entities_raw or "false").lower() == "true",
+        "azure_key": azure_key or "",
+        "azure_region": azure_region or "southeastasia",
     }
 
 
@@ -238,6 +243,97 @@ async def transcribe_whisper(audio_path: str, language: str = None) -> dict:
         return {"text": "", "error": str(e)}
 
 
+async def transcribe_azure(
+    audio_path: str,
+    language: str = None,
+    azure_key: str = None,
+    azure_region: str = None,
+) -> dict:
+    """Transcribe audio using Azure Cognitive Services Speech (batch from file).
+
+    Args:
+        audio_path: Path to audio file (WAV, 16 kHz mono recommended).
+        language: BCP-47 language tag (e.g. "th-TH", "en-US"). Defaults from settings.
+        azure_key: Azure Speech resource key (defaults from DB/settings).
+        azure_region: Azure region, e.g. "southeastasia".
+
+    Returns:
+        dict: {"text": str, "error": str|None}
+    """
+    cfg = await _get_stt_config()
+    key = azure_key or cfg.get("azure_key") or settings.AZURE_SPEECH_KEY
+    region = azure_region or cfg.get("azure_region") or settings.AZURE_SPEECH_REGION or "southeastasia"
+
+    if not key:
+        msg = "Azure Speech key not configured"
+        logger.error(msg)
+        return {"text": "", "error": msg}
+
+    # Map short language code -> BCP-47 if needed
+    _AZURE_LANG_MAP = {"th": "th-TH", "en": "en-US", "auto": "th-TH"}
+    lang_bcp47 = language or settings.AZURE_SPEECH_LANGUAGE or "th-TH"
+    if lang_bcp47 in _AZURE_LANG_MAP:
+        lang_bcp47 = _AZURE_LANG_MAP[lang_bcp47]
+
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError:
+        msg = "azure-cognitiveservices-speech not installed. Install with: pip install azure-cognitiveservices-speech"
+        logger.error(msg)
+        return {"text": "", "error": msg}
+
+    def _run() -> str:
+        """Blocking call to Azure Speech SDK — run in executor."""
+        speech_config = speechsdk.SpeechConfig(
+            subscription=key, region=region
+        )
+        speech_config.speech_recognition_language = lang_bcp47
+
+        audio_config = speechsdk.audio.AudioConfig(filename=audio_path)
+        recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config, audio_config=audio_config
+        )
+
+        # Collect results from recognized events, then stop after session ends.
+        import threading
+        done = threading.Event()
+        all_text = []
+
+        def _recognized(evt):
+            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                txt = evt.result.text.strip()
+                if txt:
+                    all_text.append(txt)
+
+        def _canceled(evt):
+            res = evt.result
+            details = res.cancellation_details
+            logger.error(f"Azure Speech canceled: reason={details.reason}, error={details.error_details}")
+            done.set()
+
+        def _session_stopped(evt):
+            done.set()
+
+        recognizer.recognized.connect(_recognized)
+        recognizer.session_stopped.connect(_session_stopped)
+        recognizer.canceled.connect(_canceled)
+
+        recognizer.start_continuous_recognition()
+        done.wait(timeout=600)  # max 10 minutes per file
+        recognizer.stop_continuous_recognition()
+
+        return " ".join(all_text).strip()
+
+    try:
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _run)
+        logger.info(f"Azure Speech transcript: {len(text)} chars (lang={lang_bcp47}, region={region})")
+        return {"text": text, "error": None}
+    except Exception as e:
+        logger.error(f"Azure Speech transcription failed: {e}")
+        return {"text": "", "error": str(e)}
+
+
 async def transcribe(audio_path: str, language: str = None, api_key: str = None) -> dict:
     """Transcribe audio using the configured STT provider.
 
@@ -256,6 +352,15 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
         error = result.get("error")
     elif provider == "whisper":
         result = await transcribe_whisper(audio_path, language=lang)
+        text = result["text"]
+        error = result.get("error")
+    elif provider == "azure":
+        result = await transcribe_azure(
+            audio_path,
+            language=lang,
+            azure_key=cfg.get("azure_key"),
+            azure_region=cfg.get("azure_region"),
+        )
         text = result["text"]
         error = result.get("error")
     else:

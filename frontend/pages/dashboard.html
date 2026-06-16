@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=15">
+    <link rel="stylesheet" href="/css/app.css?v=17">
 </head>
 <body>
     <div class="app-container">
@@ -46,7 +46,7 @@
                 <span id="audio-status" style="font-size:0.7rem;"></span>
                 <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
                 <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
-                <a href="/settings" class="btn btn-sm">⚙️ ตั้งค่า</a>
+                <a href="/settings" class="btn btn-sm admin-only" id="btn-settings">⚙️ ตั้งค่า</a>
                 <button class="btn btn-sm" onclick="Auth.logout()">ออกจากระบบ</button>
             </div>
         </header>
@@ -59,6 +59,8 @@
                     <!-- Waterfall Display -->
                     <div class="waterfall-container">
                         <canvas id="waterfall-canvas"></canvas>
+                        <!-- Hover frequency tooltip (shown after 0.5s dwell) -->
+                        <div id="waterfall-hover-freq" class="waterfall-hover-freq"></div>
                         <!-- Center frequency marker (triangle pointing down + vertical line) -->
                         <!-- center-freq-marker removed: label pill from grid
                              already marks center frequency clearly. Removing
@@ -148,7 +150,7 @@
                     <button class="radio-btn" id="btn-tune-down-coarse" title="ลดความถี่ (coarse)">◀◀</button>
                     <button class="radio-btn" id="btn-tune-down" title="ลดความถี่">◀</button>
                 </div>
-                <div class="radio-display" id="freq-display-box" title="คลิกเพื่อพิมพ์ความถี่">
+                <div class="radio-display" id="freq-display-box" title="คลิกเพื่อพิมพ์ความถี่ที่จะฟัง (VFO)">
                     <div class="freq-display" id="freq-display">
                         1 4 5 . 5 0 0 <span class="decimal">0</span>
                     </div>
@@ -181,7 +183,7 @@
                     </div>
                 </div>
 
-                <!-- Sample Rate Selector -->
+                <!-- Sample Rate Selector (admin only) -->
                 <div class="step-selector">
                     <span class="step-label">SRATE</span>
                     <div class="step-buttons" id="srate-buttons">
@@ -191,6 +193,14 @@
                         <button class="step-btn" data-srate="1536000">1.5M</button>
                         <button class="step-btn active" data-srate="2048000">2M</button>
                         <button class="step-btn" data-srate="2400000">2.4M</button>
+                    </div>
+                </div>
+
+                <!-- Center Frequency Button (admin only) -->
+                <div class="step-selector">
+                    <span class="step-label">CENTER</span>
+                    <div class="step-buttons">
+                        <button class="step-btn" id="btn-center-freq" title="ตั้งความถี่กลาง (Center Frequency) ของฮาร์ดแวร์ SDR">📻 SET</button>
                     </div>
                 </div>
 
@@ -218,7 +228,7 @@
 
             <!-- Row 2: Gain + Squelch -->
             <div class="radio-row radio-sliders">
-                <div class="slider-group">
+                <div class="slider-group" id="gain-slider-group">
                     <span class="slider-label">GAIN</span>
                     <input type="range" id="gain-slider" min="0" max="50" value="30" step="1">
                     <span class="slider-value" id="gain-value">30 dB</span>
@@ -232,10 +242,10 @@
         </footer>
     </div>
 
-    <script src="/js/api.js?v=6"></script>
+    <script src="/js/api.js?v=8"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=5"></script>
     <script src="/js/audio.js?v=6"></script>
-    <script src="/js/app.js?v=26"></script>
+    <script src="/js/app.js?v=28"></script>
 </body>
 </html>

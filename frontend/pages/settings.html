@@ -119,6 +119,37 @@
                         </select>
                     </div>
                 </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>VFO Passband Margin (Ratio)</label>
+                        <select id="sdr-vfo-margin">
+                            <option value="0.40" selected>0.40 — Default (±40% sample rate)</option>
+                            <option value="0.41">0.41</option>
+                            <option value="0.42">0.42</option>
+                            <option value="0.43">0.43</option>
+                            <option value="0.44">0.44</option>
+                            <option value="0.45">0.45 — Balanced</option>
+                            <option value="0.46">0.46</option>
+                            <option value="0.47">0.47</option>
+                            <option value="0.48">0.48</option>
+                            <option value="0.49">0.49 — Max range (risk of aliasing)</option>
+                        </select>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            กำหนดขอบเขตการ tune VFO: <code>max_offset = sample_rate × ratio</code><br>
+                            ค่าต่ำ = ปลอดภัย (ลด aliasing ใกล้ขอบ), ค่าสูง = ขยายช่วงฟังได้กว้างขึ้น<br>
+                            <span id="vfo-margin-current" style="color:var(--accent-cyan);"></span>
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label>จำนวนผู้ฟังพร้อมกันสูงสุด (Max Listeners)</label>
+                        <input type="number" id="sdr-max-listeners" value="8" min="1" max="128" step="1">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            จำกัดจำนวนผู้ใช้ที่ฟังเสียงสดพร้อมกัน (1–128)<br>
+                            แต่ละผู้ฟังใช้ CPU 1 demod thread — ค่าสูงขึ้นต้องเซิร์ฟเวอร์แรงขึ้น<br>
+                            <span id="max-listeners-current" style="color:var(--accent-cyan);"></span>
+                        </p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button class="btn btn-primary" onclick="Settings.saveSDR()">💾 บันทึก</button>
                 </div>
@@ -137,6 +168,24 @@
         <!-- Recording Settings -->
         <div class="tab-content" id="tab-recording" style="display:none;">
             <div class="settings-section">
+                <h2>🎚️ สิทธิ์การบันทึกของผู้ใช้</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    ควบคุมว่าผู้ใช้ทั่วไป (role=user) จะสามารถกดบันทึกเสียงแบบ manual ได้หรือไม่
+                    <br>ผู้ดูแลระบบ (admin) สามารถบันทึกได้เสมอ ไม่ว่าจะตั้งค่านี้อย่างไร
+                </p>
+                <div class="form-group">
+                    <label>อนุญาตให้ผู้ใช้ทั่วไปกดบันทึกเอง</label>
+                    <select id="rec-manual-enabled">
+                        <option value="true">เปิด (ผู้ใช้ทั่วไปกดบันทึกได้)</option>
+                        <option value="false">ปิด (ผู้ใช้ทั่วไปกดบันทึกไม่ได้)</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveRecordingEnabled()">💾 บันทึก</button>
+                </div>
+            </div>
+
+            <div class="settings-section" style="margin-top:1.5rem;">
                 <h2>🎙️ การอัดเสียงอัตโนมัติ</h2>
                 <div class="form-group">
                     <label>Auto Record</label>
@@ -209,6 +258,7 @@
                     <select id="stt-provider">
                         <option value="speechmatics">Speechmatics API (Cloud)</option>
                         <option value="whisper">Whisper (Local)</option>
+                        <option value="azure">Azure Cognitive Services Speech</option>
                     </select>
                 </div>
                 <div class="form-row">
@@ -229,7 +279,7 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Speechmatics API Key</label>
+                    <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Speechmatics API Settings</h3>
                     <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
                     <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
                         ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
@@ -259,6 +309,31 @@
                         <option value="true">เปิด</option>
                     </select>
                 </div>
+                <!-- Azure-specific fields (shown only when provider=azure) -->
+                <div id="stt-azure-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
+                    <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Azure Speech API Settings</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Azure Speech Key</label>
+                            <input type="password" id="stt-azure-key" placeholder="Azure Speech resource key" autocomplete="off">
+                            <p id="stt-azure-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                                Leave empty to keep existing key
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Service Region</label>
+                            <input type="text" id="stt-azure-region" placeholder="southeastasia" value="southeastasia">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                                e.g. southeastasia, eastasia, eastus
+                            </p>
+                        </div>
+                    </div>
+                    <p style="font-size:0.72rem; color:var(--text-secondary);">
+                        Language maps from above (th -> th-TH, en -> en-US).<br>
+                        Create resource at Azure Portal -> Cognitive Services -> Speech.
+                    </p>
+                </div>
+
                 <div class="form-actions">
                     <button class="btn btn-primary" onclick="Settings.saveSTT()">💾 บันทึก</button>
                 </div>
@@ -442,7 +517,7 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=7"></script>
+    <script src="/js/api.js?v=8"></script>
     <script src="/js/auth.js?v=5"></script>
     <script>
     const Settings = {
@@ -450,6 +525,15 @@
 
         async init() {
             if (!Auth.requireAuth()) return;
+
+            // Settings page is ADMIN ONLY.
+            // Non-admin users are redirected to the dashboard.
+            // (API endpoints are also guarded by require_admin.)
+            if (!Auth.isAdmin()) {
+                window.location.href = '/dashboard';
+                return;
+            }
+
             const user = Auth.getUser();
             if (user) {
                 document.getElementById('user-display').textContent = `👤 ${user.display_name || user.username}`;
@@ -459,6 +543,7 @@
             this.loadDisplaySettings();
             this.loadSTTSettings();
             this.loadRecordingSettings();
+            this.loadRecordingEnabled();
             this.renderKeywords();
             this.refreshStatus();
             this.loadUsers();
@@ -493,6 +578,27 @@
                 }
                 if (status.channel_bw !== undefined) {
                     document.getElementById('sdr-bw-preset').value = status.channel_bw;
+                }
+                // VFO margin ratio (admin-configurable passband limit)
+                if (status.vfo_margin_ratio !== undefined) {
+                    const el = document.getElementById('sdr-vfo-margin');
+                    if (el) el.value = status.vfo_margin_ratio.toFixed(2);
+                    const curEl = document.getElementById('vfo-margin-current');
+                    if (curEl) {
+                        const sr = status.sample_rate || 2048000;
+                        const maxOff = Math.round(sr * status.vfo_margin_ratio / 1000);
+                        curEl.textContent = `ปัจจุบัน: ${status.vfo_margin_ratio.toFixed(2)} → ±${maxOff} kHz`;
+                    }
+                }
+                // Max listeners (admin-configurable concurrent listener cap)
+                if (status.max_listeners !== undefined) {
+                    const el = document.getElementById('sdr-max-listeners');
+                    if (el) el.value = status.max_listeners;
+                    const curEl = document.getElementById('max-listeners-current');
+                    if (curEl) {
+                        const cur = status.listeners !== undefined ? status.listeners : 0;
+                        curEl.textContent = `ปัจจุบัน: ${status.max_listeners} (กำลังฟังอยู่: ${cur})`;
+                    }
                 }
             } catch (e) {
                 console.warn('Could not load SDR status from backend, using local defaults');
@@ -602,6 +708,29 @@
             // 3) Apply bandwidth (always, no connection needed — it's channel analysis only)
             try { await API.sdr.setBandwidth(bwPreset); } catch(e) { console.warn('Set BW:', e); }
 
+            // 3b) Apply VFO margin ratio (admin only; non-admin gets 403 → warn but continue)
+            const vfoMarginEl = document.getElementById('sdr-vfo-margin');
+            if (vfoMarginEl) {
+                try {
+                    await API.sdr.setVFOMargin(parseFloat(vfoMarginEl.value));
+                } catch(e) {
+                    console.warn('Set VFO margin (admin only):', e);
+                }
+            }
+
+            // 3c) Apply max listeners (admin only)
+            const maxListenersEl = document.getElementById('sdr-max-listeners');
+            if (maxListenersEl) {
+                const n = parseInt(maxListenersEl.value);
+                if (n && n >= 1 && n <= 128) {
+                    try {
+                        await API.request('PUT', '/api/sdr/max-listeners', { max_listeners: n });
+                    } catch(e) {
+                        console.warn('Set max listeners (admin only):', e);
+                    }
+                }
+            }
+
             // 4) Apply freq/rate/gain/mode/ppm to hardware if currently connected.
             try {
                 const status = await API.sdr.status();
@@ -617,6 +746,28 @@
                 }
             } catch(e) {
                 alert('✅ บันทึก host/port แล้ว แต่ apply ค่าอื่นไม่ได้: ' + (e.detail || e.message || e));
+            }
+        },
+
+        async loadRecordingEnabled() {
+            try {
+                const result = await API.sdr.getRecordingEnabled();
+                const el = document.getElementById('rec-manual-enabled');
+                if (el) el.value = result.enabled ? 'true' : 'false';
+            } catch (e) {
+                console.warn('Could not load recording-enabled:', e);
+            }
+        },
+
+        async saveRecordingEnabled() {
+            const enabled = document.getElementById('rec-manual-enabled').value === 'true';
+            try {
+                await API.sdr.setRecordingEnabled(enabled);
+                alert(enabled
+                    ? '✅ เปิดระบบบันทึกสำหรับผู้ใช้ทั่วไปแล้ว'
+                    : '✅ ปิดระบบบันทึกสำหรับผู้ใช้ทั่วไปแล้ว\n(ผู้ใช้ทั่วไปที่กดบันทึกจะเห็นข้อความแจ้งเตือน)');
+            } catch (e) {
+                alert('ผิดพลาด: ' + (e.detail || e.message || e));
             }
         },
 
@@ -710,9 +861,34 @@
                 if (elOp && cfg.operating_point) elOp.value = cfg.operating_point;
                 if (elDia && cfg.diarization) elDia.value = cfg.diarization;
                 if (elEnt) elEnt.value = cfg.enable_entities ? 'true' : 'false';
+
+                // Azure-specific
+                const elAzKey = document.getElementById('stt-azure-key');
+                const elAzKeyHint = document.getElementById('stt-azure-key-hint');
+                const elAzRegion = document.getElementById('stt-azure-region');
+                if (elAzKey) elAzKey.value = '';
+                if (elAzKeyHint) {
+                    elAzKeyHint.textContent = cfg.azure_key_set
+                        ? `✅ Key ถูกตั้งไว้แล้ว (${cfg.azure_key}) ปล่อยว่างถ้าไม่ต้องการเปลี่ยน`
+                        : '⚠️ ยังไม่มี Key ใส่เพื่อบันทึก';
+                }
+                if (elAzRegion && cfg.azure_region) elAzRegion.value = cfg.azure_region;
+
+                this.toggleAzureSection();
+                if (elProvider && !elProvider._azureListener) {
+                    elProvider._azureListener = true;
+                    elProvider.addEventListener('change', () => this.toggleAzureSection());
+                }
             } catch (e) {
                 console.warn('Could not load STT settings:', e);
             }
+        },
+
+        toggleAzureSection() {
+            const provider = document.getElementById('stt-provider');
+            const azureSec = document.getElementById('stt-azure-section');
+            if (!provider || !azureSec) return;
+            azureSec.style.display = (provider.value === 'azure') ? '' : 'none';
         },
 
         async saveSTT() {
@@ -728,6 +904,15 @@
             // Only send api_key if user typed something new
             if (apiKeyInput && apiKeyInput.trim() && !apiKeyInput.includes('...')) {
                 payload.api_key = apiKeyInput.trim();
+            }
+            // Azure-specific
+            const azKeyInput = document.getElementById('stt-azure-key');
+            const azRegionInput = document.getElementById('stt-azure-region');
+            if (azKeyInput && azKeyInput.value.trim() && !azKeyInput.value.includes('...')) {
+                payload.azure_key = azKeyInput.value.trim();
+            }
+            if (azRegionInput && azRegionInput.value.trim()) {
+                payload.azure_region = azRegionInput.value.trim();
             }
 
             try {

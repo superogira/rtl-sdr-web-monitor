@@ -22,7 +22,7 @@ from backend.audio.broadcaster import audio_broadcaster
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
 from backend.models.telegram_alert import TelegramAlert
-from backend.services.app_settings import get_setting
+from backend.services.app_settings import get_setting, set_setting
 from backend.services.stt import transcribe, _get_stt_config
 from sqlalchemy import select, func, delete
 
@@ -110,6 +110,9 @@ class SDRManager:
         # (OpenWebRX-style offset tuning). Users can move the listening cursor
         # within the passband without admin rights to retune the hardware.
         self._vfo_offset_hz: float = 0.0
+        # VFO passband margin ratio (configurable via app settings 0.40–0.49).
+        # Controls how far from center the VFO can tune (max_offset = sample_rate * ratio).
+        self._vfo_margin_ratio: float = 0.40
         self._stream_task: Optional[asyncio.Task] = None
         # Stateful streaming demodulator — carries filter state across chunks
         # to eliminate per-chunk boundary clicks (~20 Hz buzz) in live audio
@@ -166,7 +169,9 @@ class SDRManager:
             "channel_bw": self._channel_bw,
             "vfo_offset_hz": round(self._vfo_offset_hz, 1),
             "vfo_frequency": self.vfo_frequency,
+            "vfo_margin_ratio": round(self._vfo_margin_ratio, 2),
             "listeners": audio_broadcaster.listener_count,
+            "max_listeners": audio_broadcaster.max_listeners,
         }
 
     # ------------------------------------------------------------------
@@ -290,6 +295,9 @@ class SDRManager:
             self._vfo_offset_hz = 0.0
             self._vfo_phase = 0.0
             self._demod.set_vfo_offset(0.0)
+        # Reset EVERY listener's per-user VFO offset, since their offsets were
+        # relative to the old center frequency too.
+        audio_broadcaster.reset_all_vfo()
         if self.mode == DemodMode.FM:
             if self._is_wbfm_band(freq_hz) and self._channel_bw != self.WBFM_CHANNEL_BW:
                 self._channel_bw = self.WBFM_CHANNEL_BW
@@ -324,11 +332,13 @@ class SDRManager:
 
         This lets non-admin users move the listening cursor within the SDR
         passband without retuning the hardware. The offset must stay within
-        ±0.4 * sample_rate to remain inside the visible passband (otherwise
-        the signal would alias / be outside the waterfall).
+        ±(margin_ratio) * sample_rate (default 0.4) to remain inside the
+        visible passband (otherwise the signal would alias / be outside the
+        waterfall). The margin_ratio is configurable via app settings
+        ("sdr_vfo_margin_ratio", 0.40–0.49).
         """
         offset_hz = float(offset_hz)
-        max_offset = self.client._sample_rate * 0.4
+        max_offset = self.client._sample_rate * self._vfo_margin_ratio
         if abs(offset_hz) > max_offset:
             raise ValueError(
                 f"VFO offset {offset_hz:.0f} Hz outside passband "
@@ -346,6 +356,93 @@ class SDRManager:
         """Set VFO by absolute frequency. Computes offset from center freq."""
         offset = float(freq_hz) - float(self.client._frequency)
         return self.set_vfo_offset(offset)
+
+    async def load_vfo_margin_ratio(self) -> None:
+        """Load VFO passband margin ratio from app settings (startup).
+
+        Stored under key "sdr_vfo_margin_ratio" as a float string (0.40–0.49).
+        Defaults to 0.40 if unset.
+        """
+        try:
+            raw = await get_setting("sdr_vfo_margin_ratio", "0.40")
+            self._vfo_margin_ratio = self._validate_margin_ratio(float(raw))
+            logger.info(f"VFO margin ratio loaded: {self._vfo_margin_ratio:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to load VFO margin ratio, using 0.40: {e}")
+            self._vfo_margin_ratio = 0.40
+        # Keep the per-listener broadcaster in sync so listener VFO clamping
+        # uses the same ratio.
+        audio_broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
+
+    async def set_vfo_margin_ratio(self, ratio: float) -> dict:
+        """Set VFO passband margin ratio (0.40–0.49) and persist to app settings."""
+        ratio = self._validate_margin_ratio(ratio)
+        self._vfo_margin_ratio = ratio
+        await set_setting("sdr_vfo_margin_ratio", f"{ratio:.2f}")
+        # If current VFO offset exceeds the new limit, clamp it to the edge
+        max_offset = self.client._sample_rate * self._vfo_margin_ratio
+        if abs(self._vfo_offset_hz) > max_offset:
+            clamped = max(-max_offset, min(max_offset, self._vfo_offset_hz))
+            self._vfo_offset_hz = clamped
+            self._demod.set_vfo_offset(clamped)
+        # Propagate to the per-listener broadcaster (used for clamping each
+        # listener's VFO offset).
+        audio_broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
+        logger.info(f"VFO margin ratio set to {ratio:.2f} (max offset {max_offset:.0f} Hz)")
+        return {"vfo_margin_ratio": self._vfo_margin_ratio}
+
+    @staticmethod
+    def _validate_margin_ratio(ratio: float) -> float:
+        """Validate margin ratio is in [0.40, 0.49]."""
+        ratio = float(ratio)
+        if not (0.40 <= ratio <= 0.49):
+            raise ValueError(f"VFO margin ratio must be 0.40–0.49, got {ratio}")
+        return round(ratio, 2)
+
+    # ------------------------------------------------------------------
+    # Max listeners (configurable concurrent listener cap)
+    # ------------------------------------------------------------------
+    _MIN_MAX_LISTENERS = 1
+    _HARD_CAP_LISTENERS = 128
+
+    @classmethod
+    def _validate_max_listeners(cls, n: int) -> int:
+        """Clamp max listeners to [_MIN_MAX_LISTENERS, _HARD_CAP_LISTENERS]."""
+        n = int(n)
+        if n < cls._MIN_MAX_LISTENERS:
+            n = cls._MIN_MAX_LISTENERS
+        elif n > cls._HARD_CAP_LISTENERS:
+            n = cls._HARD_CAP_LISTENERS
+        return n
+
+    async def load_max_listeners(self) -> None:
+        """Load max listeners from app settings (startup).
+
+        Stored under key "sdr_max_listeners" as an integer string (1–128).
+        Defaults to 8 if unset.
+        """
+        try:
+            raw = await get_setting("sdr_max_listeners", "8")
+            n = self._validate_max_listeners(int(raw))
+            audio_broadcaster.set_max_listeners(n)
+            logger.info(f"Max listeners loaded: {n}")
+        except Exception as e:
+            logger.warning(f"Failed to load max listeners, using 8: {e}")
+            audio_broadcaster.set_max_listeners(8)
+
+    async def set_max_listeners(self, n: int) -> dict:
+        """Set max listeners (1–128) and persist to app settings."""
+        n = self._validate_max_listeners(n)
+        actual = audio_broadcaster.set_max_listeners(n)
+        await set_setting("sdr_max_listeners", str(actual))
+        logger.info(
+            f"Max listeners set to {actual} "
+            f"(current: {audio_broadcaster.listener_count})"
+        )
+        return {
+            "max_listeners": actual,
+            "current_listeners": audio_broadcaster.listener_count,
+        }
 
     async def set_mode(self, mode: str):
         self.mode = DemodMode(mode.upper())
@@ -532,8 +629,16 @@ class SDRManager:
                         self._audio_buffer.append(audio)
                         if len(self._audio_buffer) > 100:
                             self._audio_buffer = self._audio_buffer[-50:]
+                        # OpenWebRX-style per-listener demodulation: feed the
+                        # RAW IQ to every listener, each of which demodulates
+                        # its OWN frequency (VFO offset) / mode / bandwidth
+                        # independently. One user tuning no longer affects
+                        # anyone else. (Global `audio` above is still used for
+                        # recording + signal level.)
                         if audio_broadcaster.has_listeners:
-                            await audio_broadcaster.broadcast(audio, self.audio_rate)
+                            await audio_broadcaster.feed_iq(
+                                iq_data, self.client._sample_rate, self.audio_rate
+                            )
 
                     _spectrum_counter += 1
                     if _spectrum_counter >= _SPECTRUM_INTERVAL:
@@ -815,6 +920,175 @@ class SDRManager:
                 asyncio.create_task(_do_transcribe())
         except Exception as e:
             logger.warning(f"Auto-transcribe check failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Per-listener manual recording (each user records their own audio)
+    # ------------------------------------------------------------------
+    async def save_listener_recording(self, rec_data: dict) -> Optional[dict]:
+        """Save a per-listener manual recording to disk + DB.
+
+        `rec_data` is the dict returned by AudioBroadcaster.stop_listener_recording():
+            { audio_data, duration, sample_rate, mode, vfo_offset_hz, user_id, user_role }
+
+        The recording's frequency is THIS listener's VFO frequency (center +
+        offset), so the log reflects what the user was actually listening to.
+
+        Returns recording_info dict on success, or None if audio was empty.
+        """
+        audio_data = rec_data.get("audio_data")
+        duration = rec_data.get("duration", 0.0)
+        if audio_data is None or len(audio_data) == 0 or duration < 0.1:
+            return None
+
+        sample_rate = rec_data.get("sample_rate", self.audio_rate)
+        mode_str = rec_data.get("mode", "FM")
+        try:
+            mode = DemodMode(mode_str)
+        except ValueError:
+            mode = self.mode
+
+        recordings_dir = Path(settings.RECORDINGS_DIR)
+        recordings_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        # Compute this listener's actual VFO frequency
+        center_freq = self.client._frequency if self.client._frequency else settings.RTL_TCP_CENTER_FREQ
+        offset_hz = rec_data.get("vfo_offset_hz", 0.0)
+        freq_hz = int(center_freq + offset_hz)
+        filename = f"{timestamp}_{freq_hz}_{mode.value}.wav"
+        filepath = recordings_dir / filename
+
+        # Normalize float32 [-1,1] → int16 PCM and write WAV
+        audio_f32 = np.asarray(audio_data, dtype=np.float32)
+        sf.write(str(filepath), audio_f32, int(sample_rate), subtype="PCM_16")
+
+        rec_id = str(uuid.uuid4())
+        freq_mhz = freq_hz / 1e6
+        now = datetime.now(timezone.utc)
+        user_id = rec_data.get("user_id")
+
+        # Insert into DB and fetch recorder display name for WS payload
+        recorder_username = None
+        recorder_display_name = None
+        try:
+            async with async_session() as session:
+                rec = Recording(
+                    id=rec_id,
+                    frequency=freq_hz,
+                    frequency_mhz=freq_mhz,
+                    mode=mode,
+                    audio_file_path=str(filepath),
+                    audio_file_name=filename,
+                    duration=round(duration, 2),
+                    status=RecordingStatus.COMPLETED,
+                    source="manual",
+                    recorded_by_user_id=user_id,
+                    is_unread=1,
+                    recorded_at=now,
+                    created_at=now,
+                )
+                session.add(rec)
+                # Fetch recorder's display name to embed in the WS payload so
+                # the frontend can show "👤 username" immediately without a
+                # follow-up fetch.
+                if user_id:
+                    from backend.models.user import User
+                    user_obj = await session.get(User, user_id)
+                    if user_obj:
+                        recorder_username = user_obj.username
+                        recorder_display_name = user_obj.display_name
+                await session.commit()
+                logger.info(f"💾 Listener recording saved to DB: {rec_id} (user={user_id})")
+        except Exception as db_err:
+            logger.error(f"DB insert failed for listener recording (file still saved): {db_err}")
+
+        recording_info = {
+            "id": rec_id,
+            "filename": filename,
+            "filepath": str(filepath),
+            "url": f"/recordings/{filename}",
+            "duration": round(duration, 2),
+            "frequency": freq_hz,
+            "frequency_mhz": freq_mhz,
+            "mode": mode.value,
+            "signal_level": round(self._signal_level, 1) if self._signal_level else 0,
+            "signal_strength": round(self._signal_level, 1) if self._signal_level else 0,
+            "timestamp": now.isoformat(),
+            "recorded_at": now.isoformat(),
+            "transcription": None,
+            "transcript": None,
+            "source": "manual",
+            "status": "completed",
+            "is_unread": 1,
+            "recorded_by_user_id": user_id,
+            "recorded_by_username": recorder_username,
+            "recorded_by_display_name": recorder_display_name,
+        }
+
+        self._last_recording_path = str(filepath)
+        self._new_recordings.append(recording_info)
+
+        logger.info(
+            f"✅ Listener recording saved [manual]: {filename} "
+            f"({duration:.1f}s, {mode.value}, {freq_mhz:.3f} MHz, user={user_id})"
+        )
+
+        # Enforce retention policy
+        self._spawn_enforce_retention()
+
+        # Notify callbacks
+        for cb in self._callbacks:
+            try:
+                await cb(recording_info)
+            except Exception as e:
+                logger.error(f"Callback error: {e}")
+
+        # Auto-transcribe if enabled
+        try:
+            cfg = await _get_stt_config()
+            if cfg.get("auto_transcribe") and cfg.get("api_key"):
+                logger.info(f"🔄 Auto-transcribing listener recording {rec_id}...")
+                rec_info_copy = dict(recording_info)
+
+                async def _do_transcribe():
+                    try:
+                        result = await transcribe(str(filepath))
+                        text = (result.get("text") or "").strip()
+                        lang = result.get("language", "th")
+                        provider = result.get("provider", "")
+                        error = result.get("error")
+                        async with async_session() as session:
+                            db_rec = await session.get(Recording, rec_id)
+                            if db_rec:
+                                db_rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
+                                db_rec.transcript_language = lang
+                                db_rec.stt_provider = provider or None
+                                db_rec.stt_error = error or None
+                                db_rec.status = RecordingStatus.COMPLETED
+                                await session.commit()
+                        rec_info_copy["transcript"] = text
+                        rec_info_copy["transcription"] = text
+                        rec_info_copy["stt_provider"] = provider
+                        rec_info_copy["stt_error"] = error
+                        self._new_recordings.append({**rec_info_copy, "_transcribed": True})
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars")
+                    except Exception as e:
+                        logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
+                        try:
+                            async with async_session() as session:
+                                db_rec = await session.get(Recording, rec_id)
+                                if db_rec:
+                                    db_rec.stt_error = str(e)
+                                    db_rec.status = RecordingStatus.FAILED
+                                    await session.commit()
+                        except Exception:
+                            pass
+
+                asyncio.create_task(_do_transcribe())
+        except Exception as e:
+            logger.warning(f"Auto-transcribe check failed: {e}")
+
+        return recording_info
 
     # ------------------------------------------------------------------
     # Retention policy enforcement

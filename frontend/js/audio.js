@@ -184,7 +184,10 @@ const LiveAudio = {
 
     _connectWS() {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const url = `${protocol}//${window.location.host}/ws/audio`;
+        // Pass JWT token as query param so the server can identify the user
+        // for per-user manual recording (admins bypass the recording toggle).
+        const token = localStorage.getItem('access_token') || '';
+        const url = `${protocol}//${window.location.host}/ws/audio${token ? '?token=' + encodeURIComponent(token) : ''}`;
         console.log("🔊 [audio] connecting WS:", url);
 
         try {
@@ -203,12 +206,29 @@ const LiveAudio = {
                         console.log(`🔊 [audio] frame #${this._framesReceived}: ${event.data.byteLength} bytes`);
                     }
                 } else {
-                    // Text message: diagnostic "ready" or "pong"
+                    // Text message: diagnostic "ready", "pong", or control ack
                     event.data.text().then(txt => {
                         try {
                             const obj = JSON.parse(txt);
                             if (obj.type === "ready") {
                                 console.log("🔊 [audio] server ready:", obj);
+                                // Initialize local VFO offset from server default
+                                if (obj.vfo_offset_hz !== undefined && typeof App !== 'undefined') {
+                                    App._vfoOffsetHz = obj.vfo_offset_hz;
+                                    App.updateFreqDisplay();
+                                }
+                            } else if (obj.type === "vfo_ack") {
+                                // Server confirmed THIS listener's VFO change
+                                if (typeof App !== 'undefined') {
+                                    App._vfoOffsetHz = obj.vfo_offset_hz || 0;
+                                    App.updateFreqDisplay();
+                                }
+                            } else if (obj.type === "record_ack") {
+                                // Per-user manual recording acknowledgement
+                                console.log("🎙️ [audio] record_ack:", obj);
+                                if (typeof App !== 'undefined' && App._onRecordAck) {
+                                    App._onRecordAck(obj);
+                                }
                             } else {
                                 console.log("🔊 [audio] server text:", txt);
                             }
@@ -225,6 +245,17 @@ const LiveAudio = {
 
             this.ws.onclose = (ev) => {
                 console.log(`🔊 [audio] WS onclose (code=${ev.code}, reason="${ev.reason}", wasClean=${ev.wasClean})`);
+                // Code 1013 = server is full (max_listeners_reached).
+                // Stop playback and show a friendly Thai message — do NOT
+                // auto-reconnect, because the server will keep rejecting.
+                if (ev.code === 1013) {
+                    this._updateStatus("🔴 เต็ม");
+                    // Reset isPlaying so stop() doesn't try to reconnect
+                    this.isPlaying = false;
+                    this._updateUI();
+                    alert("ขณะนี้มีผู้ใช้งานเต็มจำนวนแล้ว กรุณาลองใหม่ในภายหลัง");
+                    return;
+                }
                 this._updateStatus("🔴 " + ev.code);
                 if (this.isPlaying) {
                     this._scheduleReconnect();
@@ -239,6 +270,60 @@ const LiveAudio = {
             console.error("Audio WS connect error:", e);
             this._scheduleReconnect();
         }
+    },
+
+    /**
+     * Send a JSON control message to THIS listener's demodulator (per-user).
+     * Safe to call when WS not open (no-op).
+     */
+    sendControl(obj) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+                this.ws.send(JSON.stringify(obj));
+                return true;
+            } catch (e) {
+                console.warn("🔊 [audio] sendControl failed:", e);
+            }
+        }
+        return false;
+    },
+
+    /**
+     * Set THIS client's listening frequency (absolute Hz) via the audio WS.
+     * Returns true if sent over WS (per-listener), false if WS not open.
+     */
+    setVFO(freqHz) {
+        return this.sendControl({ type: "vfo", frequency: freqHz });
+    },
+
+    /**
+     * Set THIS client's demodulation mode via the audio WS.
+     */
+    setMode(mode) {
+        return this.sendControl({ type: "mode", mode: String(mode).toUpperCase() });
+    },
+
+    /**
+     * Set THIS client's channel bandwidth (Hz) via the audio WS.
+     */
+    setBandwidth(bwHz) {
+        return this.sendControl({ type: "bandwidth", bandwidth: bwHz });
+    },
+
+    /**
+     * Start manual recording for THIS listener (per-user).
+     * Server responds with a record_ack message.
+     */
+    startRecording() {
+        return this.sendControl({ type: "record_start" });
+    },
+
+    /**
+     * Stop manual recording for THIS listener and save.
+     * Server responds with a record_ack containing the saved recording info.
+     */
+    stopRecording() {
+        return this.sendControl({ type: "record_stop" });
     },
 
     _scheduleReconnect() {

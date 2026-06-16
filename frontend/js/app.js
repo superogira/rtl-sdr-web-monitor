@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v7',  // UI fixes: mobile collapse pos + auto click/hold
+    VERSION: '2024.06.14-v8',  // Center freq button (admin) + VFO tune for all
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -28,6 +28,12 @@ const App = {
         if (user) {
             const userDisplay = document.getElementById('user-display');
             if (userDisplay) userDisplay.textContent = `👤 ${user.display_name || user.username}`;
+        }
+
+        // Hide admin-only UI elements for non-admin users.
+        // This includes the Settings button and other controls marked .admin-only.
+        if (!Auth.isAdmin()) {
+            document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
         }
 
         this.startClock();
@@ -173,6 +179,17 @@ const App = {
             if (ss) ss.value = data.squelch_level;
             if (sv) sv.textContent = data.squelch_level + ' dB';
         }
+        // Sync GLOBAL VFO offset from backend — but ONLY when NOT listening.
+        // When listening, each client owns its own per-listener VFO (set via
+        // the audio WS), so the global offset must not overwrite the local
+        // display.
+        if (data.vfo_offset_hz !== undefined) {
+            const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying);
+            if (!listening) {
+                this._vfoOffsetHz = data.vfo_offset_hz;
+                this.updateFreqDisplay();
+            }
+        }
     },
 
     // === SDR Connection ===
@@ -248,6 +265,11 @@ const App = {
             this.currentMode = mode;
             const radioMode = document.getElementById('radio-mode');
             if (radioMode) radioMode.textContent = mode;
+            // Per-listener mode change (audio WS) when listening; else global REST.
+            if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setMode(mode)) {
+                console.log(`🎛️ Mode (per-listener): ${mode}`);
+                return;
+            }
             try { await API.sdr.setMode(mode); } catch (err) { console.error('Set mode failed:', err); }
         });
     },
@@ -259,17 +281,23 @@ const App = {
     _vfoOffsetHz: 0,    // VFO offset from center (Hz). 0 = listen at center.
 
     setupRadioControls() {
-        // Role-based: hide center-frequency controls for non-admin users.
-        // Non-admins use waterfall click (VFO) to listen at different freqs.
+        // Role-based visibility:
+        // - Tune buttons + freq display box: ALL users (used to tune the VFO /
+        //   listening frequency within the passband).
+        // - SRATE, GAIN, CENTER button: ADMIN ONLY (these change shared
+        //   hardware settings that affect everyone on the SDR).
         const _user = Auth.getUser();
         if (_user && _user.role !== 'admin') {
-            const adminOnly = ['btn-tune-down', 'btn-tune-up', 'btn-tune-down-coarse',
-                'btn-tune-up-coarse', 'freq-display-box', 'srate-buttons'];
+            const adminOnly = ['srate-buttons', 'gain-slider-group', 'btn-center-freq'];
             adminOnly.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
         }
+
+        // Center frequency button (admin) → open dialog to set hardware center freq
+        const centerFreqBtn = document.getElementById('btn-center-freq');
+        if (centerFreqBtn) centerFreqBtn.addEventListener('click', () => this.showCenterFreqInput());
 
         // Fine tune (step size)
         const tuneDown = document.getElementById('btn-tune-down');
@@ -318,6 +346,11 @@ const App = {
                 bwButtons.querySelectorAll('.bw-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this._channelBw = newBw;
+                // Per-listener bandwidth change (audio WS) when listening; else global REST.
+                if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setBandwidth(newBw)) {
+                    console.log(`🎛️ Channel BW (per-listener): ${newBw/1e3} kHz`);
+                    return;
+                }
                 try {
                     await API.sdr.setBandwidth(newBw);
                     console.log(`🎛️ Channel BW set to ${newBw/1e3} kHz`);
@@ -480,39 +513,44 @@ const App = {
     },
 
     async setVFO(freq) {
+        // Per-listener tuning: send via the AUDIO WebSocket (each connection
+        // owns its own demodulator), so one user tuning does NOT affect anyone
+        // else. Falls back to the REST endpoint (global) when not listening.
+        if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setVFO(freq)) {
+            const offset = freq - this.currentFreq;
+            this._vfoOffsetHz = offset;
+            this._waterfallDirty = true;
+            this.updateFreqDisplay();
+            console.log(`🎯 VFO (per-listener): ${(freq/1e6).toFixed(4)} MHz (offset ${offset.toFixed(0)} Hz)`);
+            return;
+        }
         try {
             const result = await API.sdr.setVFO(freq);
             this._vfoOffsetHz = result.vfo_offset_hz || 0;
             this._waterfallDirty = true;
-            console.log(`🎯 VFO: ${(freq/1e6).toFixed(4)} MHz (offset ${this._vfoOffsetHz.toFixed(0)} Hz)`);
+            this.updateFreqDisplay();
+            console.log(`🎯 VFO (global): ${(freq/1e6).toFixed(4)} MHz (offset ${this._vfoOffsetHz.toFixed(0)} Hz)`);
         } catch (err) {
             console.error('VFO set failed:', err);
         }
     },
 
     tuneFreq(delta) {
-        // Non-admin: move VFO (listening freq) instead of center freq
-        const _u = Auth.getUser();
-        if (_u && _u.role !== 'admin') {
-            const vfoFreq = this.currentFreq + (this._vfoOffsetHz || 0) + delta;
-            this.setVFO(vfoFreq);
-            return;
-        }
-        this.currentFreq += delta;
-        if (this.currentFreq < 24000000) this.currentFreq = 24000000;  // 24 MHz min
-        if (this.currentFreq > 1766000000) this.currentFreq = 1766000000;  // 1.766 GHz max
-        this.updateFreqDisplay();
-        API.sdr.setFrequency(this.currentFreq).catch(err => console.error('Tune failed:', err));
+        // All users (admin + user) move the VFO (listening freq) within the
+        // passband. The hardware center frequency is set separately by an
+        // admin via the CENTER button (showCenterFreqInput).
+        const vfoFreq = this.currentFreq + (this._vfoOffsetHz || 0) + delta;
+        this.setVFO(vfoFreq);
     },
 
-    showFreqInput() {
-        const currentMHz = (this.currentFreq / 1e6).toFixed(4);
+    // Shared core for the frequency input dialog (used by VFO + center freq).
+    _openFreqInputDialog({ title, defaultValueMHz, onApply }) {
         const overlay = document.createElement('div');
         overlay.className = 'freq-input-overlay';
         overlay.innerHTML = `
             <div class="freq-input-box">
-                <h3>📻 ใส่ความถี่ (MHz)</h3>
-                <input type="text" id="freq-input-field" value="${currentMHz}" autofocus>
+                <h3>${title}</h3>
+                <input type="text" id="freq-input-field" value="${defaultValueMHz}" autofocus>
                 <div class="freq-input-btns">
                     <button class="btn btn-primary" id="freq-input-ok">✅ ตั้งค่า</button>
                     <button class="btn" id="freq-input-cancel">ยกเลิก</button>
@@ -529,9 +567,7 @@ const App = {
         const apply = () => {
             const val = parseFloat(input.value);
             if (!isNaN(val) && val >= 24 && val <= 1766) {
-                this.currentFreq = Math.round(val * 1e6);
-                this.updateFreqDisplay();
-                API.sdr.setFrequency(this.currentFreq).catch(err => console.error('Tune failed:', err));
+                onApply(Math.round(val * 1e6));
             }
             close();
         };
@@ -545,10 +581,40 @@ const App = {
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     },
 
+    // VFO (listening) frequency input — available to ALL users.
+    // Opens when clicking the big frequency display box.
+    showFreqInput() {
+        const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
+        const currentMHz = (vfoHz / 1e6).toFixed(4);
+        this._openFreqInputDialog({
+            title: '🎧 ใส่ความถี่ที่จะฟัง (MHz)',
+            defaultValueMHz: currentMHz,
+            onApply: (freqHz) => this.setVFO(freqHz),
+        });
+    },
+
+    // Center frequency input — ADMIN ONLY.
+    // Moves the hardware center frequency (the whole waterfall shifts for
+    // everyone watching). Triggered by the CENTER button.
+    showCenterFreqInput() {
+        const currentMHz = (this.currentFreq / 1e6).toFixed(4);
+        this._openFreqInputDialog({
+            title: '📻 ใส่ความถี่กลาง / Center Frequency (MHz)',
+            defaultValueMHz: currentMHz,
+            onApply: (freqHz) => {
+                this.currentFreq = freqHz;
+                this._vfoOffsetHz = 0;  // VFO resets when center changes
+                this.updateFreqDisplay();
+                API.sdr.setFrequency(freqHz).catch(err => console.error('Center tune failed:', err));
+            },
+        });
+    },
+
     updateFreqDisplay() {
-        // === Shift waterfall back buffer when frequency changes ===
+        // === Shift waterfall back buffer when CENTER frequency changes ===
         // This makes existing waterfall lines scroll horizontally, so you
         // can see where signals are relative to the new center frequency.
+        // (VFO offset changes do NOT shift the buffer — only center does.)
         if (this._waterfallBackBuffer && this._lastWaterfallFreq !== undefined) {
             const deltaHz = this.currentFreq - this._lastWaterfallFreq;
             if (Math.abs(deltaHz) > 0) {
@@ -557,16 +623,20 @@ const App = {
         }
         this._lastWaterfallFreq = this.currentFreq;
 
+        // === Big display box: show VFO (listening) frequency ===
         const freqDisplay = document.getElementById('freq-display');
-        if (!freqDisplay) return;
-        const mhz = this.currentFreq / 1e6;
-        const parts = mhz.toFixed(4).split('.');
-        const intPart = parts[0].split('').join(' ');
-        const decPart = parts[1];
-        // Show all 4 decimal digits
-        freqDisplay.innerHTML = `${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>`;
+        if (freqDisplay) {
+            const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
+            const mhzVfo = vfoHz / 1e6;
+            const parts = mhzVfo.toFixed(4).split('.');
+            const intPart = parts[0].split('').join(' ');
+            const decPart = parts[1];
+            // Show all 4 decimal digits
+            freqDisplay.innerHTML = `${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>`;
+        }
 
-        // Update waterfall overlay - 4 decimal places
+        // === Waterfall overlay: show CENTER frequency + band edges ===
+        const mhz = this.currentFreq / 1e6;
         const freqCenter = document.getElementById('freq-center');
         if (freqCenter) freqCenter.textContent = `${mhz.toFixed(4)} MHz`;
 
@@ -582,35 +652,63 @@ const App = {
 
     async toggleRecording() {
         const btn = document.getElementById('btn-record');
-        // Guard: prevent manual record if not streaming
-        if (!this.isRecording && !this.isStreaming) {
-            alert('กรุณากด "▶ รับสัญญาณ" ก่อน แล้วค่อยกดบันทึก');
+        // Manual recording is now PER-USER via the live audio WebSocket.
+        // Each user records their OWN audio (at their VFO/mode/bandwidth),
+        // independent of everyone else.
+        // Guard: require live audio to be active (the WS carries the recorder)
+        if (!this.isRecording && !LiveAudio.isPlaying) {
+            alert('กรุณากด "🔈 ฟังสด" ก่อน แล้วค่อยกดบันทึก');
             return;
         }
-        try {
-            if (this.isRecording) {
-                const result = await API.sdr.recordStop();
-                // Always reset state after stop attempt (even if buffer was empty)
-                this.isRecording = false;
-                if (btn) btn.classList.remove('recording');
-                if (result.note) {
-                    console.log('⏹ Manual recording stopped (no audio captured)');
-                } else {
-                    console.log('⏹ Manual recording stopped');
-                }
-            } else {
-                await API.sdr.recordStart();
+        if (this.isRecording) {
+            // Stop → server saves the file and replies with record_ack
+            LiveAudio.stopRecording();
+            // State is finalized in _onRecordAck (below)
+        } else {
+            // Start → server checks recording-enabled toggle for role=user
+            LiveAudio.startRecording();
+            // Optimistically show recording state; _onRecordAck will correct
+            // it if the server rejects (e.g. recording disabled).
+            this.isRecording = true;
+            if (btn) btn.classList.add('recording');
+            console.log('⏺ Per-user manual recording requested');
+        }
+    },
+
+    /**
+     * Handle record_ack messages from the audio WebSocket.
+     * Possible statuses: recording | already_recording | saved | no_audio | disabled
+     */
+    _onRecordAck(obj) {
+        const btn = document.getElementById('btn-record');
+        switch (obj.status) {
+            case 'recording':
                 this.isRecording = true;
                 if (btn) btn.classList.add('recording');
-                console.log('⏺ Manual recording started');
-            }
-        } catch (err) {
-            // Force reset state — backend error means we're not recording
-            this.isRecording = false;
-            if (btn) btn.classList.remove('recording');
-            const msg = err.detail || err.message || err;
-            console.error('Recording toggle failed:', msg);
-            alert('ไม่สามารถบันทึกได้: ' + msg);
+                console.log('⏺ Server confirmed recording started');
+                break;
+            case 'already_recording':
+                this.isRecording = true;
+                if (btn) btn.classList.add('recording');
+                break;
+            case 'saved':
+                this.isRecording = false;
+                if (btn) btn.classList.remove('recording');
+                console.log('⏹ Recording saved:', obj.recording);
+                break;
+            case 'no_audio':
+                this.isRecording = false;
+                if (btn) btn.classList.remove('recording');
+                console.log('⏹ Recording stopped (no audio captured)');
+                break;
+            case 'disabled':
+                // The admin has disabled manual recording for regular users.
+                this.isRecording = false;
+                if (btn) btn.classList.remove('recording');
+                alert(obj.message || 'ระบบบันทึกถูกปิดไว้ กรุณาติดต่อผู้ดูแลระบบ');
+                break;
+            default:
+                console.warn('🎙️ Unknown record_ack status:', obj.status);
         }
     },
 
@@ -720,7 +818,20 @@ const App = {
             }
             if (data.frequency) {
                 this.currentFreq = data.frequency;
+                this._waterfallDirty = true;
                 this.updateFreqDisplay();
+            }
+            // Sync GLOBAL VFO offset from backend — but ONLY when NOT listening.
+            // When listening, each client owns its own per-listener VFO (set via
+            // the audio WS), so the global offset must not overwrite the local
+            // display. The audio WS "ready"/"vfo_ack" messages handle the
+            // per-listener offset in that case.
+            if (data.vfo_offset_hz !== undefined) {
+                const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying);
+                if (!listening) {
+                    this._vfoOffsetHz = data.vfo_offset_hz;
+                    this.updateFreqDisplay();
+                }
             }
             if (data.mode) {
                 this.currentMode = data.mode;
@@ -846,6 +957,37 @@ const App = {
         // Waterfall click → set VFO (listening frequency)
         canvas.style.cursor = 'crosshair';
         canvas.addEventListener('click', (e) => this._onWaterfallClick(e));
+
+        // Hover frequency tooltip (shown after 0.3s dwell)
+        this._hoverFreqEl = document.getElementById('waterfall-hover-freq');
+        this._hoverFreqTimer = null;
+        canvas.addEventListener('mousemove', (e) => {
+            if (!this._hoverFreqEl) return;
+            // Update tooltip position immediately
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            // Clamp within canvas bounds
+            const clampedX = Math.max(0, Math.min(x, rect.width));
+            this._hoverFreqEl.style.left = `${clampedX}px`;
+            this._hoverFreqEl.style.top = `${e.clientY - rect.top}px`;
+            // Hide immediately on move (before dwell complete)
+            this._hoverFreqEl.classList.remove('visible');
+            // Clear any pending timer
+            if (this._hoverFreqTimer) clearTimeout(this._hoverFreqTimer);
+            // Start dwell timer (0.3s) — show tooltip if mouse stays still
+            this._hoverFreqTimer = setTimeout(() => {
+                if (!this._hoverFreqEl) return;
+                const sr = this._sampleRate || 2048000;
+                const norm = clampedX / rect.width;  // 0..1
+                const freq = Math.round(this.currentFreq + (norm - 0.5) * sr);
+                this._hoverFreqEl.textContent = this._formatFreq(freq);
+                this._hoverFreqEl.classList.add('visible');
+            }, 300);
+        });
+        canvas.addEventListener('mouseleave', () => {
+            if (this._hoverFreqTimer) { clearTimeout(this._hoverFreqTimer); this._hoverFreqTimer = null; }
+            if (this._hoverFreqEl) this._hoverFreqEl.classList.remove('visible');
+        });
 
         // Start render loop
         this._waterfallRenderLoop();
@@ -1211,6 +1353,15 @@ const App = {
         return String(hz);
     },
 
+    // Format frequency for display in MHz with 3-4 decimal places.
+    // Used by the hover tooltip on the waterfall.
+    _formatFreq(hz) {
+        if (!hz || isNaN(hz)) return '---';
+        const mhz = hz / 1e6;
+        if (mhz >= 100) return mhz.toFixed(3) + ' MHz';
+        return mhz.toFixed(4) + ' MHz';
+    },
+
     // Waterfall speed: how many lines to push per spectrum frame
     get waterfallSpeed() {
         return parseInt(localStorage.getItem('waterfall_speed') || '1');
@@ -1402,6 +1553,17 @@ const App = {
         const source = rec.source || 'auto';
         const badgeClass = source === 'manual' ? 'manual' : 'auto';
         const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
+        // Show recorder's name for manual recordings (per-user)
+        const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
+        const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
+        // Provider badge (มีไอคอน) — แสดงว่าถอดด้วย STT provider อะไร
+        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', whisper: '🤫' };
+        let _providerBadge = '';
+        if (rec.stt_provider) {
+            const _icon = _PROVIDER_ICONS[rec.stt_provider] || '📝';
+            const _label = rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1);
+            _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}</span>`;
+        }
 
         return `
             <div class="feed-item" id="feed-${rec.id}">
@@ -1409,11 +1571,12 @@ const App = {
                     <span class="feed-time">${time}</span>
                     <div style="display:flex; gap:6px; align-items:center;">
                         <span class="source-badge ${badgeClass}" title="${source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ'}">${badgeLabel}</span>
+                        ${recorderLabel ? `<span style="font-size:0.65rem; color:var(--text-muted); white-space:nowrap;">${recorderLabel}</span>` : ''}
                         <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
                     </div>
                 </div>
                 <div class="feed-text">
-                    <div class="transcript" style="font-size:0.8rem;">${transcript}</div>
+                    <div class="transcript" style="font-size:0.8rem;">${transcript}${_providerBadge}</div>
                 </div>
                 ${audioUrl ? `<audio controls style="width:100%;height:28px;margin-top:4px;" src="${audioUrl}"></audio>` : ''}
             </div>

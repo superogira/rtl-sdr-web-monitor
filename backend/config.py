@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     SPEECHMATICS_LANGUAGE: str = "th"
     WHISPER_MODEL_SIZE: str = "base"
     WHISPER_LANGUAGE: str = "th"
+    # Azure Cognitive Services Speech
+    AZURE_SPEECH_KEY: str = ""
+    AZURE_SPEECH_REGION: str = "southeastasia"
+    AZURE_SPEECH_LANGUAGE: str = "th-TH"
 
     # Telegram Bot
     TELEGRAM_BOT_TOKEN: str = ""

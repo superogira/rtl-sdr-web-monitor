@@ -37,6 +37,7 @@ class Recording(Base):
     stt_error = Column(Text, nullable=True, comment="Error message if STT failed")
     status = Column(Enum(RecordingStatus), default=RecordingStatus.RECORDING, nullable=False)
     source = Column(String(20), default="auto", nullable=False, comment="auto or manual")
+    recorded_by_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, comment="User who recorded this (manual recordings)")
     is_unread = Column(Integer, default=1, nullable=False)
     audio_deleted = Column(Boolean, default=0, nullable=False, comment="Audio file deleted by retention policy (keep_transcript mode)")
     recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -44,6 +45,8 @@ class Recording(Base):
 
     # Relationship to keyword alerts
     alerts = relationship("TelegramAlert", back_populates="recording", lazy="selectin")
+    # Relationship to the user who recorded this (manual recordings)
+    recorded_by = relationship("User", foreign_keys=[recorded_by_user_id], lazy="selectin")
 
     def __repr__(self):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"
@@ -68,6 +71,9 @@ class Recording(Base):
             "stt_error": self.stt_error,
             "status": self.status.value if self.status else None,
             "source": self.source or "auto",
+            "recorded_by_user_id": self.recorded_by_user_id,
+            "recorded_by_username": (self.recorded_by.username if self.recorded_by else None),
+            "recorded_by_display_name": (self.recorded_by.display_name if self.recorded_by else None),
             "is_unread": self.is_unread,
             "recorded_at": self.recorded_at.isoformat() if self.recorded_at and self.recorded_at.tzinfo else (self.recorded_at.replace(tzinfo=timezone.utc).isoformat() if self.recorded_at else None),
             "created_at": self.created_at.isoformat() if self.created_at and self.created_at.tzinfo else (self.created_at.replace(tzinfo=timezone.utc).isoformat() if self.created_at else None),

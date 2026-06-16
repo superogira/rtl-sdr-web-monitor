@@ -68,6 +68,8 @@ def _run_migrations(conn):
         ("frequency_mhz", "FLOAT"),
         ("stt_provider", "VARCHAR(20)"),
         ("stt_error", "TEXT"),
+        ("audio_deleted", "BOOLEAN DEFAULT 0 NOT NULL"),
+        ("recorded_by_user_id", "VARCHAR(36)"),
     ]
 
     for col_name, col_type in migrations:
@@ -94,6 +96,7 @@ def _seed_app_settings(conn):
         "stt_operating_point": "standard",
         "stt_diarization": "none",
         "stt_enable_entities": "false",
+        "manual_recording_enabled": "true",
     }
 
     from datetime import datetime, timezone

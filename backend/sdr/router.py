@@ -150,7 +150,8 @@ async def set_vfo(
 
     Available to all users (admin + user). Computes offset from the current
     SDR center frequency and shifts the IQ in software (OpenWebRX-style) so
-    the waterfall doesn't move. The offset must be within ±0.4*sample_rate.
+    the waterfall doesn't move. The offset must stay within
+    ±(vfo_margin_ratio)*sample_rate (default 0.4, configurable by admin).
     """
     if not sdr_manager.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
@@ -158,6 +159,58 @@ async def set_vfo(
         return sdr_manager.set_vfo_frequency(req.frequency)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class VFOMarginRequest(BaseModel):
+    ratio: float  # 0.40–0.49
+
+
+@router.post("/vfo-margin")
+async def set_vfo_margin(
+    req: VFOMarginRequest,
+    current_user: User = Depends(require_admin),
+):
+    """Set the VFO passband margin ratio (admin only).
+
+    Controls how far the VFO can tune from center:
+      max_offset = sample_rate * ratio
+    Accepts 0.40–0.49. Lower = safer (less aliasing near band edge),
+    higher = wider tunable range.
+    """
+    try:
+        return await sdr_manager.set_vfo_margin_ratio(req.ratio)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class MaxListenersRequest(BaseModel):
+    max_listeners: int  # 1–128
+
+
+@router.get("/max-listeners")
+async def get_max_listeners(current_user: User = Depends(require_admin)):
+    """Get the max concurrent listeners setting (admin only)."""
+    from backend.audio.broadcaster import audio_broadcaster
+    return {
+        "max_listeners": audio_broadcaster.max_listeners,
+        "current_listeners": audio_broadcaster.listener_count,
+        "hard_cap": sdr_manager._HARD_CAP_LISTENERS,
+    }
+
+
+@router.put("/max-listeners")
+async def set_max_listeners(
+    req: MaxListenersRequest,
+    current_user: User = Depends(require_admin),
+):
+    """Set the max concurrent listeners (admin only).
+
+    Controls how many users can listen to live audio simultaneously. When the
+    cap is reached, new listeners receive a "full" message. Accepts 1–128.
+    Default is 8; scale up on powerful servers (each listener runs a demod
+    thread).
+    """
+    return await sdr_manager.set_max_listeners(req.max_listeners)
 
 
 @router.post("/sample-rate")
@@ -244,15 +297,15 @@ async def set_freq_correction(
 
 
 @router.get("/recording-config")
-async def get_recording_config(current_user: User = Depends(get_current_user)):
-    """Get global recording config (shared by all users, persisted across restarts)."""
+async def get_recording_config(current_user: User = Depends(require_admin)):
+    """Get global recording config (admin only; config affects all users)."""
     return sdr_manager.get_recording_config()
 
 
 @router.post("/recording-config")
 async def set_recording_config(
     req: RecordingConfigRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Update global recording config (persisted across restarts)."""
     try:
@@ -269,6 +322,39 @@ async def set_recording_config(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class RecordingEnabledRequest(BaseModel):
+    """Toggle to enable/disable manual recording for role=user users."""
+    enabled: bool
+
+
+@router.get("/recording-enabled")
+async def get_recording_enabled(current_user: User = Depends(get_current_user)):
+    """Check if manual recording is enabled (admins always have access).
+
+    Returns {enabled: true, admin_bypass: true}.
+    """
+    if current_user.is_admin:
+        return {"enabled": True, "admin_bypass": True}
+    raw = await get_setting("manual_recording_enabled", "true")
+    return {"enabled": str(raw).lower() == "true", "admin_bypass": False}
+
+
+@router.post("/recording-enabled")
+async def set_recording_enabled(
+    req: RecordingEnabledRequest,
+    current_user: User = Depends(require_admin),
+):
+    """Enable or disable manual recording for regular (role=user) users.
+
+    Admins are never affected by this toggle — they can always record.
+    """
+    await set_setting("manual_recording_enabled", "true" if req.enabled else "false")
+    logger.info(
+        f"Manual recording for role=user set to {req.enabled} by {current_user.username}"
+    )
+    return {"enabled": req.enabled}
 
 
 @router.post("/stream/start")
@@ -613,19 +699,22 @@ async def transcribe_recording(
 
 
 class STTSettingsRequest(BaseModel):
-    provider: Optional[str] = None  # "speechmatics" | "whisper"
+    provider: Optional[str] = None  # "speechmatics" | "whisper" | "azure"
     api_key: Optional[str] = None  # Speechmatics API key
-    language: Optional[str] = None  # "th" | "en"
+    language: Optional[str] = None  # "th" | "en" | "auto"
     auto_transcribe: Optional[bool] = None
     # Speechmatics-specific options
     operating_point: Optional[str] = None  # "standard" | "enhanced"
     diarization: Optional[str] = None  # "none" | "speaker" | "channel"
     enable_entities: Optional[bool] = None
+    # Azure-specific options
+    azure_key: Optional[str] = None  # Azure Speech resource key
+    azure_region: Optional[str] = None  # e.g. "southeastasia"
 
 
 @settings_router.get("/stt")
-async def get_stt_settings(current_user: User = Depends(get_current_user)):
-    """Get global STT settings (API key masked)."""
+async def get_stt_settings(current_user: User = Depends(require_admin)):
+    """Get global STT settings (admin only; config affects all users)."""
     cfg = await _get_stt_config()
     return {
         "provider": cfg["provider"],
@@ -636,21 +725,25 @@ async def get_stt_settings(current_user: User = Depends(get_current_user)):
         "operating_point": cfg["operating_point"],
         "diarization": cfg["diarization"],
         "enable_entities": cfg["enable_entities"],
+        "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
+        "azure_key_set": bool(cfg.get("azure_key")),
+        "azure_region": cfg.get("azure_region", "southeastasia"),
     }
 
 
 @settings_router.put("/stt")
 async def update_stt_settings(
     req: STTSettingsRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Update global STT settings.
+    """Update global STT settings (admin only; config affects all users).
 
-    Note: if `api_key` is empty or a masked placeholder, the existing key is kept.
+    Note: if `api_key`/`azure_key` is empty or a masked placeholder, the
+    existing key is kept.
     """
     if req.provider is not None:
-        if req.provider not in ("speechmatics", "whisper"):
-            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics' or 'whisper'")
+        if req.provider not in ("speechmatics", "whisper", "azure"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'whisper', or 'azure'")
         await set_setting("stt_provider", req.provider)
 
     # Only update API key if a real (non-empty, non-masked) value is provided
@@ -679,6 +772,13 @@ async def update_stt_settings(
     if req.enable_entities is not None:
         await set_setting("stt_enable_entities", "true" if req.enable_entities else "false")
 
+    # Azure-specific options
+    if req.azure_key is not None and req.azure_key.strip() and "..." not in req.azure_key:
+        await set_setting("stt_azure_key", req.azure_key.strip())
+
+    if req.azure_region is not None and req.azure_region.strip():
+        await set_setting("stt_azure_region", req.azure_region.strip())
+
     # Return updated config
     cfg = await _get_stt_config()
     return {
@@ -691,4 +791,7 @@ async def update_stt_settings(
         "operating_point": cfg["operating_point"],
         "diarization": cfg["diarization"],
         "enable_entities": cfg["enable_entities"],
+        "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
+        "azure_key_set": bool(cfg.get("azure_key")),
+        "azure_region": cfg.get("azure_region", "southeastasia"),
     }

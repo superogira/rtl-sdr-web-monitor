@@ -315,6 +315,40 @@ a:hover {
     box-shadow: 0 0 6px rgba(234, 179, 8, 0.3);
 }
 
+/* === Hover Frequency Tooltip === */
+.waterfall-hover-freq {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: translate(-50%, -135%);
+    background: rgba(0, 0, 0, 0.8);
+    color: #e2e8f0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+    z-index: 3;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+}
+.waterfall-hover-freq.visible {
+    opacity: 1;
+}
+.waterfall-hover-freq::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid rgba(0, 0, 0, 0.8);
+}
+
 /* === Live Audio Listen Button === */
 .btn-listen {
     background: var(--bg-card);
@@ -997,6 +1031,18 @@ a:hover {
     background: var(--accent-blue)30;
     color: var(--accent-blue);
     border: 1px solid var(--accent-blue)60;
+}
+
+/* === Center Frequency Button (admin only) === */
+/* Distinct red-tinted style so admins recognize it as the hardware
+   center-frequency control (affects everyone), unlike VFO tuning. */
+#btn-center-freq {
+    color: var(--accent-orange) !important;
+    border: 1px solid transparent;
+}
+#btn-center-freq:hover {
+    background: var(--accent-orange)20 !important;
+    border-color: var(--accent-orange)60 !important;
 }
 
 /* === Audio Player === */
