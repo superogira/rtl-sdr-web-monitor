@@ -21,6 +21,7 @@ from backend.audio.demod import (
 from backend.audio.broadcaster import audio_broadcaster
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
+from backend.models.telegram_alert import TelegramAlert
 from backend.services.app_settings import get_setting
 from backend.services.stt import transcribe, _get_stt_config
 from sqlalchemy import select, func, delete
@@ -351,7 +352,7 @@ class SDRManager:
             self._retention_action = retention_action
         self._save_persisted_settings()
         # หลังเปลี่ยน config ให้ enforce ทันที (ผู้ใช้อาจลด limit)
-        asyncio.create_task(self._enforce_retention())
+        self._spawn_enforce_retention()
         return self.get_recording_config()
 
     def get_recording_config(self) -> dict:
@@ -706,8 +707,8 @@ class SDRManager:
             self._auto_start_time = None
             self._auto_silence_start = None
 
-        # === Enforce retention policy (fire-and-forget) ===
-        asyncio.create_task(self._enforce_retention())
+        # === Enforce retention policy (fire-and-forget, safe wrapper) ===
+        self._spawn_enforce_retention()
 
         # Notify callbacks
         for cb in self._callbacks:
@@ -762,19 +763,61 @@ class SDRManager:
         except Exception as e:
             logger.warning(f"Auto-transcribe check failed: {e}")
 
-            # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Retention policy enforcement
     # ------------------------------------------------------------------
+    def _spawn_enforce_retention(self) -> None:
+        """Spawn retention enforcement as a fire-and-forget task with error logging.
+
+        Directly creating asyncio.create_task(self._enforce_retention()) silently
+        swallows exceptions (Python logs only an "exception was never retrieved"
+        warning). This wrapper guarantees that errors are logged.
+        """
+        async def _safe_run():
+            try:
+                await self._enforce_retention()
+            except Exception as e:
+                logger.error(f"Retention enforcement crashed: {e}", exc_info=True)
+
+        try:
+            asyncio.create_task(_safe_run())
+        except RuntimeError:
+            # No running event loop (e.g. called from sync context / CLI)
+            logger.warning("Retention enforcement skipped: no running event loop")
+
+    @staticmethod
+    def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+        """Ensure a datetime is timezone-aware (assume UTC if naive)."""
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
     async def _enforce_retention(self) -> None:
-        """Enforce retention policy: delete old audio files / records as needed."""
+        """Enforce retention policy: delete old audio files / records as needed.
+
+        Counting rules:
+        - delete_record: counts ALL records (kept rows <= limit)
+        - keep_transcript: counts only records that still have audio
+          (audio_deleted=0); transcript-only rows are archived and not counted
+          so the limit applies to playable recordings.
+        """
         max_count = self._retention_max_count
         max_dur = self._retention_max_total_duration_sec
         max_age = self._retention_max_age_days
         action = self._retention_action
 
+        logger.info(
+            f"Retention enforcement START | max_count={max_count}, "
+            f"max_dur={max_dur}s, max_age={max_age}d, action={action}"
+        )
+
         if max_count <= 0 and max_dur <= 0 and max_age <= 0:
+            logger.info("Retention: all limits disabled (0), nothing to do")
             return
         if action not in ("keep_transcript", "delete_record"):
+            logger.warning(f"Retention: invalid action '{action}', aborting")
             return
 
         try:
@@ -783,24 +826,36 @@ class SDRManager:
                     select(Recording).order_by(Recording.recorded_at.asc())
                 )
                 all_recs = result.scalars().all()
+                logger.info(f"Retention: fetched {len(all_recs)} record(s) from DB")
                 if not all_recs:
+                    logger.info("Retention: no records, nothing to do")
                     return
 
                 now = datetime.now(timezone.utc)
-                to_remove = []
+                to_remove: list = []
+                to_remove_ids: set = set()
 
+                # --- max_age: remove records older than cutoff ---
                 if max_age > 0:
                     from datetime import timedelta
                     cutoff = now - timedelta(days=max_age)
                     for rec in all_recs:
-                        if rec.recorded_at and rec.recorded_at < cutoff:
-                            if rec not in to_remove:
+                        rec_time = self._ensure_aware(rec.recorded_at)
+                        if rec_time is not None and rec_time < cutoff:
+                            if id(rec) not in to_remove_ids:
                                 to_remove.append(rec)
+                                to_remove_ids.add(id(rec))
 
+                # --- max_count / max_dur: keep newest up to limit ---
+                # For keep_transcript, only count records with audio (audio_deleted=0)
                 kept_ids = set()
                 count = 0
                 total_dur = 0.0
-                for rec in reversed(all_recs):
+                for rec in reversed(all_recs):  # newest first
+                    if action == "keep_transcript" and getattr(rec, "audio_deleted", 0):
+                        # Transcript-only archive row, don't count toward limit
+                        kept_ids.add(rec.id)
+                        continue
                     new_count = count + 1
                     new_dur = total_dur + (rec.duration or 0)
                     over = (max_count > 0 and new_count > max_count) or (max_dur > 0 and new_dur > max_dur)
@@ -809,35 +864,50 @@ class SDRManager:
                     count, total_dur = new_count, new_dur
                     kept_ids.add(rec.id)
 
+                logger.info(
+                    f"Retention: keeping {len(kept_ids)} record(s) "
+                    f"(counted {count}, total_dur={total_dur:.1f}s)"
+                )
+
                 for rec in all_recs:
-                    if rec.id not in kept_ids and rec not in to_remove:
+                    if rec.id not in kept_ids and id(rec) not in to_remove_ids:
                         to_remove.append(rec)
+                        to_remove_ids.add(id(rec))
 
                 if not to_remove:
+                    logger.info("Retention: nothing to remove")
                     return
 
-                logger.info(f"Retention: removing {len(to_remove)} recording(s) "
-                            f"(action={action}, max_count={max_count}, max_dur={max_dur}s, max_age={max_age}d)")
+                logger.info(
+                    f"Retention: removing {len(to_remove)} record(s) "
+                    f"(action={action})"
+                )
 
                 for rec in to_remove:
+                    # Delete audio file from disk
                     if rec.audio_file_path:
                         try:
                             fpath = Path(rec.audio_file_path)
                             if fpath.exists():
                                 fpath.unlink()
                         except Exception as e:
-                            logger.warning(f"Failed to delete audio file: {e}")
+                            logger.warning(f"Failed to delete audio file {rec.audio_file_path}: {e}")
                     if action == "delete_record":
+                        # Delete dependent telegram_alerts first (FK constraint)
+                        await session.execute(
+                            delete(TelegramAlert).where(TelegramAlert.recording_id == rec.id)
+                        )
                         await session.delete(rec)
-                    else:
+                    else:  # keep_transcript
                         rec.audio_file_path = None
                         rec.audio_file_name = None
                         rec.audio_deleted = 1
 
                 await session.commit()
-                logger.info(f"Retention complete ({len(to_remove)} affected)")
+                logger.info(f"Retention enforcement COMPLETE ({len(to_remove)} affected)")
         except Exception as e:
-            logger.error(f"Retention failed: {e}", exc_info=True)
+            logger.error(f"Retention enforcement FAILED: {e}", exc_info=True)
+            raise
 
 
 # Global SDR manager instance
