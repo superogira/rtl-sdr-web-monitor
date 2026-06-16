@@ -454,7 +454,9 @@ async def serve_recordings():
 async def serve_settings():
     # Settings HTML is served to all authenticated users; access control is
     # enforced by:
-    #   1) Frontend: settings.html redirects non-admins to /dashboard on init.
+    #   1) Frontend: settings.html shows admin-only tabs (SDR, Recording, STT,
+    #      Telegram, Keywords, Users) only to admins. Non-admin users see the
+    #      General (Timezone) and Display (Waterfall) tabs only.
     #   2) API: all config-mutating endpoints under /api/settings/* and
     #      /api/sdr/recording-config require admin (require_admin dependency).
     return FileResponse(str(frontend_dir / "pages" / "settings.html"))
