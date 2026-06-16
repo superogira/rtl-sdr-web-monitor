@@ -165,9 +165,6 @@
                         <input type="number" id="rec-max" value="300">
                     </div>
                 </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึก</button>
-                </div>
 
                 <h2 style="margin-top:2rem;">🗂️ การเก็บรักษา (Retention)</h2>
                 <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
@@ -193,6 +190,9 @@
                         <option value="keep_transcript">เก็บข้อความถอดเสียงไว้ (ลบเฉพาะไฟล์เสียง)</option>
                         <option value="delete_record">ลบ record ทั้งหมด (ไฟล์เสียง + ข้อมูล)</option>
                     </select>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึก</button>
                 </div>
             </div>
         </div>
