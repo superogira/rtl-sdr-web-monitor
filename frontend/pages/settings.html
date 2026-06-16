@@ -278,6 +278,7 @@
                 <div class="form-group">
                     <label>Provider</label>
                     <select id="stt-provider">
+                        <option value="whisper_local">Whisper Local (API)</option>
                         <option value="speechmatics">Speechmatics API (Cloud)</option>
                         <option value="whisper">Whisper (Local)</option>
                         <option value="azure">Azure Cognitive Services Speech</option>
@@ -300,7 +301,48 @@
                         </select>
                     </div>
                 </div>
-                <div class="form-group">
+                <!-- Whisper Local-specific fields (shown only when provider=whisper_local) -->
+                <div id="stt-whisper-local-section" style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
+                    <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Whisper Local API Settings</h3>
+                    <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:8px;">
+                        เชื่อมต่อกับ faster-whisper-server บนเครือข่ายท้องถิ่น (Gradio API)
+                    </p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>IP Address / Host</label>
+                            <input type="text" id="stt-whisper-local-host" placeholder="192.168.1.201" value="192.168.1.201">
+                        </div>
+                        <div class="form-group">
+                            <label>Port</label>
+                            <input type="number" id="stt-whisper-local-port" placeholder="8100" value="8100">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" id="stt-whisper-local-model" placeholder="Systran/faster-whisper-small" value="Systran/faster-whisper-small">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                                เช่น Systran/faster-whisper-small, Systran/faster-whisper-medium
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Task</label>
+                            <select id="stt-whisper-local-task">
+                                <option value="transcribe">transcribe (ถอดเสียงเป็นภาษาต้นฉบับ)</option>
+                                <option value="translate">translate (แปลเป็นภาษาอังกฤษ)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Temperature (0.0–1.0)</label>
+                        <input type="number" id="stt-whisper-local-temperature" placeholder="0.0" value="0.0" step="0.1" min="0" max="1">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            0.0 = แม่นยำที่สุด (greedy), ค่าที่สูงขึ้น = สร้าสรรค์มากขึ้น (sampling)
+                        </p>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
                     <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Speechmatics API Settings</h3>
                     <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
                     <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
@@ -975,21 +1017,36 @@
                 }
                 if (elAzRegion && cfg.azure_region) elAzRegion.value = cfg.azure_region;
 
-                this.toggleAzureSection();
-                if (elProvider && !elProvider._azureListener) {
-                    elProvider._azureListener = true;
-                    elProvider.addEventListener('change', () => this.toggleAzureSection());
+                // Whisper Local-specific
+                const elWlHost = document.getElementById('stt-whisper-local-host');
+                const elWlPort = document.getElementById('stt-whisper-local-port');
+                const elWlModel = document.getElementById('stt-whisper-local-model');
+                const elWlTask = document.getElementById('stt-whisper-local-task');
+                const elWlTemp = document.getElementById('stt-whisper-local-temperature');
+                if (elWlHost && cfg.whisper_local_host) elWlHost.value = cfg.whisper_local_host;
+                if (elWlPort && cfg.whisper_local_port) elWlPort.value = cfg.whisper_local_port;
+                if (elWlModel && cfg.whisper_local_model) elWlModel.value = cfg.whisper_local_model;
+                if (elWlTask && cfg.whisper_local_task) elWlTask.value = cfg.whisper_local_task;
+                if (elWlTemp && cfg.whisper_local_temperature !== undefined) elWlTemp.value = cfg.whisper_local_temperature;
+
+                this.toggleProviderSections();
+                if (elProvider && !elProvider._providerListener) {
+                    elProvider._providerListener = true;
+                    elProvider.addEventListener('change', () => this.toggleProviderSections());
                 }
             } catch (e) {
                 console.warn('Could not load STT settings:', e);
             }
         },
 
-        toggleAzureSection() {
+        toggleProviderSections() {
             const provider = document.getElementById('stt-provider');
+            if (!provider) return;
+            const val = provider.value;
             const azureSec = document.getElementById('stt-azure-section');
-            if (!provider || !azureSec) return;
-            azureSec.style.display = (provider.value === 'azure') ? '' : 'none';
+            const wlSec = document.getElementById('stt-whisper-local-section');
+            if (azureSec) azureSec.style.display = (val === 'azure') ? '' : 'none';
+            if (wlSec) wlSec.style.display = (val === 'whisper_local') ? '' : 'none';
         },
 
         async saveSTT() {
@@ -1015,6 +1072,18 @@
             if (azRegionInput && azRegionInput.value.trim()) {
                 payload.azure_region = azRegionInput.value.trim();
             }
+
+            // Whisper Local-specific
+            const wlHostInput = document.getElementById('stt-whisper-local-host');
+            const wlPortInput = document.getElementById('stt-whisper-local-port');
+            const wlModelInput = document.getElementById('stt-whisper-local-model');
+            const wlTaskInput = document.getElementById('stt-whisper-local-task');
+            const wlTempInput = document.getElementById('stt-whisper-local-temperature');
+            if (wlHostInput && wlHostInput.value.trim()) payload.whisper_local_host = wlHostInput.value.trim();
+            if (wlPortInput && wlPortInput.value) payload.whisper_local_port = parseInt(wlPortInput.value);
+            if (wlModelInput && wlModelInput.value.trim()) payload.whisper_local_model = wlModelInput.value.trim();
+            if (wlTaskInput && wlTaskInput.value) payload.whisper_local_task = wlTaskInput.value;
+            if (wlTempInput && wlTempInput.value !== '') payload.whisper_local_temperature = parseFloat(wlTempInput.value);
 
             try {
                 const result = await API.settings.updateSTT(payload);

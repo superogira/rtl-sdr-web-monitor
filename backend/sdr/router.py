@@ -715,6 +715,12 @@ class STTSettingsRequest(BaseModel):
     # Azure-specific options
     azure_key: Optional[str] = None  # Azure Speech resource key
     azure_region: Optional[str] = None  # e.g. "southeastasia"
+    # Whisper Local (faster-whisper-server / Gradio API) options
+    whisper_local_host: Optional[str] = None  # e.g. "192.168.1.201"
+    whisper_local_port: Optional[int] = None  # e.g. 8100
+    whisper_local_model: Optional[str] = None  # e.g. "Systran/faster-whisper-small"
+    whisper_local_task: Optional[str] = None  # "transcribe" | "translate"
+    whisper_local_temperature: Optional[float] = None  # 0.0–1.0
 
 
 @settings_router.get("/stt")
@@ -733,6 +739,11 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
         "azure_key_set": bool(cfg.get("azure_key")),
         "azure_region": cfg.get("azure_region", "southeastasia"),
+        "whisper_local_host": cfg.get("whisper_local_host", ""),
+        "whisper_local_port": cfg.get("whisper_local_port", 8100),
+        "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
+        "whisper_local_task": cfg.get("whisper_local_task", "transcribe"),
+        "whisper_local_temperature": cfg.get("whisper_local_temperature", 0.0),
     }
 
 
@@ -747,8 +758,8 @@ async def update_stt_settings(
     existing key is kept.
     """
     if req.provider is not None:
-        if req.provider not in ("speechmatics", "whisper", "azure"):
-            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'whisper', or 'azure'")
+        if req.provider not in ("speechmatics", "whisper", "azure", "whisper_local"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'whisper', 'azure', or 'whisper_local'")
         await set_setting("stt_provider", req.provider)
 
     # Only update API key if a real (non-empty, non-masked) value is provided
@@ -784,6 +795,23 @@ async def update_stt_settings(
     if req.azure_region is not None and req.azure_region.strip():
         await set_setting("stt_azure_region", req.azure_region.strip())
 
+    # Whisper Local-specific options
+    if req.whisper_local_host is not None:
+        await set_setting("stt_whisper_local_host", req.whisper_local_host.strip())
+    if req.whisper_local_port is not None:
+        await set_setting("stt_whisper_local_port", str(int(req.whisper_local_port)))
+    if req.whisper_local_model is not None and req.whisper_local_model.strip():
+        await set_setting("stt_whisper_local_model", req.whisper_local_model.strip())
+    if req.whisper_local_task is not None:
+        if req.whisper_local_task not in ("transcribe", "translate"):
+            raise HTTPException(status_code=400, detail="whisper_local_task must be 'transcribe' or 'translate'")
+        await set_setting("stt_whisper_local_task", req.whisper_local_task)
+    if req.whisper_local_temperature is not None:
+        t = float(req.whisper_local_temperature)
+        if t < 0.0 or t > 1.0:
+            raise HTTPException(status_code=400, detail="whisper_local_temperature must be between 0.0 and 1.0")
+        await set_setting("stt_whisper_local_temperature", str(t))
+
     # Return updated config
     cfg = await _get_stt_config()
     return {
@@ -799,6 +827,11 @@ async def update_stt_settings(
         "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
         "azure_key_set": bool(cfg.get("azure_key")),
         "azure_region": cfg.get("azure_region", "southeastasia"),
+        "whisper_local_host": cfg.get("whisper_local_host", ""),
+        "whisper_local_port": cfg.get("whisper_local_port", 8100),
+        "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
+        "whisper_local_task": cfg.get("whisper_local_task", "transcribe"),
+        "whisper_local_temperature": cfg.get("whisper_local_temperature", 0.0),
     }
 
 

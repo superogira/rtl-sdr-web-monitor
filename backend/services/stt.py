@@ -41,6 +41,12 @@ async def _get_stt_config() -> dict:
     # Azure-specific settings
     azure_key = await get_setting("stt_azure_key", settings.AZURE_SPEECH_KEY or "")
     azure_region = await get_setting("stt_azure_region", settings.AZURE_SPEECH_REGION or "southeastasia")
+    # Whisper Local (faster-whisper-server / Gradio API) settings
+    whisper_local_host = await get_setting("stt_whisper_local_host", settings.WHISPER_LOCAL_HOST or "")
+    whisper_local_port = await get_setting("stt_whisper_local_port", str(settings.WHISPER_LOCAL_PORT or 8100))
+    whisper_local_model = await get_setting("stt_whisper_local_model", settings.WHISPER_LOCAL_MODEL or "Systran/faster-whisper-small")
+    whisper_local_task = await get_setting("stt_whisper_local_task", settings.WHISPER_LOCAL_TASK or "transcribe")
+    whisper_local_temperature = await get_setting("stt_whisper_local_temperature", str(settings.WHISPER_LOCAL_TEMPERATURE if settings.WHISPER_LOCAL_TEMPERATURE is not None else 0.0))
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",
@@ -51,7 +57,20 @@ async def _get_stt_config() -> dict:
         "enable_entities": (enable_entities_raw or "false").lower() == "true",
         "azure_key": azure_key or "",
         "azure_region": azure_region or "southeastasia",
+        "whisper_local_host": whisper_local_host or "",
+        "whisper_local_port": int(whisper_local_port) if str(whisper_local_port).isdigit() else 8100,
+        "whisper_local_model": whisper_local_model or "Systran/faster-whisper-small",
+        "whisper_local_task": whisper_local_task if whisper_local_task in ("transcribe", "translate") else "transcribe",
+        "whisper_local_temperature": _parse_float(whisper_local_temperature, 0.0),
     }
+
+
+def _parse_float(value, default: float) -> float:
+    """Safely parse a float from a string, returning default on failure."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 async def transcribe_speechmatics(
@@ -334,6 +353,81 @@ async def transcribe_azure(
         return {"text": "", "error": str(e)}
 
 
+async def transcribe_whisper_local(
+    audio_path: str,
+    language: str = None,
+    host: str = None,
+    port: int = None,
+    model: str = None,
+    task: str = None,
+    temperature: float = None,
+) -> dict:
+    """Transcribe audio using a local Whisper server (faster-whisper-server
+    exposed via Gradio API).
+
+    The server is a Gradio app whose `/predict` endpoint takes:
+        (file_path, model, task, temperature, stream) -> str
+    We use `gradio_client` which speaks the Gradio SSE protocol.
+
+    Args:
+        audio_path: Path to a WAV file on disk.
+        language: Unused for this provider (kept for API compatibility) —
+                  the model auto-detects, and `task` controls transcribe/translate.
+        host: Override server host (default: from DB/settings).
+        port: Override server port (default: from DB/settings).
+        model: Override model name (default: from DB/settings).
+        task: "transcribe" | "translate" (default: from DB/settings).
+        temperature: Sampling temperature 0.0–1.0 (default: from DB/settings).
+
+    Returns:
+        dict: {"text": str, "error": str|None}
+    """
+    cfg = await _get_stt_config()
+    srv_host = (host or cfg.get("whisper_local_host") or "").strip()
+    srv_port = port or cfg.get("whisper_local_port") or 8100
+    srv_model = model or cfg.get("whisper_local_model") or "Systran/faster-whisper-small"
+    srv_task = task or cfg.get("whisper_local_task") or "transcribe"
+    srv_temp = temperature if temperature is not None else cfg.get("whisper_local_temperature", 0.0)
+
+    if not srv_host:
+        msg = "Whisper Local host not configured"
+        logger.error(msg)
+        return {"text": "", "error": msg}
+
+    try:
+        from gradio_client import Client, handle_file
+    except ImportError:
+        msg = "gradio_client not installed. Install with: pip install gradio_client"
+        logger.error(msg)
+        return {"text": "", "error": msg}
+
+    def _run() -> str:
+        """Blocking call to the Gradio Whisper server — run in executor."""
+        client = Client(f"http://{srv_host}:{srv_port}", verbose=False)
+        result = client.predict(
+            file_path=handle_file(audio_path),
+            model=srv_model,
+            task=srv_task,
+            temperature=float(srv_temp),
+            stream=False,
+            api_name="/predict",
+        )
+        # `result` is a single string (the transcript).
+        return (result or "").strip()
+
+    try:
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _run)
+        logger.info(
+            f"Whisper Local transcript: {len(text)} chars "
+            f"(host={srv_host}:{srv_port}, model={srv_model}, task={srv_task})"
+        )
+        return {"text": text, "error": None}
+    except Exception as e:
+        logger.error(f"Whisper Local transcription failed: {e}")
+        return {"text": "", "error": str(e)}
+
+
 async def transcribe(audio_path: str, language: str = None, api_key: str = None) -> dict:
     """Transcribe audio using the configured STT provider.
 
@@ -361,6 +455,10 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
             azure_key=cfg.get("azure_key"),
             azure_region=cfg.get("azure_region"),
         )
+        text = result["text"]
+        error = result.get("error")
+    elif provider == "whisper_local":
+        result = await transcribe_whisper_local(audio_path, language=lang)
         text = result["text"]
         error = result.get("error")
     else:

@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     SPEECHMATICS_LANGUAGE: str = "th"
     WHISPER_MODEL_SIZE: str = "base"
     WHISPER_LANGUAGE: str = "th"
+    # Whisper Local (faster-whisper-server / Gradio API)
+    WHISPER_LOCAL_HOST: str = "192.168.1.201"
+    WHISPER_LOCAL_PORT: int = 8100
+    WHISPER_LOCAL_MODEL: str = "Systran/faster-whisper-small"
+    WHISPER_LOCAL_TASK: str = "transcribe"  # transcribe | translate
+    WHISPER_LOCAL_TEMPERATURE: float = 0.0
     # Azure Cognitive Services Speech
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_REGION: str = "southeastasia"
