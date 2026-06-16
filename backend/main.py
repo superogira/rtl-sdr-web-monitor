@@ -10,7 +10,12 @@ from fastapi.responses import FileResponse
 from backend.config import settings
 from backend.database import init_db
 from backend.auth.router import router as auth_router
-from backend.sdr.router import router as sdr_router, recordings_router, settings_router
+from backend.sdr.router import (
+    router as sdr_router,
+    recordings_router,
+    settings_router,
+    devices_router,
+)
 
 
 @asynccontextmanager
@@ -34,6 +39,9 @@ async def lifespan(app: FastAPI):
     await sdr_manager.load_vfo_margin_ratio()
     # Load configurable max concurrent listeners from app settings
     await sdr_manager.load_max_listeners()
+    # Load the active SDR device's config from the registry (overrides the
+    # legacy sdr_settings.json connection values if an active device exists).
+    await sdr_manager.load_active_device()
 
     # Auto-start streaming in background (24/7 operation)
     if settings.AUTO_START_STREAMING:
@@ -95,6 +103,7 @@ app.include_router(auth_router)
 app.include_router(sdr_router)
 app.include_router(recordings_router)
 app.include_router(settings_router)
+app.include_router(devices_router)
 
 
 # === Health Check ===

@@ -18,7 +18,9 @@ from backend.config import settings
 from backend.services.stt import transcribe, _get_stt_config
 from backend.services.app_settings import get_setting, set_setting
 from backend.models.app_setting import mask_value
+from backend.models.sdr_device import SdrDevice, DEVICE_TYPES, default_config_for_type
 from sqlalchemy import select, func, or_
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,9 @@ recordings_router = APIRouter(prefix="/api/recordings", tags=["Recordings"])
 
 # Router for global app settings (STT config, etc.)
 settings_router = APIRouter(prefix="/api/settings", tags=["App Settings"])
+
+# Router for SDR device management (registry + active device)
+devices_router = APIRouter(prefix="/api/sdr/devices", tags=["SDR Devices"])
 
 
 # === Schemas ===
@@ -795,3 +800,192 @@ async def update_stt_settings(
         "azure_key_set": bool(cfg.get("azure_key")),
         "azure_region": cfg.get("azure_region", "southeastasia"),
     }
+
+
+# === SDR Device management endpoints (registry + active device) ===
+# All endpoints require admin because device config affects the global SDR
+# connection used by everyone.
+
+@devices_router.get("/types")
+async def list_device_types(current_user: User = Depends(require_admin)):
+    """List supported device/connection types and their config field schemas.
+
+    The frontend wizard uses this to render the correct configuration form
+    for the selected device type.
+    """
+    # Convert dict → array of {value, label, description} for the frontend wizard
+    types_list = [
+        {"value": key, "label": val.get("label", key), "description": val.get("description", "")}
+        for key, val in DEVICE_TYPES.items()
+    ]
+    return {"types": types_list}
+
+
+@devices_router.get("")
+async def list_devices(
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """List all configured SDR devices (registry)."""
+    result = await db.execute(select(SdrDevice).order_by(SdrDevice.created_at.asc()))
+    devices = result.scalars().all()
+    return {"items": [d.to_dict() for d in devices]}
+
+
+class DeviceCreateRequest(BaseModel):
+    name: str
+    type: str = "rtl_tcp"
+    config: Optional[dict] = None
+    activate: Optional[bool] = False  # set as active immediately
+
+
+@devices_router.post("")
+async def create_device(
+    req: DeviceCreateRequest,
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """Create a new SDR device (registry entry).
+
+    If `activate` is true (or no active device exists), the new device is set
+    as the active one. Pass `config` with the type-specific fields
+    (e.g. host/port/frequency for rtl_tcp). If omitted, type defaults are used.
+    """
+    if req.type not in DEVICE_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"Unsupported device type: {req.type}")
+    config = req.config if req.config is not None else default_config_for_type(req.type)
+
+    # Determine if this should become active
+    result = await db.execute(select(SdrDevice).where(SdrDevice.is_active == True))  # noqa: E712
+    existing_active = result.scalar_one_or_none()
+    make_active = bool(req.activate) or (existing_active is None)
+
+    device = SdrDevice(name=req.name.strip(), type=req.type, is_active=False)
+    device.set_config(config)
+    db.add(device)
+
+    if make_active:
+        # Deactivate all others, then activate the new one
+        all_result = await db.execute(select(SdrDevice))
+        for d in all_result.scalars().all():
+            d.is_active = False
+        device.is_active = True
+
+    await db.commit()
+    await db.refresh(device)
+    device_dict = device.to_dict()
+
+    # Apply to the live manager if it's now the active device
+    if make_active:
+        try:
+            await sdr_manager.activate_device(device.id, reconnect=False)
+        except Exception as e:
+            logger.warning(f"Failed to apply new active device config: {e}")
+
+    return device_dict
+
+
+@devices_router.get("/{device_id}")
+async def get_device(
+    device_id: str,
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """Get a single SDR device by ID."""
+    device = await db.get(SdrDevice, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return device.to_dict()
+
+
+class DeviceUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    config: Optional[dict] = None
+
+
+@devices_router.put("/{device_id}")
+async def update_device(
+    device_id: str,
+    req: DeviceUpdateRequest,
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """Update an existing SDR device's name/type/config."""
+    device = await db.get(SdrDevice, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if req.type is not None and req.type not in DEVICE_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"Unsupported device type: {req.type}")
+    if req.name is not None:
+        device.name = req.name.strip()
+    if req.type is not None:
+        device.type = req.type
+    if req.config is not None:
+        device.set_config(req.config)
+    await db.commit()
+    await db.refresh(device)
+    device_dict = device.to_dict()
+
+    # If this is the active device, apply the new config live
+    if device.is_active:
+        try:
+            await sdr_manager.activate_device(device.id, reconnect=False)
+        except Exception as e:
+            logger.warning(f"Failed to apply updated active device config: {e}")
+
+    return device_dict
+
+
+@devices_router.delete("/{device_id}")
+async def delete_device(
+    device_id: str,
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """Delete an SDR device.
+
+    If the deleted device was active, another device (if any) is activated in
+    its place so there is always an active device when the registry is
+    non-empty. Deleting the last device leaves no active device (the legacy
+    sdr_settings.json values continue to be used).
+    """
+    device = await db.get(SdrDevice, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    was_active = bool(device.is_active)
+    await db.delete(device)
+    await db.commit()
+
+    # If we removed the active device, promote the oldest remaining one
+    if was_active:
+        result = await db.execute(select(SdrDevice).order_by(SdrDevice.created_at.asc()))
+        remaining = result.scalars().all()
+        if remaining:
+            remaining[0].is_active = True
+            await db.commit()
+            try:
+                await sdr_manager.activate_device(remaining[0].id, reconnect=False)
+            except Exception as e:
+                logger.warning(f"Failed to promote fallback device: {e}")
+
+    return {"success": True, "id": device_id}
+
+
+@devices_router.post("/{device_id}/activate")
+async def activate_device(
+    device_id: str,
+    current_user: User = Depends(require_admin),
+):
+    """Set a device as the active one and apply its config to the live SDR.
+
+    If the SDR is currently connected/streaming, it reconnects so the new
+    device takes effect immediately.
+    """
+    try:
+        return await sdr_manager.activate_device(device_id, reconnect=True)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

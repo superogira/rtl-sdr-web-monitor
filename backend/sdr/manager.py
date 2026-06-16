@@ -257,6 +257,131 @@ class SDRManager:
         return {"host": self.client.host, "port": self.client.port}
 
     # ------------------------------------------------------------------
+    # Device registry (active device management)
+    # ------------------------------------------------------------------
+    async def get_active_device(self):
+        """Return the currently active SdrDevice row, or None."""
+        from backend.models.sdr_device import SdrDevice
+        async with async_session() as session:
+            result = await session.execute(
+                select(SdrDevice).where(SdrDevice.is_active == True)  # noqa: E712
+            )
+            return result.scalar_one_or_none()
+
+    def _apply_device_config(self, device) -> None:
+        """Apply a device's config (host/port/freq/sr/gain/ppm) to the client.
+
+        Sync; only updates the in-memory client target + tuner values. The
+        caller is responsible for (re)connecting if desired.
+        """
+        cfg = device.get_config()
+        host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
+        port = int(cfg.get("port") or settings.RTL_TCP_PORT)
+        self.client.set_connection(host, port)
+        if "frequency" in cfg:
+            self.client._frequency = int(cfg["frequency"])
+        if "sample_rate" in cfg:
+            self.client._sample_rate = int(cfg["sample_rate"])
+        if "gain" in cfg:
+            self.client._gain = int(cfg["gain"])
+        if "freq_correction_ppm" in cfg:
+            self.client._ppm = int(cfg["freq_correction_ppm"])
+        # Keep legacy sdr_settings.json in sync (host/port/freq/etc.)
+        self._save_persisted_settings()
+        logger.info(f"Applied device '{device.name}' ({device.type}) config: "
+                    f"{host}:{port}, {self.client._frequency} Hz, "
+                    f"{self.client._sample_rate} SPS, gain {self.client._gain}")
+
+    async def load_active_device(self) -> bool:
+        """Load and apply the active device's config at startup.
+
+        Called during lifespan startup. If no active device exists (e.g. the
+        table is empty), falls back to the current client values (already
+        loaded from sdr_settings.json by __init__).
+        Returns True if an active device was found and applied.
+        """
+        try:
+            device = await self.get_active_device()
+            if device is None:
+                logger.info("No active SDR device in DB; using legacy config")
+                return False
+            self._apply_device_config(device)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to load active device, using legacy config: {e}")
+            return False
+
+    async def activate_device(self, device_id: str, reconnect: bool = True) -> dict:
+        """Set a device as active and apply its config.
+
+        - Marks the given device as the only active one in the DB.
+        - Applies its config (host/port/freq/sr/gain/ppm) to the client.
+        - If `reconnect` and currently connected/streaming, reconnect so the
+          new device takes effect immediately.
+
+        Returns {"success": True, "device": <dict>, "status": <status>}.
+        Raises ValueError if the device id is not found.
+        """
+        from backend.models.sdr_device import SdrDevice
+        async with async_session() as session:
+            device = await session.get(SdrDevice, device_id)
+            if device is None:
+                raise ValueError(f"Device not found: {device_id}")
+
+            # Mark only this device as active
+            result = await session.execute(select(SdrDevice))
+            for d in result.scalars().all():
+                d.is_active = (d.id == device_id)
+            await session.commit()
+            device_dict = device.to_dict()
+
+        # Apply the config to the client (in-memory)
+        self._apply_device_config(device)
+
+        # Reconnect if we were connected, so the new device takes effect now
+        was_streaming = self.is_streaming
+        if reconnect and (self.client.connected or was_streaming):
+            try:
+                await self.disconnect()
+                await asyncio.sleep(0.3)
+                connect_result = await self.connect()
+                if was_streaming and connect_result.get("success"):
+                    await self.start_streaming()
+            except Exception as e:
+                logger.error(f"Reconnect after activating device failed: {e}")
+
+        logger.info(f"Activated SDR device '{device.name}' ({device_id})")
+        return {"success": True, "device": device_dict, "status": self.status}
+
+    async def sync_active_device_config(self) -> None:
+        """Persist current client tuner values back to the active device.
+
+        Called whenever host/port/freq/gain/ppm change via the legacy endpoints
+        so the active device row stays in sync with the live client state.
+        Silently no-ops if there is no active device.
+        """
+        try:
+            from backend.models.sdr_device import SdrDevice
+            async with async_session() as session:
+                result = await session.execute(
+                    select(SdrDevice).where(SdrDevice.is_active == True)  # noqa: E712
+                )
+                device = result.scalar_one_or_none()
+                if device is None:
+                    return
+                cfg = device.get_config()
+                cfg["host"] = self.client.host
+                cfg["port"] = self.client.port
+                cfg["frequency"] = self.client._frequency
+                cfg["sample_rate"] = self.client._sample_rate
+                cfg["gain"] = self.client._gain
+                cfg["freq_correction_ppm"] = self.client._ppm
+                device.set_config(cfg)
+                await session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to sync active device config: {e}")
+
+    # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
     async def connect(self) -> dict:
@@ -308,18 +433,22 @@ class SDRManager:
                 logger.info(f"📻 Left WBFM band → channel BW restored to "
                             f"{self._DEFAULT_CHANNEL_BW//1000} kHz (NBFM)")
         self._save_persisted_settings()
+        await self.sync_active_device_config()
 
     async def set_sample_rate(self, rate: int):
         await self.client.set_sample_rate(rate)
         self._save_persisted_settings()
+        await self.sync_active_device_config()
 
     async def set_gain(self, gain_db: int):
         await self.client.set_gain(gain_db)
         self._save_persisted_settings()
+        await self.sync_active_device_config()
 
     async def set_freq_correction(self, ppm: int):
         await self.client.set_freq_correction(ppm)
         self._save_persisted_settings()
+        await self.sync_active_device_config()
 
     def set_channel_bw(self, bw_hz: int):
         if not (1000 <= bw_hz <= 500000):

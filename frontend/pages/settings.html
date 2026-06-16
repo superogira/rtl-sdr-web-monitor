@@ -50,6 +50,7 @@
         <!-- Tabs -->
         <div class="nav-tabs">
             <div class="nav-tab" onclick="Settings.showTab('general')">🌐 ทั่วไป</div>
+            <div class="nav-tab" onclick="Settings.showTab('devices')">🔌 อุปกรณ์และการตั้งค่า</div>
             <div class="nav-tab" onclick="Settings.showTab('sdr')">📡 RTL-TCP</div>
             <div class="nav-tab" onclick="Settings.showTab('recording')">🎙️ การอัดเสียง</div>
             <div class="nav-tab" onclick="Settings.showTab('stt')">📝 ถอดเสียง</div>
@@ -57,6 +58,58 @@
             <div class="nav-tab" onclick="Settings.showTab('keywords')">🔑 Keywords</div>
             <div class="nav-tab" onclick="Settings.showTab('display')">🎨 แสดงผล</div>
             <div class="nav-tab" onclick="Settings.showTab('users')">👥 ผู้ใช้งาน</div>
+        </div>
+
+        <!-- Devices (Admin) -->
+        <div class="tab-content" id="tab-devices" style="display:none;">
+            <!-- List View -->
+            <div id="devices-list-view">
+                <div class="settings-section">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0;">🔌 อุปกรณ์ SDR</h2>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.showDeviceWizard(null)">＋ เพิ่มอุปกรณ์</button>
+                    </div>
+                    <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                        จัดการอุปกรณ์ SDR ที่เชื่อมต่อกับระบบ สามารถตั้งค่าอุปกรณ์หลายตัวและเลือกอุปกรณ์ที่จะใช้งานได้
+                    </p>
+                    <div id="devices-list" style="display:grid; gap:8px;">
+                        <div class="text-center text-muted">กำลังโหลด...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Wizard View -->
+            <div id="devices-wizard-view" style="display:none;">
+                <!-- Step 1: Name + Type -->
+                <div class="settings-section" id="device-step1">
+                    <h2 id="device-wizard-title">➕ เพิ่มอุปกรณ์ใหม่</h2>
+                    <div class="form-group">
+                        <label>ชื่ออุปกรณ์</label>
+                        <input type="text" id="device-name" placeholder="เช่น RTL-TCP ห้องเซิร์ฟเวอร์">
+                    </div>
+                    <div class="form-group">
+                        <label>รูปแบบของอุปกรณ์ / การเชื่อมต่อ</label>
+                        <select id="device-type" onchange="Settings.onDeviceTypeChange()">
+                            <option value="">— เลือกประเภท —</option>
+                        </select>
+                    </div>
+                    <div id="device-type-desc" style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px; display:none;"></div>
+                    <div class="form-actions">
+                        <button class="btn btn-sm" onclick="Settings.cancelDeviceWizard()">ยกเลิก</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.deviceWizardNext()">ถัดไป →</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Config (RTL-TCP) -->
+                <div class="settings-section" id="device-step2" style="display:none;">
+                    <h2>⚙️ ตั้งค่าการเชื่อมต่อ <span id="device-step2-name" style="color:var(--text-secondary);"></span></h2>
+                    <div id="device-config-fields"></div>
+                    <div class="form-actions">
+                        <button class="btn btn-sm" onclick="Settings.deviceWizardBack()">← ย้อนกลับ</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.saveDeviceFromWizard()">💾 บันทึกอุปกรณ์</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- SDR Settings -->
@@ -547,7 +600,7 @@
                 if (h1) h1.textContent = '⚙️ ตั้งค่า';
 
                 // Hide admin-only tab buttons and their content
-                const adminTabs = ['sdr', 'recording', 'stt', 'telegram', 'keywords', 'users'];
+                const adminTabs = ['devices', 'sdr', 'recording', 'stt', 'telegram', 'keywords', 'users'];
                 adminTabs.forEach(tabName => {
                     document.querySelectorAll('.nav-tab').forEach(btn => {
                         const onclick = btn.getAttribute('onclick') || '';
@@ -574,10 +627,13 @@
             this.loadRecordingEnabled();
             this.renderKeywords();
             this.refreshStatus();
-            if (isAdmin) this.loadUsers();
+            if (isAdmin) {
+                this.loadUsers();
+                this.loadDevices();
+            }
 
             // Set default active tab based on role
-            this.showTab(isAdmin ? 'sdr' : 'general');
+            this.showTab(isAdmin ? 'devices' : 'general');
         },
 
         // === SDR Settings === Host/port/freq etc. are authoritative on backend.
@@ -1116,6 +1172,287 @@
             if (!confirm('ต้องการลบผู้ใช้นี้?')) return;
             try { await API.request('DELETE', `/api/auth/users/${id}`); this.loadUsers(); }
             catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+        },
+
+        // === SDR Devices (Admin) ===
+        _deviceTypes: null,
+        _editingDeviceId: null,
+
+        async loadDevices() {
+            const el = document.getElementById('devices-list');
+            if (!el) return;
+            try {
+                const result = await API.sdr.devices.list();
+                const devices = result.devices || result.items || result || [];
+                const activeId = result.active_device_id
+                    || (devices.find(d => d.is_active) || {}).id
+                    || (devices.length ? devices[0].id : null);
+                if (!devices.length) {
+                    el.innerHTML = '<div class="text-center text-muted" style="padding:24px;">ยังไม่มีอุปกรณ์ SDR ในระบบ กด "เพิ่มอุปกรณ์" เพื่อเริ่มต้น</div>';
+                    return;
+                }
+                el.innerHTML = devices.map(d => {
+                    const isActive = (d.id === activeId) || d.is_active;
+                    const cfg = d.config || {};
+                    const typeLabel = (d.type === 'rtl_tcp') ? 'RTL-TCP' : d.type;
+                    const connInfo = (d.type === 'rtl_tcp')
+                        ? `${cfg.host || '-'}:${cfg.port || 1234}`
+                        : '';
+                    const desc = cfg.description || '';
+                    return `
+                        <div style="background:var(--surface-1); border:1px solid ${isActive ? 'var(--accent-cyan)' : 'var(--border)'}; border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                            <div style="flex:1; min-width:200px;">
+                                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                    <strong>${d.name}</strong>
+                                    ${isActive ? '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">● กำลังใช้งาน</span>' : '<span class="status-badge status-off">พร้อมใช้งาน</span>'}
+                                </div>
+                                <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px;">
+                                    ${typeLabel} ${connInfo ? `· ${connInfo}` : ''}
+                                    ${desc ? ` · ${desc}` : ''}
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                ${!isActive ? `<button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${d.id}')">⚡ ใช้อุปกรณ์นี้</button>` : ''}
+                                <button class="btn btn-sm" onclick="Settings.editDevice('${d.id}')">✏️ แก้ไข</button>
+                                <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteDevice('${d.id}')">🗑️ ลบ</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch(e) {
+                el.innerHTML = `<div style="color:var(--accent-red); font-size:0.8rem;">ไม่สามารถโหลดอุปกรณ์ได้: ${e.detail || e.message || e}</div>`;
+            }
+        },
+
+        async _ensureDeviceTypes() {
+            if (this._deviceTypes) return this._deviceTypes;
+            try {
+                const result = await API.sdr.devices.listTypes();
+                this._deviceTypes = result.types || [];
+            } catch(e) {
+                console.warn('Could not load device types:', e);
+                this._deviceTypes = [{ value: 'rtl_tcp', label: 'RTL-TCP', description: 'RTL-TCP Server (network SDR)' }];
+            }
+            return this._deviceTypes;
+        },
+
+        async showDeviceWizard(deviceId) {
+            this._editingDeviceId = deviceId || null;
+            // Show wizard view, hide list view
+            document.getElementById('devices-list-view').style.display = 'none';
+            document.getElementById('devices-wizard-view').style.display = '';
+            document.getElementById('device-step1').style.display = '';
+            document.getElementById('device-step2').style.display = 'none';
+
+            const titleEl = document.getElementById('device-wizard-title');
+            if (deviceId) {
+                titleEl.textContent = '✏️ แก้ไขอุปกรณ์';
+            } else {
+                titleEl.textContent = '➕ เพิ่มอุปกรณ์ใหม่';
+            }
+
+            // Populate type options
+            const types = await this._ensureDeviceTypes();
+            const selectEl = document.getElementById('device-type');
+            selectEl.innerHTML = '<option value="">— เลือกประเภท —</option>' +
+                types.map(t => `<option value="${t.value}">${t.label}</option>`).join('');
+
+            // Reset fields
+            document.getElementById('device-name').value = '';
+
+            // If editing, prefill from existing device
+            if (deviceId) {
+                try {
+                    const dev = await API.sdr.devices.get(deviceId);
+                    document.getElementById('device-name').value = dev.name || '';
+                    if (dev.type) {
+                        selectEl.value = dev.type;
+                        this.onDeviceTypeChange();
+                    }
+                    // If editing, go straight to step 2 with config
+                    if (dev.type) {
+                        this._wizardConfig = dev.config || {};
+                        this.deviceWizardNext();
+                    }
+                } catch(e) {
+                    alert('ไม่สามารถโหลดข้อมูลอุปกรณ์ได้: ' + (e.detail || e.message || e));
+                }
+            } else {
+                this._wizardConfig = {};
+                this.onDeviceTypeChange();
+            }
+        },
+
+        onDeviceTypeChange() {
+            const selectEl = document.getElementById('device-type');
+            const descEl = document.getElementById('device-type-desc');
+            const types = this._deviceTypes || [];
+            const t = types.find(x => x.value === selectEl.value);
+            if (t && t.description) {
+                descEl.textContent = t.description;
+                descEl.style.display = '';
+            } else {
+                descEl.style.display = 'none';
+            }
+        },
+
+        deviceWizardNext() {
+            const name = document.getElementById('device-name').value.trim();
+            const type = document.getElementById('device-type').value;
+            if (!name) { alert('กรุณาใส่ชื่ออุปกรณ์'); return; }
+            if (!type) { alert('กรุณาเลือกประเภทอุปกรณ์'); return; }
+
+            // Move to step 2
+            document.getElementById('device-step1').style.display = 'none';
+            document.getElementById('device-step2').style.display = '';
+            document.getElementById('device-step2-name').textContent = `(${name})`;
+            this._renderDeviceConfigFields(type);
+        },
+
+        deviceWizardBack() {
+            document.getElementById('device-step1').style.display = '';
+            document.getElementById('device-step2').style.display = 'none';
+        },
+
+        cancelDeviceWizard() {
+            document.getElementById('devices-wizard-view').style.display = 'none';
+            document.getElementById('devices-list-view').style.display = '';
+            this._editingDeviceId = null;
+            this._wizardConfig = {};
+        },
+
+        _renderDeviceConfigFields(type) {
+            const container = document.getElementById('device-config-fields');
+            const cfg = this._wizardConfig || {};
+            if (type === 'rtl_tcp') {
+                container.innerHTML = `
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Host / IP Address</label>
+                            <input type="text" id="dc-host" value="${cfg.host || ''}" placeholder="192.168.1.101">
+                        </div>
+                        <div class="form-group">
+                            <label>Port</label>
+                            <input type="number" id="dc-port" value="${cfg.port || 1234}" placeholder="1234">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>ความถี่เริ่มต้น (Hz)</label>
+                            <input type="number" id="dc-frequency" value="${cfg.frequency || 145500000}">
+                        </div>
+                        <div class="form-group">
+                            <label>Sample Rate (Hz)</label>
+                            <input type="number" id="dc-sample_rate" value="${cfg.sample_rate || 2048000}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Gain (dB)</label>
+                            <input type="number" id="dc-gain" value="${cfg.gain !== undefined ? cfg.gain : 30}">
+                        </div>
+                        <div class="form-group">
+                            <label>Demodulation Mode</label>
+                            <select id="dc-mode">
+                                <option value="FM" ${cfg.mode === 'FM' ? 'selected' : ''}>FM</option>
+                                <option value="AM" ${cfg.mode === 'AM' ? 'selected' : ''}>AM</option>
+                                <option value="USB" ${cfg.mode === 'USB' ? 'selected' : ''}>USB</option>
+                                <option value="LSB" ${cfg.mode === 'LSB' ? 'selected' : ''}>LSB</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Frequency Correction (PPM)</label>
+                            <input type="number" id="dc-ppm" value="${cfg.freq_correction_ppm !== undefined ? cfg.freq_correction_ppm : 0}" step="1" min="-200" max="200">
+                        </div>
+                        <div class="form-group">
+                            <label>Bandwidth (Hz)</label>
+                            <select id="dc-bandwidth">
+                                <option value="6000" ${cfg.channel_bw === 6000 ? 'selected' : ''}>6 kHz - Narrow</option>
+                                <option value="12000" ${(cfg.channel_bw === 12000 || cfg.channel_bw === undefined) ? 'selected' : ''}>12 kHz - Normal</option>
+                                <option value="25000" ${cfg.channel_bw === 25000 ? 'selected' : ''}>25 kHz - Wide</option>
+                                <option value="50000" ${cfg.channel_bw === 50000 ? 'selected' : ''}>50 kHz - Extra Wide</option>
+                                <option value="200000" ${cfg.channel_bw === 200000 ? 'selected' : ''}>200 kHz - Broadcast FM</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>หมายเหตุ / รายละเอียดอุปกรณ์ (ไม่บังคับ)</label>
+                        <input type="text" id="dc-description" value="${cfg.description || ''}" placeholder="เช่น ตั้งอยู่บนหลังคา">
+                    </div>
+                `;
+            } else {
+                container.innerHTML = '<div class="text-muted">ยังไม่รองรับการตั้งค่าสำหรับประเภทนี้</div>';
+            }
+        },
+
+        _collectDeviceConfig(type) {
+            if (type !== 'rtl_tcp') return {};
+            const host = document.getElementById('dc-host').value.trim();
+            const port = parseInt(document.getElementById('dc-port').value) || 1234;
+            const frequency = parseInt(document.getElementById('dc-frequency').value);
+            const sample_rate = parseInt(document.getElementById('dc-sample_rate').value);
+            const gain = parseInt(document.getElementById('dc-gain').value);
+            const mode = document.getElementById('dc-mode').value;
+            const freq_correction_ppm = parseInt(document.getElementById('dc-ppm').value) || 0;
+            const channel_bw = parseInt(document.getElementById('dc-bandwidth').value) || 12000;
+            const description = document.getElementById('dc-description').value.trim();
+            if (!host) { alert('กรุณาใส่ Host'); return null; }
+            return { host, port, frequency, sample_rate, gain, mode, freq_correction_ppm, channel_bw, description };
+        },
+
+        async saveDeviceFromWizard() {
+            const name = document.getElementById('device-name').value.trim();
+            const type = document.getElementById('device-type').value;
+            const config = this._collectDeviceConfig(type);
+            if (config === null) return;  // validation failed
+            const payload = { name, type, config, is_enabled: true };
+            try {
+                if (this._editingDeviceId) {
+                    await API.sdr.devices.update(this._editingDeviceId, payload);
+                    alert('✅ แก้ไขอุปกรณ์เรียบร้อย!');
+                } else {
+                    const result = await API.sdr.devices.create(payload);
+                    alert('✅ เพิ่มอุปกรณ์เรียบร้อย!');
+                }
+                this.cancelDeviceWizard();
+                this.loadDevices();
+                // Refresh SDR settings + status (active device may have changed)
+                this.loadSDRSettings();
+                this.refreshStatus();
+            } catch(e) {
+                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+            }
+        },
+
+        async activateDevice(id) {
+            try {
+                await API.sdr.devices.activate(id);
+                alert('✅ เปลี่ยนอุปกรณ์ที่ใช้งานเรียบร้อย!');
+                this.loadDevices();
+                this.loadSDRSettings();
+                this.refreshStatus();
+            } catch(e) {
+                alert('❌ เปลี่ยนอุปกรณ์ไม่สำเร็จ: ' + (e.detail || e.message || e));
+            }
+        },
+
+        async editDevice(id) {
+            this.showDeviceWizard(id);
+        },
+
+        async deleteDevice(id) {
+            if (!confirm('ต้องการลบอุปกรณ์นี้? หากเป็นอุปกรณ์ที่กำลังใช้งานอยู่ จะต้องเลือกอุปกรณ์อื่นแทน')) return;
+            try {
+                await API.sdr.devices.remove(id);
+                alert('✅ ลบอุปกรณ์เรียบร้อย!');
+                this.loadDevices();
+                this.loadSDRSettings();
+                this.refreshStatus();
+            } catch(e) {
+                alert('❌ ลบไม่สำเร็จ: ' + (e.detail || e.message || e));
+            }
         },
     };
 

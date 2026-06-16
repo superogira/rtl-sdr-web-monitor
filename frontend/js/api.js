@@ -168,6 +168,30 @@ const API = {
         async setRecordingEnabled(enabled) {
             return API.request('POST', '/api/sdr/recording-enabled', { enabled: !!enabled });
         },
+        // === SDR Device registry (admin) ===
+        devices: {
+            async listTypes() {
+                return API.request('GET', '/api/sdr/devices/types');
+            },
+            async list() {
+                return API.request('GET', '/api/sdr/devices');
+            },
+            async get(id) {
+                return API.request('GET', `/api/sdr/devices/${id}`);
+            },
+            async create(data) {
+                return API.request('POST', '/api/sdr/devices', data);
+            },
+            async update(id, data) {
+                return API.request('PUT', `/api/sdr/devices/${id}`, data);
+            },
+            async remove(id) {
+                return API.request('DELETE', `/api/sdr/devices/${id}`);
+            },
+            async activate(id) {
+                return API.request('POST', `/api/sdr/devices/${id}/activate`);
+            },
+        },
     },
 
     // Bookmarks (placeholder)

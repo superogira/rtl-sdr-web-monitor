@@ -112,11 +112,67 @@ def _seed_app_settings(conn):
             print(f"[seed] App setting '{key}' initialized")
 
 
+def _seed_sdr_devices(conn):
+    """Seed the default SDR device from data/sdr_settings.json if none exist.
+
+    Idempotent: only runs when the sdr_devices table is empty. This migrates
+    the legacy single-device config (sdr_settings.json) into the new device
+    registry so existing deployments keep their working RTL-TCP connection.
+    NOTE: MUST be sync (def) — called via conn.run_sync().
+    """
+    from sqlalchemy import text
+    import json
+    import os
+
+    # Check if any device already exists
+    result = conn.execute(text("SELECT COUNT(*) FROM sdr_devices"))
+    if result.scalar() > 0:
+        return
+
+    # Load legacy settings from data/sdr_settings.json (best-effort)
+    config = {
+        "host": "127.0.0.1",
+        "port": 1234,
+        "frequency": 145500000,
+        "sample_rate": 2048000,
+        "gain": 30,
+        "freq_correction_ppm": 0,
+    }
+    try:
+        legacy_path = os.path.join("data", "sdr_settings.json")
+        if os.path.exists(legacy_path):
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                legacy = json.load(f)
+            for key in config:
+                if key in legacy and legacy[key] is not None:
+                    config[key] = legacy[key]
+            print(f"[seed] Loaded legacy SDR settings from {legacy_path}")
+    except Exception as e:
+        print(f"[seed] Could not load legacy sdr_settings.json: {e}")
+
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    device_id = str(__import__("uuid").uuid4())
+    conn.execute(text(
+        "INSERT INTO sdr_devices (id, name, type, config, is_active, created_at, updated_at) "
+        "VALUES (:id, :name, :type, :config, 1, :ts, :ts)"
+    ), {
+        "id": device_id,
+        "name": "RTL-TCP (ค่าเริ่มต้น)",
+        "type": "rtl_tcp",
+        "config": json.dumps(config, ensure_ascii=False),
+        "ts": now_iso,
+    })
+    print(f"[seed] Created default SDR device '{device_id}' "
+          f"(host={config['host']}:{config['port']})")
+
+
 async def init_db():
     """Initialize database (create tables if needed)."""
     # Import models so Base.metadata.create_all picks them up.
     from backend.models import app_setting  # noqa: F401  (register AppSetting model)
     from backend.models import recording  # noqa: F401  (register Recording model)
+    from backend.models import sdr_device  # noqa: F401  (register SdrDevice model)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -124,3 +180,5 @@ async def init_db():
         await conn.run_sync(_run_migrations)
         # Seed default app settings
         await conn.run_sync(_seed_app_settings)
+        # Seed default SDR device from legacy config (if none exist)
+        await conn.run_sync(_seed_sdr_devices)
