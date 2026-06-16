@@ -99,6 +99,14 @@ const API = {
         async setFrequency(freq) {
             return API.request('POST', '/api/sdr/frequency', { frequency: freq });
         },
+        /**
+         * Set the VFO (listening) frequency by absolute Hz.
+         * Available to all users (admin + user). Moves the listening cursor
+         * within the passband without retuning the SDR (waterfall stays still).
+         */
+        async setVFO(freq) {
+            return API.request('POST', '/api/sdr/vfo', { frequency: freq });
+        },
         async setSampleRate(rate) {
             return API.request('POST', '/api/sdr/sample-rate', { sample_rate: rate });
         },

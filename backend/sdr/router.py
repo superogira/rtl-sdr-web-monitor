@@ -8,7 +8,7 @@ from pathlib import Path as FSPath
 import os
 import logging
 
-from backend.auth.dependencies import get_current_user
+from backend.auth.dependencies import get_current_user, require_admin
 from backend.models.user import User
 from backend.sdr.manager import sdr_manager
 from backend.audio.demod import DemodMode
@@ -123,13 +123,41 @@ async def disconnect_sdr(current_user: User = Depends(get_current_user)):
 @router.post("/frequency")
 async def set_frequency(
     req: FrequencyRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set center frequency."""
+    """Set center frequency (admin only).
+
+    Regular users cannot change the SDR center frequency because it moves the
+    whole waterfall for everyone. Instead, users use POST /api/sdr/vfo to move
+    the listening cursor within the current passband.
+    """
     if not sdr_manager.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
     await sdr_manager.set_frequency(req.frequency)
     return {"frequency": req.frequency}
+
+
+class VFORequest(BaseModel):
+    frequency: int  # Hz (absolute frequency to listen at)
+
+
+@router.post("/vfo")
+async def set_vfo(
+    req: VFORequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Set the VFO (listening) frequency by absolute Hz.
+
+    Available to all users (admin + user). Computes offset from the current
+    SDR center frequency and shifts the IQ in software (OpenWebRX-style) so
+    the waterfall doesn't move. The offset must be within ±0.4*sample_rate.
+    """
+    if not sdr_manager.client.connected:
+        raise HTTPException(status_code=400, detail="Not connected")
+    try:
+        return sdr_manager.set_vfo_frequency(req.frequency)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/sample-rate")

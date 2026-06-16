@@ -264,7 +264,8 @@ _CHANNEL_BW = {
 
 def compute_channel_power(iq: np.ndarray, sample_rate: float,
                           mode: DemodMode = DemodMode.FM,
-                          channel_bw: int = 0) -> float:
+                          channel_bw: int = 0,
+                          vfo_offset_hz: float = 0.0) -> float:
     """Compute signal power (dB) for ONLY the tuned channel bandwidth.
 
     This isolates the signal of interest (centered at DC after IQ conversion)
@@ -280,6 +281,8 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
         sample_rate: IQ sample rate in Hz
         mode: demodulation mode (determines default channel bandwidth)
         channel_bw: override channel bandwidth in Hz (0 = use mode default)
+        vfo_offset_hz: VFO offset in Hz. When non-zero, the IQ is shifted so
+            that the power is measured at (center + offset) instead of DC.
 
     Returns:
         Channel power in dB (negative value)
@@ -287,6 +290,12 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     n = len(iq)
     if n < 64:
         return -120.0
+
+    # Apply VFO offset shift so power is measured at the listening frequency
+    if abs(vfo_offset_hz) > 0.5:
+        t = np.arange(n, dtype=np.float64) / sample_rate
+        lo = np.exp(-2j * np.pi * vfo_offset_hz * t)
+        iq = (iq.astype(np.complex64) * lo).astype(np.complex64)
 
     # Use override bandwidth if provided (>0), otherwise fall back to mode default
     if channel_bw and channel_bw > 0:
@@ -330,7 +339,8 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
 
 def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
                          mode: DemodMode = DemodMode.FM,
-                         channel_bw: int = 0) -> float:
+                         channel_bw: int = 0,
+                         vfo_offset_hz: float = 0.0) -> float:
     """Compute signal power level in dB for the active channel only.
 
     Args:
@@ -338,6 +348,7 @@ def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
         sample_rate: IQ sample rate in Hz
         mode: Demodulation mode (determines default channel bandwidth)
         channel_bw: override channel bandwidth in Hz (0 = use mode default)
+        vfo_offset_hz: VFO offset in Hz (non-zero → measure power at offset)
 
     Returns:
         Signal level in dB (negative value) — channel-only power
@@ -346,7 +357,7 @@ def compute_signal_level(iq_bytes: bytes, sample_rate: float = 1024000,
         return -120.0
 
     iq = iq_to_complex(iq_bytes)
-    return compute_channel_power(iq, sample_rate, mode, channel_bw)
+    return compute_channel_power(iq, sample_rate, mode, channel_bw, vfo_offset_hz)
 
 
 # ============================================================================
@@ -482,6 +493,11 @@ class StreamingDemodulator:
         self._decim_zi: Optional[np.ndarray] = None
         # SSB mixer phase accumulator (keeps LO continuous across chunks)
         self._ssb_lo_phase: float = 0.0
+        # VFO offset (Hz) — shifts IQ so the demodulator decodes a frequency
+        # offset from the SDR center frequency (OpenWebRX-style). The mixer
+        # phase accumulator keeps the LO continuous across chunks.
+        self._vfo_offset_hz: float = 0.0
+        self._vfo_phase: float = 0.0
         # remember config so we can detect changes that need a reset
         self._mode: Optional[DemodMode] = None
         self._sample_rate: Optional[float] = None
@@ -584,6 +600,39 @@ class StreamingDemodulator:
     # ------------------------------------------------------------------
     # Main entry
     # ------------------------------------------------------------------
+    def set_vfo_offset(self, offset_hz: float) -> None:
+        """Set VFO offset in Hz (relative to SDR center frequency).
+
+        0 = decode at center frequency (default). A non-zero offset shifts
+        the IQ via complex multiplication so the demodulator decodes the
+        signal at center_freq + offset_hz. This is the OpenWebRX-style
+        "frequency offset" mechanism.
+        """
+        offset_hz = float(offset_hz)
+        if abs(offset_hz - self._vfo_offset_hz) < 0.5:
+            return
+        self._vfo_offset_hz = offset_hz
+        # Reset the VFO mixer phase so we don't accumulate a huge angle,
+        # but keep the demod filter state intact (no audio click).
+
+    def _apply_vfo_shift(self, iq: np.ndarray, sample_rate: float) -> np.ndarray:
+        """Shift IQ by the current VFO offset using a phase-continuous LO.
+
+        Multiplies the complex IQ by exp(-2j*pi*f*t) to move the signal at
+        (center + offset_hz) to DC. The phase accumulator is carried across
+        chunks so the LO is continuous (no click).
+        """
+        if abs(self._vfo_offset_hz) < 0.5 or self._sample_rate is None:
+            return iq
+        n = len(iq)
+        dphase = -2.0 * np.pi * self._vfo_offset_hz / sample_rate
+        phases = self._vfo_phase + dphase * np.arange(n, dtype=np.float64)
+        lo = np.exp(1j * phases)
+        self._vfo_phase = float(phases[-1])
+        # Wrap phase to [-2pi, 2pi] to avoid float precision loss over time
+        self._vfo_phase = self._vfo_phase % (2.0 * np.pi)
+        return (iq.astype(np.complex64) * lo).astype(np.complex64)
+
     def process(self, iq_bytes: bytes, mode: DemodMode, sample_rate: float,
                 audio_rate: float, channel_bw: int = 0) -> np.ndarray:
         """Demodulate one chunk, carrying filter state across calls.
@@ -602,6 +651,10 @@ class StreamingDemodulator:
         iq = iq_to_complex(iq_bytes)
         if len(iq) < 8:
             return np.array([], dtype=np.float32)
+
+        # Apply VFO offset shift (OpenWebRX-style): move the signal at
+        # center_freq + vfo_offset_hz down to DC before demodulation.
+        iq = self._apply_vfo_shift(iq, sample_rate)
 
         try:
             if mode == DemodMode.FM:

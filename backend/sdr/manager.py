@@ -105,6 +105,11 @@ class SDRManager:
         self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
         self._channel_bw: int = self._DEFAULT_CHANNEL_BW
+        # VFO offset (Hz) relative to center frequency. 0 = decode at center.
+        # Non-zero → demodulate at (center + offset) without retuning the SDR
+        # (OpenWebRX-style offset tuning). Users can move the listening cursor
+        # within the passband without admin rights to retune the hardware.
+        self._vfo_offset_hz: float = 0.0
         self._stream_task: Optional[asyncio.Task] = None
         # Stateful streaming demodulator — carries filter state across chunks
         # to eliminate per-chunk boundary clicks (~20 Hz buzz) in live audio
@@ -140,6 +145,11 @@ class SDRManager:
         return None
 
     @property
+    def vfo_frequency(self) -> int:
+        """Absolute frequency currently being decoded (center + VFO offset)."""
+        return int(round(self.client._frequency + self._vfo_offset_hz))
+
+    @property
     def status(self) -> dict:
         return {
             **self.client.get_status(),
@@ -154,6 +164,8 @@ class SDRManager:
             "auto_record": self._auto_record,
             "fft_bins": self._fft_bins,
             "channel_bw": self._channel_bw,
+            "vfo_offset_hz": round(self._vfo_offset_hz, 1),
+            "vfo_frequency": self.vfo_frequency,
             "listeners": audio_broadcaster.listener_count,
         }
 
@@ -267,8 +279,17 @@ class SDRManager:
         return any(lo <= freq_hz <= hi for lo, hi in self.WBFM_BANDS)
 
     async def set_frequency(self, freq_hz: int):
-        """Set center frequency (auto-adjusts BW for FM broadcast band)."""
+        """Set center frequency (auto-adjusts BW for FM broadcast band).
+
+        When center frequency changes, reset the VFO offset to 0 (the old
+        offset was relative to the old center and would point elsewhere).
+        """
         await self.client.set_frequency(freq_hz)
+        # Reset VFO offset — it was relative to the old center frequency.
+        if abs(self._vfo_offset_hz) > 0.5:
+            self._vfo_offset_hz = 0.0
+            self._vfo_phase = 0.0
+            self._demod.set_vfo_offset(0.0)
         if self.mode == DemodMode.FM:
             if self._is_wbfm_band(freq_hz) and self._channel_bw != self.WBFM_CHANNEL_BW:
                 self._channel_bw = self.WBFM_CHANNEL_BW
@@ -297,6 +318,34 @@ class SDRManager:
             raise ValueError(f"Invalid channel BW: {bw_hz}. Must be 1kHz–500kHz")
         self._channel_bw = bw_hz
         logger.info(f"Channel BW set to {bw_hz} Hz ({bw_hz/1e3:.0f} kHz)")
+
+    def set_vfo_offset(self, offset_hz: float) -> dict:
+        """Set the VFO offset (Hz) relative to center frequency.
+
+        This lets non-admin users move the listening cursor within the SDR
+        passband without retuning the hardware. The offset must stay within
+        ±0.4 * sample_rate to remain inside the visible passband (otherwise
+        the signal would alias / be outside the waterfall).
+        """
+        offset_hz = float(offset_hz)
+        max_offset = self.client._sample_rate * 0.4
+        if abs(offset_hz) > max_offset:
+            raise ValueError(
+                f"VFO offset {offset_hz:.0f} Hz outside passband "
+                f"(±{max_offset:.0f} Hz)"
+            )
+        self._vfo_offset_hz = offset_hz
+        self._demod.set_vfo_offset(offset_hz)
+        logger.info(
+            f"🎯 VFO offset set to {offset_hz:.0f} Hz "
+            f"(listening at {(self.client._frequency + offset_hz)/1e6:.4f} MHz)"
+        )
+        return {"vfo_offset_hz": self._vfo_offset_hz, "vfo_frequency": self.vfo_frequency}
+
+    def set_vfo_frequency(self, freq_hz: int) -> dict:
+        """Set VFO by absolute frequency. Computes offset from center freq."""
+        offset = float(freq_hz) - float(self.client._frequency)
+        return self.set_vfo_offset(offset)
 
     async def set_mode(self, mode: str):
         self.mode = DemodMode(mode.upper())
@@ -466,6 +515,7 @@ class SDRManager:
                         sample_rate=self.client._sample_rate,
                         mode=self.mode,
                         channel_bw=self._channel_bw,
+                        vfo_offset_hz=self._vfo_offset_hz,
                     )
 
                     sample_rate = self.client._sample_rate
@@ -637,13 +687,16 @@ class SDRManager:
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{self.client._frequency}_{self.mode.value}.wav"
+        # Use the VFO frequency (center + offset) as the recording's frequency
+        # so the log reflects what the user was actually listening to, not the
+        # SDR hardware center frequency.
+        freq_hz = self.vfo_frequency
+        filename = f"{timestamp}_{freq_hz}_{self.mode.value}.wav"
         filepath = recordings_dir / filename
 
         sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
 
         rec_id = str(uuid.uuid4())
-        freq_hz = self.client._frequency
         freq_mhz = freq_hz / 1e6
         now = datetime.now(timezone.utc)
 

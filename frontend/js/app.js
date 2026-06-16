@@ -256,8 +256,21 @@ const App = {
     _stepSize: 25000,  // Default step: 25 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
     _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
+    _vfoOffsetHz: 0,    // VFO offset from center (Hz). 0 = listen at center.
 
     setupRadioControls() {
+        // Role-based: hide center-frequency controls for non-admin users.
+        // Non-admins use waterfall click (VFO) to listen at different freqs.
+        const _user = Auth.getUser();
+        if (_user && _user.role !== 'admin') {
+            const adminOnly = ['btn-tune-down', 'btn-tune-up', 'btn-tune-down-coarse',
+                'btn-tune-up-coarse', 'freq-display-box', 'srate-buttons'];
+            adminOnly.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+        }
+
         // Fine tune (step size)
         const tuneDown = document.getElementById('btn-tune-down');
         if (tuneDown) tuneDown.addEventListener('click', () => this.tuneFreq(-this._stepSize));
@@ -454,7 +467,37 @@ const App = {
         API.sdr.setSampleRate(rate).catch(err => console.error('Set sample rate failed:', err));
     },
 
+    _onWaterfallClick(e) {
+        const canvas = this.waterfallCanvas;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const w = rect.width;
+        const sr = this._sampleRate || 2048000;
+        const norm = x / w;  // 0..1
+        const freq = Math.round(this.currentFreq + (norm - 0.5) * sr);
+        this.setVFO(freq);
+    },
+
+    async setVFO(freq) {
+        try {
+            const result = await API.sdr.setVFO(freq);
+            this._vfoOffsetHz = result.vfo_offset_hz || 0;
+            this._waterfallDirty = true;
+            console.log(`🎯 VFO: ${(freq/1e6).toFixed(4)} MHz (offset ${this._vfoOffsetHz.toFixed(0)} Hz)`);
+        } catch (err) {
+            console.error('VFO set failed:', err);
+        }
+    },
+
     tuneFreq(delta) {
+        // Non-admin: move VFO (listening freq) instead of center freq
+        const _u = Auth.getUser();
+        if (_u && _u.role !== 'admin') {
+            const vfoFreq = this.currentFreq + (this._vfoOffsetHz || 0) + delta;
+            this.setVFO(vfoFreq);
+            return;
+        }
         this.currentFreq += delta;
         if (this.currentFreq < 24000000) this.currentFreq = 24000000;  // 24 MHz min
         if (this.currentFreq > 1766000000) this.currentFreq = 1766000000;  // 1.766 GHz max
@@ -800,6 +843,10 @@ const App = {
         window.addEventListener('resize', resize);
         requestAnimationFrame(resize);
 
+        // Waterfall click → set VFO (listening frequency)
+        canvas.style.cursor = 'crosshair';
+        canvas.addEventListener('click', (e) => this._onWaterfallClick(e));
+
         // Start render loop
         this._waterfallRenderLoop();
     },
@@ -979,6 +1026,7 @@ const App = {
             ctx.drawImage(bb, 0, 0);
             this._drawFreqGrid(ctx, w, h);
             this._drawChannelBwOverlay(ctx, w, h);
+            this._drawVFOCursor(ctx, w, h);
             this._waterfallDirty = false;
         }
     },
@@ -999,7 +1047,8 @@ const App = {
         const bwPx = Math.min(w, (bw / sr) * w);
         if (bwPx < 4) return;  // too small to draw
 
-        const cx = w / 2;
+        // Draw at VFO position (center + offset), not waterfall center
+        const cx = w / 2 + ((this._vfoOffsetHz || 0) / sr) * w;
         const left = cx - bwPx / 2;
         const right = cx + bwPx / 2;
 
@@ -1052,6 +1101,40 @@ const App = {
         ctx.moveTo(right, h - armH);
         ctx.lineTo(right, h);
         ctx.lineTo(right - armW, h);
+        ctx.stroke();
+
+        ctx.restore();
+    },
+
+    /**
+     * Draw VFO cursor — dashed red vertical line + ▼ wings marker at the
+     * listening frequency. Drawn on every dirty frame so it tracks clicks.
+     */
+    _drawVFOCursor(ctx, w, h) {
+        const sr = this._sampleRate || 2048000;
+        const offset = this._vfoOffsetHz || 0;
+        const cx = w / 2 + (offset / sr) * w;
+
+        ctx.save();
+
+        // Dashed vertical line (full height) at VFO position
+        ctx.strokeStyle = 'rgba(255, 80, 80, 0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([10, 5]);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(cx) + 0.5, 0);
+        ctx.lineTo(Math.round(cx) + 0.5, h);
+        ctx.stroke();
+
+        // ▼ wings marker at top
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(255, 80, 80, 0.95)';
+        ctx.lineWidth = 2;
+        const armW = 8;
+        ctx.beginPath();
+        ctx.moveTo(cx - armW, 0);
+        ctx.lineTo(cx, 7);
+        ctx.lineTo(cx + armW, 0);
         ctx.stroke();
 
         ctx.restore();
