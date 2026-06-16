@@ -533,6 +533,46 @@ curl -s -X POST http://localhost:8000/api/recordings/<recording_id>/transcribe \
 
 ---
 
+## 8.7 บัญชีทดสอบ (Demo Accounts)
+
+> ⚠️ **เฉพาะการทดสอบเท่านั้น** — อย่าใช้ใน production ระบบจริง
+> ลบออกก่อน deploy ด้วยคำสั่งใน section นี้
+
+| Username | Password | Role | สิทธิ์ |
+|----------|----------|------|-------|
+| `demo_admin` | `demo1234` | ADMIN | ปรับ center freq, sample rate, ทุกฟีเจอร์ |
+| `demo_user` | `demo1234` | USER | คลิก waterfall ย้าย VFO, ฟังสด, บันทึก, ดูรายการ |
+
+### สร้างบัญชีทดสอบ
+
+```bash
+cd /root/workspace/rtl-sdr-web
+./venv/bin/python3 -m backend.cli createuser demo_admin demo1234 admin
+./venv/bin/python3 -m backend.cli createuser demo_user demo1234 user
+```
+
+### แนวทางการทดสอบ VFO (ฟีเจอร์ใหม่)
+
+1. **Login เป็น `demo_user`** → สังเกตว่าปุ่ม tune ± / กล่องใส่ความถี่ **หายไป**
+2. **คลิกที่ waterfall** → จะมีเส้นประสีแดง + เครื่องหมาย ▼ ตามตำแหน่งที่คลิก
+3. **สังเกตว่า waterfall ไม่เลื่อน** (ต่างจาก admin ที่เปลี่ยน center freq)
+4. **Login เป็น `demo_admin`** → ปุ่ม tune กลับมา + ใส่ความถี่ได้ (เลื่อน center freq จริง)
+
+### ลบบัญชีทดสอบ (ก่อน production)
+
+```bash
+./venv/bin/python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/rtl_sdr.db')
+conn.execute(\"DELETE FROM users WHERE username IN ('demo_admin','demo_user')\")
+conn.commit()
+print('Demo accounts deleted:', conn.total_changes)
+conn.close()
+"
+```
+
+---
+
 ## 9. Environment Variables (อ้างอิง)
 
 | Variable                    | Default                  | ความหมาย                              |
