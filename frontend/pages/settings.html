@@ -279,6 +279,18 @@
                             0.0 = แม่นยำที่สุด (greedy), ค่าที่สูงขึ้น = สร้าสรรค์มากขึ้น (sampling)
                         </p>
                     </div>
+                    <div class="form-group">
+                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
+                        <select id="stt-whisper-local-audio-format">
+                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
+                            <option value="mp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
+                        </select>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            ย่อขนาดไฟล์ก่อนส่งไปถอดเสียง → ประหยัด bandwidth & เร็วขึ้น
+                        </p>
+                    </div>
                 </div>
 
                 <!-- Speechmatics-specific fields (shown only when provider=speechmatics) -->
@@ -314,6 +326,18 @@
                             <option value="true">เปิด</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเครดิต/เน็ต)</label>
+                        <select id="stt-speechmatics-audio-format">
+                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
+                            <option value="mp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
+                        </select>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            Speechmatics รองรับ WAV/FLAC/MP3 — MP3 ประหยัด bandwidth ที่สุด
+                        </p>
+                    </div>
                 </div>
                 <!-- Azure-specific fields (shown only when provider=azure) -->
                 <div id="stt-azure-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
@@ -333,6 +357,18 @@
                                 e.g. southeastasia, eastasia, eastus
                             </p>
                         </div>
+                    </div>
+                    <div class="form-group">
+                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
+                        <select id="stt-azure-audio-format">
+                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac">FLAC (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
+                            <option value="mp3">MP3 (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
+                        </select>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            ⚠️ Azure Speech SDK รองรับเฉพาะ WAV/PCM — MP3/FLAC จะถูกแปลงเป็น WAV อัตโนมัติ
+                        </p>
                     </div>
                     <p style="font-size:0.72rem; color:var(--text-secondary);">
                         Language maps from above (th -> th-TH, en -> en-US).<br>
@@ -939,6 +975,14 @@
                 if (elWlTask && cfg.whisper_local_task) elWlTask.value = cfg.whisper_local_task;
                 if (elWlTemp && cfg.whisper_local_temperature !== undefined) elWlTemp.value = cfg.whisper_local_temperature;
 
+                // Audio format preprocessing (per-provider)
+                const elSmFmt = document.getElementById('stt-speechmatics-audio-format');
+                const elWlFmt = document.getElementById('stt-whisper-local-audio-format');
+                const elAzFmt = document.getElementById('stt-azure-audio-format');
+                if (elSmFmt && cfg.speechmatics_audio_format) elSmFmt.value = cfg.speechmatics_audio_format;
+                if (elWlFmt && cfg.whisper_local_audio_format) elWlFmt.value = cfg.whisper_local_audio_format;
+                if (elAzFmt && cfg.azure_audio_format) elAzFmt.value = cfg.azure_audio_format;
+
                 this.toggleProviderSections();
                 if (elProvider && !elProvider._providerListener) {
                     elProvider._providerListener = true;
@@ -996,6 +1040,14 @@
             if (wlModelInput && wlModelInput.value.trim()) payload.whisper_local_model = wlModelInput.value.trim();
             if (wlTaskInput && wlTaskInput.value) payload.whisper_local_task = wlTaskInput.value;
             if (wlTempInput && wlTempInput.value !== '') payload.whisper_local_temperature = parseFloat(wlTempInput.value);
+
+            // Audio format preprocessing (per-provider)
+            const smFmtInput = document.getElementById('stt-speechmatics-audio-format');
+            const wlFmtInput = document.getElementById('stt-whisper-local-audio-format');
+            const azFmtInput = document.getElementById('stt-azure-audio-format');
+            if (smFmtInput) payload.speechmatics_audio_format = smFmtInput.value;
+            if (wlFmtInput) payload.whisper_local_audio_format = wlFmtInput.value;
+            if (azFmtInput) payload.azure_audio_format = azFmtInput.value;
 
             try {
                 const result = await API.settings.updateSTT(payload);

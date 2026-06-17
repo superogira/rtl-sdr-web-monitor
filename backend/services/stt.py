@@ -13,6 +13,9 @@ import time
 
 import httpx
 
+from backend.audio.convert import (
+    VALID_FORMATS, prepare_for_stt, cleanup_temp, mime_type_for_format,
+)
 from backend.config import settings
 from backend.services.app_settings import get_setting
 
@@ -28,6 +31,12 @@ _SPEECHMATICS_LANG_MAP = {
 # Valid Speechmatics option values (used for validation)
 _VALID_OPERATING_POINTS = {"standard", "enhanced"}
 _VALID_DIARIZATION = {"none", "speaker", "channel"}
+
+
+def _validate_audio_format(value: str) -> str:
+    """Clamp an audio-format setting to a valid value (default 'off')."""
+    value = (value or "off").lower()
+    return value if value in VALID_FORMATS else "off"
 
 
 async def _get_stt_config() -> dict:
@@ -48,6 +57,10 @@ async def _get_stt_config() -> dict:
     whisper_local_model = await get_setting("stt_whisper_local_model", settings.WHISPER_LOCAL_MODEL or "Systran/faster-whisper-small")
     whisper_local_task = await get_setting("stt_whisper_local_task", settings.WHISPER_LOCAL_TASK or "transcribe")
     whisper_local_temperature = await get_setting("stt_whisper_local_temperature", str(settings.WHISPER_LOCAL_TEMPERATURE if settings.WHISPER_LOCAL_TEMPERATURE is not None else 0.0))
+    # Per-provider audio format preprocessing (off|wav|flac|mp3).
+    speechmatics_audio_format = await get_setting("stt_speechmatics_audio_format", "off")
+    whisper_local_audio_format = await get_setting("stt_whisper_local_audio_format", "off")
+    azure_audio_format = await get_setting("stt_azure_audio_format", "off")
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",
@@ -63,6 +76,9 @@ async def _get_stt_config() -> dict:
         "whisper_local_model": whisper_local_model or "Systran/faster-whisper-small",
         "whisper_local_task": whisper_local_task if whisper_local_task in ("transcribe", "translate") else "transcribe",
         "whisper_local_temperature": _parse_float(whisper_local_temperature, 0.0),
+        "speechmatics_audio_format": _validate_audio_format(speechmatics_audio_format),
+        "whisper_local_audio_format": _validate_audio_format(whisper_local_audio_format),
+        "azure_audio_format": _validate_audio_format(azure_audio_format),
     }
 
 
@@ -101,6 +117,10 @@ async def transcribe_speechmatics(
     diarization = cfg["diarization"]
     enable_entities = cfg["enable_entities"]
 
+    # Preprocess audio (resample/transcode) to save bandwidth.
+    audio_fmt = cfg.get("speechmatics_audio_format", "off")
+    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+
     url = "https://asr.api.speechmatics.com/v2/jobs/"
 
     # Build transcription_config (NO "model" key — it's rejected by current API)
@@ -117,125 +137,128 @@ async def transcribe_speechmatics(
 
     logger.info(
         f"Speechmatics job config: lang={sm_lang}, operating_point={operating_point}, "
-        f"diarization={diarization}, enable_entities={enable_entities}"
+        f"diarization={diarization}, enable_entities={enable_entities}, audio_format={audio_fmt}"
     )
 
-    # Step 1: Submit job
-    async with httpx.AsyncClient(timeout=300) as client:
-        with open(audio_path, "rb") as audio_file:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {key}"},
-                data={"config": config_json},
-                files={"data_file": audio_file},
-            )
-
-        if response.status_code not in (200, 201):
-            err = f"HTTP {response.status_code}: {response.text[:300]}"
-            logger.error(f"Speechmatics submit failed: {err}")
-            return {"text": "", "error": err}
-
-        job_id = response.json().get("id")
-        if not job_id:
-            err = f"No job id returned: {response.text[:300]}"
-            logger.error(f"Speechmatics did not return job id: {err}")
-            return {"text": "", "error": err}
-
-        logger.info(f"Speechmatics job submitted: {job_id} (lang={sm_lang})")
-
-        # Step 2: Poll job status (up to ~5 min)
-        job_url = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}"
-        for attempt in range(150):
-            await asyncio.sleep(2)
-
-            try:
-                status_resp = await client.get(job_url, headers={"Authorization": f"Bearer {key}"})
-                if status_resp.status_code == 200:
-                    job_data = status_resp.json().get("job", {})
-                    job_status = job_data.get("status")
-                    if job_status == "done":
-                        break
-                    if job_status in ("rejected", "failed", "cancelled"):
-                        errors = job_data.get("errors", [])
-                        err_detail = json.dumps(errors, ensure_ascii=False)[:500] if errors else job_status
-                        logger.error(f"Speechmatics job {job_status}: {err_detail}")
-                        return {"text": "", "error": f"Job {job_status}: {err_detail}"}
-            except Exception as e:
-                logger.warning(f"Speechmatics status poll error (attempt {attempt}): {e}")
-        else:
-            return {"text": "", "error": "Polling timed out after 300s"}
-
-        # Step 3: Fetch transcript
-        # NOTE: Valid format values are only: json-v2, txt, srt.
-        # (Older code used "txt-v2" which the API rejects with HTTP 422, causing
-        #  a misleading "Transcript fetch timed out".)
-        transcript_base = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}/transcript"
-        last_err = ""
-        for attempt in range(30):
-            # First try structured JSON (json-v2) so we can parse per-word results.
-            # Fall back to plain text (txt) which returns the raw transcript body.
-            for fmt in ("json-v2", "txt"):
-                url = f"{transcript_base}?format={fmt}"
-                try:
-                    result_resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
-                except Exception as e:
-                    last_err = f"fetch error ({fmt}): {e}"
-                    logger.warning(f"Speechmatics transcript fetch error ({fmt}): {e}")
-                    continue
-
-                if result_resp.status_code == 200:
-                    if fmt == "txt":
-                        # Plain text body — return as-is.
-                        text = result_resp.text.strip()
-                        logger.info(f"Speechmatics transcript (txt): {len(text)} chars")
-                        return {"text": text, "error": None}
-
-                    # json-v2: parse results -> alternatives -> content
-                    try:
-                        data = result_resp.json()
-                    except Exception as e:
-                        last_err = f"json decode error: {e}"
-                        logger.warning(f"Speechmatics transcript JSON decode error: {e}")
-                        continue
-
-                    results = data.get("results", [])
-                    if results:
-                        # Concatenate all alternatives' content (one word/token each).
-                        text = " ".join(
-                            (r.get("alternatives", [{}])[0].get("content", "") or "")
-                            for r in results
-                            if r.get("alternatives")
-                        ).strip()
-                        if text:
-                            logger.info(f"Speechmatics transcript (json-v2): {len(text)} chars")
-                            return {"text": text, "error": None}
-
-                    # Job done but no words recognized.
-                    logger.info("Speechmatics job done but no speech recognized")
-                    return {"text": "", "error": None}
-
-                # Non-200: log it (don't silently swallow like before).
-                body = result_resp.text[:300]
-                last_err = f"HTTP {result_resp.status_code} ({fmt}): {body}"
-                logger.warning(
-                    f"Speechmatics transcript fetch failed (attempt {attempt}, {fmt}): "
-                    f"HTTP {result_resp.status_code}: {body}"
+    try:
+        # Step 1: Submit job
+        async with httpx.AsyncClient(timeout=300) as client:
+            with open(upload_path, "rb") as audio_file:
+                response = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {key}"},
+                    data={"config": config_json},
+                    files={"data_file": audio_file},
                 )
 
-                # 422 = bad format/params — don't retry the same format.
-                if result_resp.status_code == 422:
-                    continue
-                # 404 / 410 = transcript gone — no point retrying.
-                if result_resp.status_code in (404, 410):
-                    return {"text": "", "error": f"Transcript unavailable: {last_err}"}
+            if response.status_code not in (200, 201):
+                err = f"HTTP {response.status_code}: {response.text[:300]}"
+                logger.error(f"Speechmatics submit failed: {err}")
+                return {"text": "", "error": err}
 
-            await asyncio.sleep(2)
+            job_id = response.json().get("id")
+            if not job_id:
+                err = f"No job id returned: {response.text[:300]}"
+                logger.error(f"Speechmatics did not return job id: {err}")
+                return {"text": "", "error": err}
 
-    return {
-        "text": "",
-        "error": f"Transcript fetch failed after retries: {last_err}" if last_err
-        else "Transcript fetch failed",
-    }
+            logger.info(f"Speechmatics job submitted: {job_id} (lang={sm_lang})")
+
+            # Step 2: Poll job status (up to ~5 min)
+            job_url = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}"
+            for attempt in range(150):
+                await asyncio.sleep(2)
+
+                try:
+                    status_resp = await client.get(job_url, headers={"Authorization": f"Bearer {key}"})
+                    if status_resp.status_code == 200:
+                        job_data = status_resp.json().get("job", {})
+                        job_status = job_data.get("status")
+                        if job_status == "done":
+                            break
+                        if job_status in ("rejected", "failed", "cancelled"):
+                            errors = job_data.get("errors", [])
+                            err_detail = json.dumps(errors, ensure_ascii=False)[:500] if errors else job_status
+                            logger.error(f"Speechmatics job {job_status}: {err_detail}")
+                            return {"text": "", "error": f"Job {job_status}: {err_detail}"}
+                except Exception as e:
+                    logger.warning(f"Speechmatics status poll error (attempt {attempt}): {e}")
+            else:
+                return {"text": "", "error": "Polling timed out after 300s"}
+
+            # Step 3: Fetch transcript
+            # NOTE: Valid format values are only: json-v2, txt, srt.
+            # (Older code used "txt-v2" which the API rejects with HTTP 422, causing
+            #  a misleading "Transcript fetch timed out".)
+            transcript_base = f"https://asr.api.speechmatics.com/v2/jobs/{job_id}/transcript"
+            last_err = ""
+            for attempt in range(30):
+                # First try structured JSON (json-v2) so we can parse per-word results.
+                # Fall back to plain text (txt) which returns the raw transcript body.
+                for fmt in ("json-v2", "txt"):
+                    url = f"{transcript_base}?format={fmt}"
+                    try:
+                        result_resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
+                    except Exception as e:
+                        last_err = f"fetch error ({fmt}): {e}"
+                        logger.warning(f"Speechmatics transcript fetch error ({fmt}): {e}")
+                        continue
+
+                    if result_resp.status_code == 200:
+                        if fmt == "txt":
+                            # Plain text body — return as-is.
+                            text = result_resp.text.strip()
+                            logger.info(f"Speechmatics transcript (txt): {len(text)} chars")
+                            return {"text": text, "error": None}
+
+                        # json-v2: parse results -> alternatives -> content
+                        try:
+                            data = result_resp.json()
+                        except Exception as e:
+                            last_err = f"json decode error: {e}"
+                            logger.warning(f"Speechmatics transcript JSON decode error: {e}")
+                            continue
+
+                        results = data.get("results", [])
+                        if results:
+                            # Concatenate all alternatives' content (one word/token each).
+                            text = " ".join(
+                                (r.get("alternatives", [{}])[0].get("content", "") or "")
+                                for r in results
+                                if r.get("alternatives")
+                            ).strip()
+                            if text:
+                                logger.info(f"Speechmatics transcript (json-v2): {len(text)} chars")
+                                return {"text": text, "error": None}
+
+                        # Job done but no words recognized.
+                        logger.info("Speechmatics job done but no speech recognized")
+                        return {"text": "", "error": None}
+
+                    # Non-200: log it (don't silently swallow like before).
+                    body = result_resp.text[:300]
+                    last_err = f"HTTP {result_resp.status_code} ({fmt}): {body}"
+                    logger.warning(
+                        f"Speechmatics transcript fetch failed (attempt {attempt}, {fmt}): "
+                        f"HTTP {result_resp.status_code}: {body}"
+                    )
+
+                    # 422 = bad format/params — don't retry the same format.
+                    if result_resp.status_code == 422:
+                        continue
+                    # 404 / 410 = transcript gone — no point retrying.
+                    if result_resp.status_code in (404, 410):
+                        return {"text": "", "error": f"Transcript unavailable: {last_err}"}
+
+                await asyncio.sleep(2)
+
+        return {
+            "text": "",
+            "error": f"Transcript fetch failed after retries: {last_err}" if last_err
+            else "Transcript fetch failed",
+        }
+    finally:
+        cleanup_temp(upload_path, converted)
 
 
 async def transcribe_azure(
@@ -270,11 +293,22 @@ async def transcribe_azure(
     if lang_bcp47 in _AZURE_LANG_MAP:
         lang_bcp47 = _AZURE_LANG_MAP[lang_bcp47]
 
+    # Azure Speech SDK only supports WAV/PCM, so clamp mp3/flac → wav.
+    azure_fmt = cfg.get("azure_audio_format", "off")
+    if azure_fmt in ("mp3", "flac"):
+        logger.warning(
+            "Azure Speech SDK only supports WAV; clamping audio_format "
+            "'%s' → 'wav'", azure_fmt,
+        )
+        azure_fmt = "wav"
+    upload_path, converted = prepare_for_stt(audio_path, azure_fmt)
+
     try:
         import azure.cognitiveservices.speech as speechsdk
     except ImportError:
         msg = "azure-cognitiveservices-speech not installed. Install with: pip install azure-cognitiveservices-speech"
         logger.error(msg)
+        cleanup_temp(upload_path, converted)
         return {"text": "", "error": msg}
 
     def _run() -> str:
@@ -284,7 +318,7 @@ async def transcribe_azure(
         )
         speech_config.speech_recognition_language = lang_bcp47
 
-        audio_config = speechsdk.audio.AudioConfig(filename=audio_path)
+        audio_config = speechsdk.audio.AudioConfig(filename=upload_path)
         recognizer = speechsdk.SpeechRecognizer(
             speech_config=speech_config, audio_config=audio_config
         )
@@ -322,11 +356,13 @@ async def transcribe_azure(
     try:
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(None, _run)
-        logger.info(f"Azure Speech transcript: {len(text)} chars (lang={lang_bcp47}, region={region})")
+        logger.info(f"Azure Speech transcript: {len(text)} chars (lang={lang_bcp47}, region={region}, audio_format={azure_fmt})")
         return {"text": text, "error": None}
     except Exception as e:
         logger.error(f"Azure Speech transcription failed: {e}")
         return {"text": "", "error": str(e)}
+    finally:
+        cleanup_temp(upload_path, converted)
 
 
 async def transcribe_whisper_local(
@@ -380,6 +416,14 @@ async def transcribe_whisper_local(
         # Only send language if explicitly set (not "auto" / empty)
         lang_for_api = lang if lang and lang != "auto" else None
 
+    # Preprocess audio (resample/transcode) to save bandwidth.
+    audio_fmt = cfg.get("whisper_local_audio_format", "off")
+    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    # Determine the actual upload format (may have fallen back to wav) for MIME.
+    upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
+    upload_mime = mime_type_for_format(upload_ext)
+    upload_filename = audio_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "." + upload_ext
+
     # Build multipart form data.
     form_fields = {
         "model": srv_model,
@@ -392,16 +436,17 @@ async def transcribe_whisper_local(
 
     logger.info(
         f"Whisper Local request: endpoint={endpoint}, model={srv_model}, "
-        f"task={srv_task}, language={lang_for_api or 'auto'}, temp={srv_temp}"
+        f"task={srv_task}, language={lang_for_api or 'auto'}, temp={srv_temp}, "
+        f"audio_format={audio_fmt}"
     )
 
     try:
         async with httpx.AsyncClient(timeout=600) as client:
-            with open(audio_path, "rb") as f:
+            with open(upload_path, "rb") as f:
                 resp = await client.post(
                     endpoint,
                     data=form_fields,
-                    files={"file": (audio_path.rsplit("/", 1)[-1], f, "audio/wav")},
+                    files={"file": (upload_filename, f, upload_mime)},
                 )
 
         if resp.status_code != 200:
@@ -426,6 +471,8 @@ async def transcribe_whisper_local(
     except Exception as e:
         logger.error(f"Whisper Local transcription failed: {e}")
         return {"text": "", "error": str(e)}
+    finally:
+        cleanup_temp(upload_path, converted)
 
 
 async def transcribe(audio_path: str, language: str = None, api_key: str = None) -> dict:

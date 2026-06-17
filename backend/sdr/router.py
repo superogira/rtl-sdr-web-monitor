@@ -726,6 +726,12 @@ class STTSettingsRequest(BaseModel):
     whisper_local_model: Optional[str] = None  # e.g. "Systran/faster-whisper-small"
     whisper_local_task: Optional[str] = None  # "transcribe" | "translate"
     whisper_local_temperature: Optional[float] = None  # 0.0–1.0
+    # Per-provider audio preprocessing format (off|wav|flac|mp3).
+    # "off" = send original WAV unchanged. "wav" = resample to 16kHz.
+    # "flac"|"mp3" = also transcode (smaller upload, less bandwidth).
+    speechmatics_audio_format: Optional[str] = None
+    whisper_local_audio_format: Optional[str] = None
+    azure_audio_format: Optional[str] = None
 
 
 @settings_router.get("/stt")
@@ -749,6 +755,9 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
         "whisper_local_task": cfg.get("whisper_local_task", "transcribe"),
         "whisper_local_temperature": cfg.get("whisper_local_temperature", 0.0),
+        "speechmatics_audio_format": cfg.get("speechmatics_audio_format", "off"),
+        "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
+        "azure_audio_format": cfg.get("azure_audio_format", "off"),
     }
 
 
@@ -817,6 +826,27 @@ async def update_stt_settings(
             raise HTTPException(status_code=400, detail="whisper_local_temperature must be between 0.0 and 1.0")
         await set_setting("stt_whisper_local_temperature", str(t))
 
+    # Per-provider audio preprocessing format
+    _VALID_AUDIO_FMT = ("off", "wav", "flac", "mp3")
+    if req.speechmatics_audio_format is not None:
+        v = req.speechmatics_audio_format.lower()
+        if v not in _VALID_AUDIO_FMT:
+            raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
+        await set_setting("stt_speechmatics_audio_format", v)
+    if req.whisper_local_audio_format is not None:
+        v = req.whisper_local_audio_format.lower()
+        if v not in _VALID_AUDIO_FMT:
+            raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
+        await set_setting("stt_whisper_local_audio_format", v)
+    if req.azure_audio_format is not None:
+        v = req.azure_audio_format.lower()
+        # Azure Speech SDK only supports WAV; clamp mp3/flac -> wav automatically.
+        if v in ("mp3", "flac"):
+            v = "wav"
+        if v not in _VALID_AUDIO_FMT:
+            raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
+        await set_setting("stt_azure_audio_format", v)
+
     # Return updated config
     cfg = await _get_stt_config()
     return {
@@ -837,6 +867,9 @@ async def update_stt_settings(
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
         "whisper_local_task": cfg.get("whisper_local_task", "transcribe"),
         "whisper_local_temperature": cfg.get("whisper_local_temperature", 0.0),
+        "speechmatics_audio_format": cfg.get("speechmatics_audio_format", "off"),
+        "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
+        "azure_audio_format": cfg.get("azure_audio_format", "off"),
     }
 
 
