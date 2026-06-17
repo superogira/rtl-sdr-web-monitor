@@ -51,7 +51,6 @@
         <div class="nav-tabs">
             <div class="nav-tab" onclick="Settings.showTab('general')">🌐 ทั่วไป</div>
             <div class="nav-tab" onclick="Settings.showTab('devices')">🔌 อุปกรณ์และการตั้งค่า</div>
-            <div class="nav-tab" onclick="Settings.showTab('sdr')">📡 RTL-TCP</div>
             <div class="nav-tab" onclick="Settings.showTab('recording')">🎙️ การอัดเสียง</div>
             <div class="nav-tab" onclick="Settings.showTab('stt')">📝 ถอดเสียง</div>
             <div class="nav-tab" onclick="Settings.showTab('telegram')">📨 Telegram</div>
@@ -74,6 +73,15 @@
                     </p>
                     <div id="devices-list" style="display:grid; gap:8px;">
                         <div class="text-center text-muted">กำลังโหลด...</div>
+                    </div>
+                </div>
+                <div class="settings-section">
+                    <h2>📊 สถานะการเชื่อมต่อ</h2>
+                    <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
+                    <div class="form-actions">
+                        <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
+                        <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
+                        <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
                     </div>
                 </div>
             </div>
@@ -108,81 +116,6 @@
                         <button class="btn btn-sm" onclick="Settings.deviceWizardBack()">← ย้อนกลับ</button>
                         <button class="btn btn-sm btn-primary" onclick="Settings.saveDeviceFromWizard()">💾 บันทึกอุปกรณ์</button>
                     </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SDR Settings -->
-        <div class="tab-content" id="tab-sdr" style="display:none;">
-            <div class="settings-section">
-                <h2>📡 การเชื่อมต่อ RTL-TCP</h2>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Host</label>
-                        <input type="text" id="sdr-host" value="192.168.1.101">
-                    </div>
-                    <div class="form-group">
-                        <label>Port</label>
-                        <input type="number" id="sdr-port" value="1234">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>ความถี่เริ่มต้น (Hz)</label>
-                        <input type="number" id="sdr-freq" value="145500000">
-                    </div>
-                    <div class="form-group">
-                        <label>Sample Rate (Hz)</label>
-                        <input type="number" id="sdr-samplerate" value="2048000">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Gain (dB)</label>
-                        <input type="number" id="sdr-gain" value="30">
-                    </div>
-                    <div class="form-group">
-                        <label>Demodulation Mode</label>
-                        <select id="sdr-mode">
-                            <option value="FM">FM</option>
-                            <option value="AM">AM</option>
-                            <option value="USB">USB</option>
-                            <option value="LSB">LSB</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Frequency Correction (PPM)</label>
-                        <input type="number" id="sdr-ppm" value="0" step="1" min="-200" max="200">
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                            ปรับความคลาดเคลื่อนของ crystal oscillator<br>
-                            RTL-SDR ทั่วไป: 28–70 ppm. ค่า + = ความถี่ต่ำเกิน, ค่า − = สูงเกิน<br>
-                            <strong>ตัวอย่าง:</strong> สัญญาณควรอยู่กลางแต่ไปด้านขวา → ลอง −30 ถึง −60
-                        </p>
-                    </div>
-                    <div class="form-group">
-                        <label>ช่วงความถี่ที่รับ (Bandwidth)</label>
-                        <select id="sdr-bw-preset">
-                            <option value="6000">6 kHz - Narrow (NBFM voice)</option>
-                            <option value="12000" selected>12 kHz - Normal (NBFM voice)</option>
-                            <option value="25000">25 kHz - Wide</option>
-                            <option value="50000">50 kHz - Extra Wide</option>
-                            <option value="200000">200 kHz - Broadcast FM</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveSDR()">💾 บันทึก</button>
-                </div>
-            </div>
-            <div class="settings-section">
-                <h2>📊 สถานะการเชื่อมต่อ</h2>
-                <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
-                <div class="form-actions">
-                    <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
-                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
-                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
                 </div>
             </div>
         </div>
@@ -641,7 +574,7 @@
                 if (h1) h1.textContent = '⚙️ ตั้งค่า';
 
                 // Hide admin-only tab buttons and their content
-                const adminTabs = ['devices', 'sdr', 'recording', 'stt', 'telegram', 'keywords', 'users'];
+                const adminTabs = ['devices', 'recording', 'stt', 'telegram', 'keywords', 'users'];
                 adminTabs.forEach(tabName => {
                     document.querySelectorAll('.nav-tab').forEach(btn => {
                         const onclick = btn.getAttribute('onclick') || '';
@@ -677,36 +610,11 @@
             this.showTab(isAdmin ? 'devices' : 'general');
         },
 
-        // === SDR Settings === Host/port/freq etc. are authoritative on backend.
+        // === SDR Settings === Host/port/freq etc. come from active device config.
+        // Here we only load system policy values (VFO margin + max listeners).
         async loadSDRSettings() {
-            // Fallback values from localStorage first.
-            const fields = {
-                'sdr-freq': 'sdr_freq',
-                'sdr-samplerate': 'sdr_sample_rate',
-                'sdr-gain': 'sdr_gain',
-                'sdr-mode': 'sdr_mode',
-            };
-            for (const [elId, key] of Object.entries(fields)) {
-                const el = document.getElementById(elId);
-                if (!el) continue;
-                const saved = localStorage.getItem(key);
-                if (saved !== null) el.value = saved;
-            }
-            // Pull host/port/freq etc. from backend (authoritative source).
             try {
                 const status = await API.sdr.status();
-                if (status.host) document.getElementById('sdr-host').value = status.host;
-                if (status.port) document.getElementById('sdr-port').value = status.port;
-                if (status.frequency) document.getElementById('sdr-freq').value = status.frequency;
-                if (status.sample_rate) document.getElementById('sdr-samplerate').value = status.sample_rate;
-                if (status.gain) document.getElementById('sdr-gain').value = status.gain;
-                if (status.mode) document.getElementById('sdr-mode').value = status.mode;
-                if (status.freq_correction_ppm !== undefined) {
-                    document.getElementById('sdr-ppm').value = status.freq_correction_ppm;
-                }
-                if (status.channel_bw !== undefined) {
-                    document.getElementById('sdr-bw-preset').value = status.channel_bw;
-                }
                 // VFO margin ratio (admin-configurable passband limit)
                 if (status.vfo_margin_ratio !== undefined) {
                     const el = document.getElementById('sdr-vfo-margin');
@@ -729,11 +637,7 @@
                     }
                 }
             } catch (e) {
-                console.warn('Could not load SDR status from backend, using local defaults');
-                const savedHost = localStorage.getItem('sdr_host');
-                const savedPort = localStorage.getItem('sdr_port');
-                if (savedHost) document.getElementById('sdr-host').value = savedHost;
-                if (savedPort) document.getElementById('sdr-port').value = savedPort;
+                console.warn('Could not load SDR status from backend:', e);
             }
         },
 
@@ -785,80 +689,18 @@
             }
         },
 
+        // Connect using the active device's config (host/port/freq etc. are
+        // stored on the backend as part of the active SDR device).
         async connectSDR() {
-            const host = document.getElementById('sdr-host').value.trim();
-            const port = parseInt(document.getElementById('sdr-port').value) || 1234;
-            if (!host) { alert('กรุณาใส่ Host'); return; }
             try {
-                // Send host/port with the connect call so backend uses them.
-                await API.sdr.connect(host, port);
-                // Apply saved SDR settings to hardware after connecting
-                try {
-                    await API.sdr.setFrequency(parseInt(document.getElementById('sdr-freq').value));
-                    await API.sdr.setSampleRate(parseInt(document.getElementById('sdr-samplerate').value));
-                    await API.sdr.setGain(parseInt(document.getElementById('sdr-gain').value));
-                    await API.sdr.setMode(document.getElementById('sdr-mode').value);
-                } catch (applyErr) {
-                    console.warn('Apply settings after connect failed:', applyErr);
-                }
+                await API.sdr.connect();  // no args → backend uses active device config
                 this.refreshStatus();
-            } catch(e) { alert('เชื่อมต่อไม่ได้: ' + (e.detail || e)); }
+            } catch(e) { alert('เชื่อมต่อไม่ได้: ' + (e.detail || e.message || e)); }
         },
 
         async disconnectSDR() {
             try { await API.sdr.disconnect(); this.refreshStatus(); }
             catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
-        },
-
-        async saveSDR() {
-            const host = document.getElementById('sdr-host').value.trim();
-            const port = parseInt(document.getElementById('sdr-port').value) || 1234;
-            const freq = parseInt(document.getElementById('sdr-freq').value);
-            const sampleRate = parseInt(document.getElementById('sdr-samplerate').value);
-            const gain = parseInt(document.getElementById('sdr-gain').value);
-            const mode = document.getElementById('sdr-mode').value;
-            const ppm = parseInt(document.getElementById('sdr-ppm').value) || 0;
-            const bwPreset = parseInt(document.getElementById('sdr-bw-preset').value) || 12000;
-            if (!host) { alert('กรุณาใส่ Host'); return; }
-
-            // 1) Persist freq/rate/gain/mode to localStorage (local cache).
-            localStorage.setItem('sdr_freq', String(freq));
-            localStorage.setItem('sdr_sample_rate', String(sampleRate));
-            localStorage.setItem('sdr_gain', String(gain));
-            localStorage.setItem('sdr_mode', mode);
-            localStorage.setItem('sdr_ppm', String(ppm));
-            localStorage.setItem('sdr_bw', String(bwPreset));
-
-            // 2) Send host/port to backend (persisted server-side → survives restart).
-            try {
-                await API.sdr.setConnection(host, port);
-            } catch(e) {
-                alert('⚠️ ส่งค่า host/port ไป server ไม่ได้: ' + (e.detail || e.message || e));
-                return;
-            }
-
-            // 3) Apply bandwidth (always, no connection needed — it's channel analysis only)
-            try { await API.sdr.setBandwidth(bwPreset); } catch(e) { console.warn('Set BW:', e); }
-
-            // Note: VFO Margin and Max Listeners are now in the General tab
-            // (saved via Settings.saveSystemPolicy()).
-
-            // 4) Apply freq/rate/gain/mode/ppm to hardware if currently connected.
-            try {
-                const status = await API.sdr.status();
-                if (status.connected) {
-                    await API.sdr.setFrequency(freq);
-                    await API.sdr.setSampleRate(sampleRate);
-                    await API.sdr.setGain(gain);
-                    await API.sdr.setMode(mode);
-                    await API.sdr.setFreqCorrection(ppm);
-                    alert('✅ บันทึกและตั้งค่าสำเร็จ! (เปลี่ยน host/port จะมีผลตอนเชื่อมต่อใหม่)');
-                } else {
-                    alert('✅ บันทึกเรียบร้อย! ค่าจะถูกใช้ตอนกด "เชื่อมต่อ"');
-                }
-            } catch(e) {
-                alert('✅ บันทึก host/port แล้ว แต่ apply ค่าอื่นไม่ได้: ' + (e.detail || e.message || e));
-            }
         },
 
         // === System Policy (VFO Margin + Max Listeners) — Admin Only ===
