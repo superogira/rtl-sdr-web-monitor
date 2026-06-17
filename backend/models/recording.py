@@ -36,6 +36,7 @@ class Recording(Base):
     stt_provider = Column(String(20), nullable=True, comment="STT provider used: speechmatics/whisper")
     stt_model = Column(String(255), nullable=True, comment="Model name used (e.g. Whisper model) if applicable")
     stt_error = Column(Text, nullable=True, comment="Error message if STT failed")
+    stt_duration = Column(Float, nullable=True, comment="Time spent transcribing (seconds)")
     status = Column(Enum(RecordingStatus), default=RecordingStatus.RECORDING, nullable=False)
     source = Column(String(20), default="auto", nullable=False, comment="auto or manual")
     recorded_by_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, comment="User who recorded this (manual recordings)")
@@ -71,6 +72,7 @@ class Recording(Base):
             "stt_provider": self.stt_provider,
             "stt_model": self.stt_model,
             "stt_error": self.stt_error,
+            "stt_duration": self.stt_duration,
             "status": self.status.value if self.status else None,
             "source": self.source or "auto",
             "recorded_by_user_id": self.recorded_by_user_id,

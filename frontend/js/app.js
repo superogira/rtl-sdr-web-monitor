@@ -1599,7 +1599,8 @@ const App = {
             const _label = _PROVIDER_LABELS[rec.stt_provider] || (rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1));
             const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local');
             const _model = _isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
-            _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}</span>`;
+            const _dur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
+            _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}${_dur}</span>`;
         }
 
         return `

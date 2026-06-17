@@ -293,7 +293,8 @@
             // For Whisper, append the model name if available (e.g. "Whisper · Systran/faster-whisper-small")
             const isWhisper = (p === 'whisper' || p === 'whisper_local');
             const model = isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
-            return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}${model}</span>`;
+            const sttDur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
+            return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}${model}${sttDur}</span>`;
         }
 
         // สร้าง HTML ของส่วน transcript (แยกไว้เพื่อ re-render ตอน diff)
@@ -324,7 +325,7 @@
         function updateRowFields(rowEl, oldRec, newRec) {
             // เปรียบเทียบ field ที่อาจเปลี่ยนและอัพเดตเฉพาะส่วนนั้น
             const audioDeletedChanged = (oldRec.audio_deleted ?? false) !== (newRec.audio_deleted ?? false);
-            const fields = ['transcript','transcription','stt_provider','stt_model','stt_error'];
+            const fields = ['transcript','transcription','stt_provider','stt_model','stt_error','stt_duration'];
             const sttChanged = audioDeletedChanged || fields.some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
             if (sttChanged) {
                 const trEl = rowEl.querySelector('.transcript');
@@ -573,6 +574,7 @@
                     cached.stt_provider = result.provider || cached.stt_provider;
                     cached.stt_model = result.model || cached.stt_model;
                     cached.stt_error = result.error || cached.stt_error;
+                    cached.stt_duration = result.stt_duration != null ? result.stt_duration : cached.stt_duration;
                     // Re-render ผ่าน transcriptHTML() เพื่อแสดงข้อความ + provider badge + error พร้อมกัน
                     if (transcriptEl) transcriptEl.innerHTML = transcriptHTML(cached);
                 } else if (transcriptEl) {

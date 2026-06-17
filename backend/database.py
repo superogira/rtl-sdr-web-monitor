@@ -69,6 +69,7 @@ def _run_migrations(conn):
         ("stt_provider", "VARCHAR(20)"),
         ("stt_model", "VARCHAR(255)"),
         ("stt_error", "TEXT"),
+        ("stt_duration", "FLOAT"),
         ("audio_deleted", "BOOLEAN DEFAULT 0 NOT NULL"),
         ("recorded_by_user_id", "VARCHAR(36)"),
     ]

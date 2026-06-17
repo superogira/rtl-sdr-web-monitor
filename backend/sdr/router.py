@@ -678,16 +678,18 @@ async def transcribe_recording(
         lang = result.get("language", "th")
         provider = result.get("provider", "")
         error = result.get("error")
+        stt_dur = result.get("duration")
 
         rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
         rec.transcript_language = lang
         rec.stt_provider = provider or None
         rec.stt_model = result.get("model") or None
         rec.stt_error = error or None
+        rec.stt_duration = stt_dur
         rec.status = RecordingStatus.COMPLETED
         await db.commit()
 
-        logger.info(f"Transcribed {rec_id}: {len(text)} chars (lang={lang}, provider={provider}, model={result.get('model')})")
+        logger.info(f"Transcribed {rec_id}: {len(text)} chars (lang={lang}, provider={provider}, model={result.get('model')}, duration={stt_dur}s)")
         return {
             "success": True,
             "id": rec_id,
@@ -696,6 +698,7 @@ async def transcribe_recording(
             "provider": provider,
             "model": result.get("model"),
             "error": error,
+            "stt_duration": stt_dur,
         }
     except Exception as e:
         logger.error(f"Transcription failed for {rec_id}: {e}", exc_info=True)

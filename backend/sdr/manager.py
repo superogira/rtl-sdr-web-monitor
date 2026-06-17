@@ -1019,6 +1019,7 @@ class SDRManager:
                         provider = result.get("provider", "")
                         model = result.get("model")
                         error = result.get("error")
+                        stt_dur = result.get("duration")
                         async with async_session() as session:
                             db_rec = await session.get(Recording, rec_id)
                             if db_rec:
@@ -1027,6 +1028,7 @@ class SDRManager:
                                 db_rec.stt_provider = provider or None
                                 db_rec.stt_model = model or None
                                 db_rec.stt_error = error or None
+                                db_rec.stt_duration = stt_dur
                                 db_rec.status = RecordingStatus.COMPLETED
                                 await session.commit()
                         rec_info_copy["transcript"] = text
@@ -1034,8 +1036,9 @@ class SDRManager:
                         rec_info_copy["stt_provider"] = provider
                         rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
+                        rec_info_copy["stt_duration"] = stt_dur
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
-                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model})")
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         # Store error in DB so user can see what went wrong
@@ -1190,6 +1193,7 @@ class SDRManager:
                         provider = result.get("provider", "")
                         model = result.get("model")
                         error = result.get("error")
+                        stt_dur = result.get("duration")
                         async with async_session() as session:
                             db_rec = await session.get(Recording, rec_id)
                             if db_rec:
@@ -1198,6 +1202,7 @@ class SDRManager:
                                 db_rec.stt_provider = provider or None
                                 db_rec.stt_model = model or None
                                 db_rec.stt_error = error or None
+                                db_rec.stt_duration = stt_dur
                                 db_rec.status = RecordingStatus.COMPLETED
                                 await session.commit()
                         rec_info_copy["transcript"] = text
@@ -1205,8 +1210,9 @@ class SDRManager:
                         rec_info_copy["stt_provider"] = provider
                         rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
+                        rec_info_copy["stt_duration"] = stt_dur
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
-                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model})")
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         try:

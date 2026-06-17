@@ -9,6 +9,7 @@ environment variables.
 import asyncio
 import json
 import logging
+import time
 
 import httpx
 
@@ -440,6 +441,7 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
     text = ""
     error = None
     model = None
+    start_time = time.perf_counter()
     if provider == "speechmatics":
         result = await transcribe_speechmatics(audio_path, language=lang, api_key=api_key or cfg["api_key"])
         text = result["text"]
@@ -462,6 +464,7 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
     else:
         error = f"Unknown STT provider: {provider}"
         logger.error(error)
+    duration = round(time.perf_counter() - start_time, 2)
 
     return {
         "text": text,
@@ -469,4 +472,5 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
         "provider": provider,
         "error": error,
         "model": model,
+        "duration": duration,
     }
