@@ -634,24 +634,33 @@ async def stt_usage_stats(
     by_provider.sort(key=lambda x: x["total_minutes"], reverse=True)
 
     # --- by whisper model (only provider = whisper_local) ---
+    # Also include audio duration sum for the wait/length ratio (RTF).
     q_model = (
         select(
             Recording.stt_model,
             func.sum(Recording.stt_duration).label("total_seconds"),
+            func.coalesce(func.sum(Recording.duration), 0.0).label("total_audio_seconds"),
             func.count(Recording.id).label("count"),
         )
         .where(*base_filter, Recording.stt_provider == "whisper_local")
         .group_by(Recording.stt_model)
     )
     mrows = (await db.execute(q_model)).all()
-    by_whisper_model = [
-        {
+    by_whisper_model = []
+    for (m, secs, audio_secs, cnt) in mrows:
+        secs = secs or 0.0
+        audio_secs = float(audio_secs or 0.0)
+        # Weighted ratio (RTF) = total wait time / total audio length.
+        # Avoids division by zero per row and reflects the true overall wait.
+        ratio = round(secs / audio_secs, 3) if audio_secs > 0 else None
+        by_whisper_model.append({
             "model": (m or "unknown"),
-            "total_minutes": round((secs or 0.0) / 60.0, 2),
+            "total_minutes": round(secs / 60.0, 2),
             "count": int(cnt or 0),
-        }
-        for (m, secs, cnt) in mrows
-    ]
+            "total_audio_seconds": round(audio_secs, 1),
+            "total_stt_seconds": round(float(secs), 1),
+            "ratio": ratio,
+        })
     by_whisper_model.sort(key=lambda x: x["total_minutes"], reverse=True)
 
     return {

@@ -249,6 +249,15 @@
                         </div>
                         <div id="stt-chart-whisper-model-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล Whisper</div>
                     </div>
+                    <div>
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                            อัตราส่วนเวลารอถอดเสียงต่อความยาวเสียง แยกตามโมเดล Whisper (RTF)
+                        </div>
+                        <div style="position:relative; height:240px;">
+                            <canvas id="stt-chart-whisper-ratio"></canvas>
+                        </div>
+                        <div id="stt-chart-whisper-ratio-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล Whisper</div>
+                    </div>
                 </div>
             </div>
 
@@ -1053,7 +1062,7 @@
         },
 
         // === STT Usage Stats / Charts ===
-        _sttCharts: { provider: null, whisperModel: null },
+        _sttCharts: { provider: null, whisperModel: null, whisperRatio: null },
         _sttStatsLoaded: false,
 
         // Format a Date into the value expected by <input type="datetime-local">
@@ -1157,6 +1166,7 @@
             }
             this._renderSTTProviderChart(data.by_provider || []);
             this._renderSTTWhisperModelChart(data.by_whisper_model || []);
+            this._renderSTTWhisperRatioChart(data.by_whisper_model || []);
             this._sttStatsLoaded = true;
         },
 
@@ -1265,6 +1275,77 @@
                         x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
                         y: {
                             ticks: { color: '#94a3b8', callback: (v) => v + ' นาที' },
+                            grid: { color: 'rgba(148,163,184,0.1)' },
+                            beginAtZero: true,
+                        },
+                    },
+                },
+            });
+        },
+
+        _renderSTTWhisperRatioChart(rows) {
+            const canvas = document.getElementById('stt-chart-whisper-ratio');
+            const emptyEl = document.getElementById('stt-chart-whisper-ratio-empty');
+            if (!canvas) return;
+            // Only rows with a valid ratio (audio length > 0)
+            const valid = (rows || []).filter(r => r.ratio !== null && r.ratio !== undefined);
+            const hasData = valid.length > 0;
+            if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+            canvas.style.display = hasData ? '' : 'none';
+            if (this._sttCharts.whisperRatio) { this._sttCharts.whisperRatio.destroy(); this._sttCharts.whisperRatio = null; }
+            if (!hasData || !window.Chart) return;
+            const labels = valid.map(r => r.model);
+            const values = valid.map(r => r.ratio);
+            // Color: green if faster than realtime (<1), yellow if ~1, red if slow (>1.5)
+            const colors = values.map(v => {
+                if (v <= 0.8) return 'rgba(34,197,94,0.7)';   // green = fast
+                if (v <= 1.2) return 'rgba(234,179,8,0.7)';    // yellow = ~realtime
+                return 'rgba(239,68,68,0.7)';                   // red = slow
+            });
+            const borderColors = colors.map(c => c.replace(/0\.7\)/, '1)'));
+            this._sttCharts.whisperRatio = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'อัตราส่วน (RTF)',
+                        data: values,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                title: (items) => valid[items[0].dataIndex].model,
+                                label: (ctx) => {
+                                    const row = valid[ctx.dataIndex];
+                                    const r = row.ratio;
+                                    const note = (r < 1) ? `(เร็วกว่าเวลาจริง ${(1/r).toFixed(2)}x)`
+                                              : (r > 1) ? `(ช้ากว่าเวลาจริง ${r.toFixed(2)}x)`
+                                              : '(เท่าเวลาจริง)';
+                                    return [
+                                        `อัตราส่วน: ${r.toFixed(3)}x ${note}`,
+                                        `เสียงรวม: ${row.total_audio_seconds.toFixed(1)} วินาที`,
+                                        `เวลารอรวม: ${row.total_stt_seconds.toFixed(1)} วินาที`,
+                                        `จำนวน: ${row.count} รายการ`,
+                                    ];
+                                },
+                            },
+                        },
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                        y: {
+                            ticks: {
+                                color: '#94a3b8',
+                                callback: (v) => v + 'x',
+                            },
                             grid: { color: 'rgba(148,163,184,0.1)' },
                             beginAtZero: true,
                         },
