@@ -75,19 +75,16 @@
                         <div class="text-center text-muted">กำลังโหลด...</div>
                     </div>
                 </div>
-                <div class="settings-section">
-                    <h2>📊 สถานะการเชื่อมต่อ</h2>
-                    <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
-                    <div class="form-actions">
-                        <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
-                        <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
-                        <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
-                    </div>
-                </div>
             </div>
 
-            <!-- Wizard View -->
+            <!-- Detail/Wizard View -->
             <div id="devices-wizard-view" style="display:none;">
+                <!-- Status section (shown only when viewing an existing device) -->
+                <div class="settings-section" id="device-status-section" style="display:none;">
+                    <h2>📊 สถานะการเชื่อมต่อ</h2>
+                    <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
+                    <div id="sdr-status-actions" class="form-actions"></div>
+                </div>
                 <!-- Step 1: Name + Type -->
                 <div class="settings-section" id="device-step1">
                     <h2 id="device-wizard-title">➕ เพิ่มอุปกรณ์ใหม่</h2>
@@ -652,39 +649,83 @@
             });
         },
 
+        // Refresh status. Caches the latest global status and renders the
+        // detailed status block inside the device detail view (if open).
         async refreshStatus() {
             try {
                 const status = await API.sdr.status();
+                this._lastStatus = status;  // cache for list-view badges
                 const el = document.getElementById('sdr-status');
-                const connBadge = status.connected
-                    ? '<span class="status-badge status-on">เชื่อมต่อแล้ว</span>'
-                    : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
-                const streamBadge = status.streaming
-                    ? '<span class="status-badge status-on">กำลังรับสัญญาณ</span>'
-                    : '<span class="status-badge status-off">หยุดรับ</span>';
-                const recBadge = status.recording
-                    ? '<span class="status-badge status-on">กำลังอัด</span>'
-                    : '<span class="status-badge status-off">ไม่ได้อัด</span>';
-                el.innerHTML = `
-                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px;">
-                        <div>🔗 การเชื่อมต่อ: ${connBadge}</div>
-                        <div>📡 Streaming: ${streamBadge}</div>
-                        <div>🎙️ Recording: ${recBadge}</div>
-                        <div>📊 Signal: <code>${status.signal_level_db} dB</code></div>
-                        <div>🔄 Freq: <code>${(status.frequency/1e6).toFixed(3)} MHz</code></div>
-                        <div>📻 Mode: <code>${status.mode}</code></div>
-                        <div>🔊 Gain: <code>${status.gain} dB</code></div>
-                        <div>📶 Squelch: <code>${status.squelch_level} dB</code></div>
-                    </div>
-                `;
+                if (el) {
+                    const connBadge = status.connected
+                        ? '<span class="status-badge status-on">เชื่อมต่อแล้ว</span>'
+                        : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
+                    const streamBadge = status.streaming
+                        ? '<span class="status-badge status-on">กำลังรับสัญญาณ</span>'
+                        : '<span class="status-badge status-off">หยุดรับ</span>';
+                    const recBadge = status.recording
+                        ? '<span class="status-badge status-on">กำลังอัด</span>'
+                        : '<span class="status-badge status-off">ไม่ได้อัด</span>';
+                    el.innerHTML = `
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px;">
+                            <div>🔗 การเชื่อมต่อ: ${connBadge}</div>
+                            <div>📡 Streaming: ${streamBadge}</div>
+                            <div>🎙️ Recording: ${recBadge}</div>
+                            <div>📊 Signal: <code>${status.signal_level_db} dB</code></div>
+                            <div>🔄 Freq: <code>${(status.frequency/1e6).toFixed(3)} MHz</code></div>
+                            <div>📻 Mode: <code>${status.mode}</code></div>
+                            <div>🔊 Gain: <code>${status.gain} dB</code></div>
+                            <div>📶 Squelch: <code>${status.squelch_level} dB</code></div>
+                        </div>
+                    `;
+                }
+                // Render the action buttons based on whether we are viewing
+                // the active device or a non-active one.
+                this._renderStatusActions();
+                // Update list-view badges too (in case list is visible)
+                if (document.getElementById('devices-list-view').style.display !== 'none') {
+                    this.loadDevices();
+                }
             } catch (err) {
                 console.error('Failed to load SDR status:', err);
-                document.getElementById('sdr-status').innerHTML = `
-                    <div style="color:var(--accent-red);">⚠️ ไม่สามารถโหลดสถานะได้</div>
-                    <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
-                        Error: ${err.detail || err.message || err}<br>
-                        <a href="/login" style="color:var(--accent-cyan);">ลองเข้าสู่ระบบใหม่</a>
-                    </div>
+                const el = document.getElementById('sdr-status');
+                if (el) {
+                    el.innerHTML = `
+                        <div style="color:var(--accent-red);">⚠️ ไม่สามารถโหลดสถานะได้</div>
+                        <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
+                            Error: ${err.detail || err.message || err}<br>
+                            <a href="/login" style="color:var(--accent-cyan);">ลองเข้าสู่ระบบใหม่</a>
+                        </div>
+                    `;
+                }
+            }
+        },
+
+        // Render the connect/disconnect/refresh (or "use this device") buttons
+        // inside the device status section.
+        _renderStatusActions() {
+            const actionsEl = document.getElementById('sdr-status-actions');
+            if (!actionsEl) return;
+            const viewing = this._viewingDeviceId;
+            const isActive = viewing && viewing === this._lastActiveId;
+            if (!viewing) {
+                actionsEl.innerHTML = '';
+                return;
+            }
+            if (isActive) {
+                // This is the active device → show connect/disconnect/refresh.
+                actionsEl.innerHTML = `
+                    <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
+                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
+                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
+                `;
+            } else {
+                // Non-active device → offer to activate it.
+                actionsEl.innerHTML = `
+                    <p style="font-size:0.78rem; color:var(--text-secondary); margin:0; flex:1;">
+                        อุปกรณ์นี้ยังไม่ได้ใช้งาน — กดปุ่มเพื่อเริ่มใช้อุปกรณ์นี้ (สถานะจะแสดงหลังเลือกใช้งาน)
+                    </p>
+                    <button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${viewing}')">⚡ เริ่มใช้อุปกรณ์นี้</button>
                 `;
             }
         },
@@ -1087,6 +1128,9 @@
         // === SDR Devices (Admin) ===
         _deviceTypes: null,
         _editingDeviceId: null,
+        _lastStatus: null,       // cache of latest global SDR status (for list badges)
+        _lastActiveId: null,     // cache of active device id (for list badges)
+        _viewingDeviceId: null,  // device currently shown in detail/status view
 
         async loadDevices() {
             const el = document.getElementById('devices-list');
@@ -1097,6 +1141,7 @@
                 const activeId = result.active_device_id
                     || (devices.find(d => d.is_active) || {}).id
                     || (devices.length ? devices[0].id : null);
+                this._lastActiveId = activeId;
                 if (!devices.length) {
                     el.innerHTML = '<div class="text-center text-muted" style="padding:24px;">ยังไม่มีอุปกรณ์ SDR ในระบบ กด "เพิ่มอุปกรณ์" เพื่อเริ่มต้น</div>';
                     return;
@@ -1109,9 +1154,24 @@
                         ? `${cfg.host || '-'}:${cfg.port || 1234}`
                         : '';
                     const desc = cfg.description || '';
+                    // Short status badges (connection / streaming / recording)
+                    // For the active device these reflect the live global status.
+                    // For non-active devices the device is considered "offline/idle".
+                    const st = (isActive && this._lastStatus) ? this._lastStatus : null;
+                    const connBadge = isActive
+                        ? (st && st.connected
+                            ? '<span class="status-badge status-on">เชื่อมต่อ</span>'
+                            : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>')
+                        : '<span class="status-badge status-off">ไม่ได้ใช้งาน</span>';
+                    const streamBadge = (st && st.streaming)
+                        ? '<span class="status-badge status-on">กำลังรับ</span>'
+                        : '<span class="status-badge status-off">หยุดรับ</span>';
+                    const recBadge = (st && st.recording)
+                        ? '<span class="status-badge status-on">กำลังอัด</span>'
+                        : '<span class="status-badge status-off">ไม่ได้อัด</span>';
                     return `
                         <div style="background:var(--surface-1); border:1px solid ${isActive ? 'var(--accent-cyan)' : 'var(--border)'}; border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-                            <div style="flex:1; min-width:200px;">
+                            <div style="flex:1; min-width:220px;">
                                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                                     <strong>${d.name}</strong>
                                     ${isActive ? '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">● กำลังใช้งาน</span>' : '<span class="status-badge status-off">พร้อมใช้งาน</span>'}
@@ -1120,10 +1180,13 @@
                                     ${typeLabel} ${connInfo ? `· ${connInfo}` : ''}
                                     ${desc ? ` · ${desc}` : ''}
                                 </div>
+                                <div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; font-size:0.7rem;">
+                                    🔗 ${connBadge} &nbsp; 📡 ${streamBadge} &nbsp; 🎙️ ${recBadge}
+                                </div>
                             </div>
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
                                 ${!isActive ? `<button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${d.id}')">⚡ ใช้อุปกรณ์นี้</button>` : ''}
-                                <button class="btn btn-sm" onclick="Settings.editDevice('${d.id}')">✏️ แก้ไข</button>
+                                <button class="btn btn-sm" onclick="Settings.viewDevice('${d.id}')">📊 ดูสถานะ/ตั้งค่า</button>
                                 <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteDevice('${d.id}')">🗑️ ลบ</button>
                             </div>
                         </div>
@@ -1146,13 +1209,31 @@
             return this._deviceTypes;
         },
 
+        // View a device's detail page (status + settings). Opens the wizard
+        // view in edit mode AND shows the status section at the top.
+        async viewDevice(deviceId) {
+            this._viewingDeviceId = deviceId || null;
+            // Reuse the wizard flow (prefills form for editing).
+            await this.showDeviceWizard(deviceId);
+            // After the wizard is shown, reveal the status section + refresh.
+            const sec = document.getElementById('device-status-section');
+            if (sec) sec.style.display = (deviceId) ? '' : 'none';
+            this._renderStatusActions();
+            this.refreshStatus();
+        },
+
         async showDeviceWizard(deviceId) {
             this._editingDeviceId = deviceId || null;
+            this._viewingDeviceId = deviceId || null;
             // Show wizard view, hide list view
             document.getElementById('devices-list-view').style.display = 'none';
             document.getElementById('devices-wizard-view').style.display = '';
             document.getElementById('device-step1').style.display = '';
             document.getElementById('device-step2').style.display = 'none';
+
+            // Status section is shown only when viewing an existing device.
+            const sec = document.getElementById('device-status-section');
+            if (sec) sec.style.display = (deviceId) ? '' : 'none';
 
             const titleEl = document.getElementById('device-wizard-title');
             if (deviceId) {
