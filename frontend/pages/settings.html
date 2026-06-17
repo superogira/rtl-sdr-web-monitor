@@ -210,6 +210,48 @@
 
         <!-- STT Settings -->
         <div class="tab-content" id="tab-stt" style="display:none;">
+            <!-- STT Usage Charts (above global config) -->
+            <div class="settings-section">
+                <h2>📊 เวลาการถอดเสียง (STT Usage)</h2>
+                <div class="stt-stats-controls" style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; margin-bottom:16px;">
+                    <div class="form-group" style="margin:0; flex:1; min-width:160px;">
+                        <label>จากวันที่/เวลา</label>
+                        <input type="datetime-local" id="stt-stats-start" style="font-size:0.8rem;">
+                    </div>
+                    <div class="form-group" style="margin:0; flex:1; min-width:160px;">
+                        <label>ถึงวันที่/เวลา</label>
+                        <input type="datetime-local" id="stt-stats-end" style="font-size:0.8rem;">
+                    </div>
+                    <div class="form-group" style="margin:0; display:flex; gap:4px; flex-wrap:wrap;">
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('today')">วันนี้</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('7d')">7 วัน</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('30d')">30 วัน</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('all')">ทั้งหมด</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.loadSTTStats()">🔄 แสดง</button>
+                    </div>
+                </div>
+                <div class="stt-charts-wrap" style="display:flex; flex-direction:column; gap:24px;">
+                    <div>
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                            เวลารวมที่ใช้ถอดเสียง แยกตามผู้ให้บริการ (นาที)
+                        </div>
+                        <div style="position:relative; height:240px;">
+                            <canvas id="stt-chart-provider"></canvas>
+                        </div>
+                        <div id="stt-chart-provider-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล</div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                            เวลารวมของ Whisper แยกตามโมเดล (นาที)
+                        </div>
+                        <div style="position:relative; height:240px;">
+                            <canvas id="stt-chart-whisper-model"></canvas>
+                        </div>
+                        <div id="stt-chart-whisper-model-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล Whisper</div>
+                    </div>
+                </div>
+            </div>
+
             <div class="settings-section">
                 <h2>📝 Speech-to-Text (Global)</h2>
                 <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
@@ -616,7 +658,8 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="/js/api.js?v=9"></script>
     <script src="/js/auth.js?v=5"></script>
     <script>
     const Settings = {
@@ -711,6 +754,10 @@
                 const onclick = btn.getAttribute('onclick') || '';
                 if (onclick.includes(`'${tabId}'`)) btn.classList.add('active');
             });
+            // Load STT usage charts when the STT tab is opened (lazy load on demand).
+            if (tabId === 'stt') {
+                this.loadSTTStats();
+            }
         },
 
         // Refresh status. Caches the latest global status and renders the
@@ -1003,6 +1050,227 @@
             if (azureSec) azureSec.style.display = (val === 'azure') ? '' : 'none';
             if (wlSec) wlSec.style.display = (val === 'whisper_local') ? '' : 'none';
             if (smSec) smSec.style.display = (val === 'speechmatics') ? '' : 'none';
+        },
+
+        // === STT Usage Stats / Charts ===
+        _sttCharts: { provider: null, whisperModel: null },
+        _sttStatsLoaded: false,
+
+        // Format a Date into the value expected by <input type="datetime-local">
+        // using the USER'S timezone (so the displayed range matches what they expect).
+        _toLocalDatetimeInputValue(date) {
+            const tz = getUserTimezone();
+            // Get the parts in the user's timezone via toLocaleString.
+            const parts = new Date(date).toLocaleString('en-CA', {
+                timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', hour12: false,
+            }).replace(',', '');
+            // en-CA gives "YYYY-MM-DD, HH:MM" → datetime-local needs "YYYY-MM-DDTHH:MM"
+            return parts.replace(/, /, 'T');
+        },
+
+        // Set the start/end inputs based on a preset, then load.
+        setSTTStatsRange(preset) {
+            const now = new Date();
+            let start;
+            switch (preset) {
+                case 'today':
+                    start = new Date(now); start.setHours(0, 0, 0, 0);
+                    break;
+                case '7d':
+                    start = new Date(now.getTime() - 7 * 86400000);
+                    break;
+                case '30d':
+                    start = new Date(now.getTime() - 30 * 86400000);
+                    break;
+                case 'all':
+                    start = new Date(2000, 0, 1);
+                    break;
+                default:
+                    start = new Date(now.getTime() - 30 * 86400000);
+            }
+            const elStart = document.getElementById('stt-stats-start');
+            const elEnd = document.getElementById('stt-stats-end');
+            if (elStart) elStart.value = this._toLocalDatetimeInputValue(start);
+            if (elEnd) elEnd.value = this._toLocalDatetimeInputValue(now);
+            this.loadSTTStats();
+        },
+
+        // Initialize default range (30d) once, then load.
+        _initSTTStatsRangeIfNeeded() {
+            const elStart = document.getElementById('stt-stats-start');
+            const elEnd = document.getElementById('stt-stats-end');
+            if (elStart && elEnd && !elStart.value && !elEnd.value) {
+                const now = new Date();
+                const start = new Date(now.getTime() - 30 * 86400000);
+                elStart.value = this._toLocalDatetimeInputValue(start);
+                elEnd.value = this._toLocalDatetimeInputValue(now);
+            }
+        },
+
+        // Convert a datetime-local input value (in user's local display) into an
+        // ISO UTC string for the API. datetime-local values have no timezone
+        // info, so we interpret them as wall-clock time in the user's tz.
+        _localInputToISO(value) {
+            if (!value) return null;
+            try {
+                // "YYYY-MM-DDTHH:MM" → interpret as a local-to-user-tz instant.
+                const tz = getUserTimezone();
+                const asIfLocal = new Date(value);
+                // The Date constructor treats this as the browser's local tz.
+                // Compute the offset difference between browser tz and user tz,
+                // then adjust so the wall-clock value corresponds to user tz.
+                const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (browserTz === tz) return asIfLocal.toISOString();
+                // Get offset (minutes) for both zones at this instant.
+                const offsetMin = this._tzOffsetMin(tz, asIfLocal) - this._tzOffsetMin(browserTz, asIfLocal);
+                return new Date(asIfLocal.getTime() - offsetMin * 60000).toISOString();
+            } catch { return null; }
+        },
+
+        // Helper: get the timezone offset (minutes) for a tz at a given date.
+        _tzOffsetMin(tz, date) {
+            try {
+                const dtf = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz, hour12: false,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                });
+                const parts = dtf.formatToParts(date).reduce((acc, p) => {
+                    acc[p.type] = p.value; return acc;
+                }, {});
+                const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day,
+                    parts.hour, parts.minute, parts.second);
+                return Math.round((asUTC - date.getTime()) / 60000);
+            } catch { return 0; }
+        },
+
+        async loadSTTStats() {
+            this._initSTTStatsRangeIfNeeded();
+            const startISO = this._localInputToISO(document.getElementById('stt-stats-start').value);
+            const endISO = this._localInputToISO(document.getElementById('stt-stats-end').value);
+            let data = { by_provider: [], by_whisper_model: [] };
+            try {
+                data = await API.recordings.sttStats({ start: startISO, end: endISO });
+            } catch (e) {
+                console.warn('Could not load STT stats:', e);
+            }
+            this._renderSTTProviderChart(data.by_provider || []);
+            this._renderSTTWhisperModelChart(data.by_whisper_model || []);
+            this._sttStatsLoaded = true;
+        },
+
+        // Color palette (must be valid CSS color strings for Chart.js).
+        _sttProviderColor(name) {
+            const map = {
+                whisper_local: 'rgba(34,197,94,0.7)',   // green
+                speechmatics:  'rgba(14,165,233,0.7)',  // cyan/blue
+                azure:         'rgba(168,85,247,0.7)',  // purple
+                unknown:       'rgba(148,163,184,0.7)', // slate
+            };
+            return map[(name || '').toLowerCase()] || 'rgba(234,179,8,0.7)'; // yellow fallback
+        },
+
+        _renderSTTProviderChart(rows) {
+            const canvas = document.getElementById('stt-chart-provider');
+            const emptyEl = document.getElementById('stt-chart-provider-empty');
+            if (!canvas) return;
+            const hasData = rows && rows.length > 0 && rows.some(r => r.total_minutes > 0);
+            if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+            canvas.style.display = hasData ? '' : 'none';
+            if (this._sttCharts.provider) { this._sttCharts.provider.destroy(); this._sttCharts.provider = null; }
+            if (!hasData || !window.Chart) return;
+            const labels = rows.map(r => r.provider);
+            const values = rows.map(r => r.total_minutes);
+            const colors = labels.map(l => this._sttProviderColor(l));
+            const borderColors = labels.map(l => this._sttProviderColor(l).replace(/0\.7\)/, '1)'));
+            this._sttCharts.provider = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'นาที',
+                        data: values,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const row = rows[ctx.dataIndex];
+                                    return `${row.total_minutes} นาที (${row.count} รายการ)`;
+                                },
+                            },
+                        },
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                        y: {
+                            ticks: { color: '#94a3b8', callback: (v) => v + ' นาที' },
+                            grid: { color: 'rgba(148,163,184,0.1)' },
+                            beginAtZero: true,
+                        },
+                    },
+                },
+            });
+        },
+
+        _renderSTTWhisperModelChart(rows) {
+            const canvas = document.getElementById('stt-chart-whisper-model');
+            const emptyEl = document.getElementById('stt-chart-whisper-model-empty');
+            if (!canvas) return;
+            const hasData = rows && rows.length > 0 && rows.some(r => r.total_minutes > 0);
+            if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+            canvas.style.display = hasData ? '' : 'none';
+            if (this._sttCharts.whisperModel) { this._sttCharts.whisperModel.destroy(); this._sttCharts.whisperModel = null; }
+            if (!hasData || !window.Chart) return;
+            const labels = rows.map(r => r.model);
+            const values = rows.map(r => r.total_minutes);
+            const colors = labels.map(() => 'rgba(34,197,94,0.7)');
+            const borderColors = labels.map(() => 'rgba(34,197,94,1)');
+            this._sttCharts.whisperModel = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'นาที',
+                        data: values,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const row = rows[ctx.dataIndex];
+                                    return `${row.total_minutes} นาที (${row.count} รายการ)`;
+                                },
+                            },
+                        },
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                        y: {
+                            ticks: { color: '#94a3b8', callback: (v) => v + ' นาที' },
+                            grid: { color: 'rgba(148,163,184,0.1)' },
+                            beginAtZero: true,
+                        },
+                    },
+                },
+            });
         },
 
         async saveSTT() {

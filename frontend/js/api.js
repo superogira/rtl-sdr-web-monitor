@@ -244,6 +244,18 @@ const API = {
         async transcribe(id) {
             return API.request('POST', `/api/recordings/${id}/transcribe`);
         },
+        /**
+         * Aggregate STT processing-time stats (minutes) for charts.
+         * @param {object} params - { start: ISO, end: ISO }
+         */
+        async sttStats(params = {}) {
+            const qs = new URLSearchParams();
+            if (params.start) qs.set('start', params.start);
+            if (params.end) qs.set('end', params.end);
+            try {
+                return await API.request('GET', `/api/recordings/meta/stt-stats?${qs.toString()}`);
+            } catch { return { by_provider: [], by_whisper_model: [] }; }
+        },
     },
 
     // App Settings (global STT config, etc.)

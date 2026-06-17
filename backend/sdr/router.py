@@ -571,6 +571,97 @@ async def list_frequencies(
     return {"items": buckets, "tolerance_khz": FREQ_TOLERANCE_KHZ}
 
 
+@recordings_router.get("/meta/stt-stats")
+async def stt_usage_stats(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Aggregate STT (transcription) processing time over a date range.
+
+    Returns two breakdowns (minutes, summed from `stt_duration` seconds):
+      - by_provider: total minutes per STT provider (speechmatics/azure/whisper_local)
+      - by_whisper_model: total minutes per Whisper model name (provider=whisper_local)
+
+    Query params:
+      - start: ISO 8601 datetime (inclusive). Defaults to 30 days ago.
+      - end:   ISO 8601 datetime (inclusive). Defaults to now (UTC).
+    """
+    from datetime import datetime, timezone, timedelta
+
+    def _parse_dt(value, default):
+        if not value:
+            return default
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            return default
+
+    now = datetime.now(timezone.utc)
+    start_dt = _parse_dt(start, now - timedelta(days=30))
+    end_dt = _parse_dt(end, now)
+
+    base_filter = [
+        Recording.stt_duration.is_not(None),
+        Recording.stt_provider.is_not(None),
+        Recording.recorded_at >= start_dt,
+        Recording.recorded_at <= end_dt,
+    ]
+
+    # --- by provider ---
+    q_provider = (
+        select(
+            Recording.stt_provider,
+            func.sum(Recording.stt_duration).label("total_seconds"),
+            func.count(Recording.id).label("count"),
+        )
+        .where(*base_filter)
+        .group_by(Recording.stt_provider)
+    )
+    rows = (await db.execute(q_provider)).all()
+    by_provider = [
+        {
+            "provider": (p or "unknown"),
+            "total_minutes": round((secs or 0.0) / 60.0, 2),
+            "count": int(cnt or 0),
+        }
+        for (p, secs, cnt) in rows
+    ]
+    by_provider.sort(key=lambda x: x["total_minutes"], reverse=True)
+
+    # --- by whisper model (only provider = whisper_local) ---
+    q_model = (
+        select(
+            Recording.stt_model,
+            func.sum(Recording.stt_duration).label("total_seconds"),
+            func.count(Recording.id).label("count"),
+        )
+        .where(*base_filter, Recording.stt_provider == "whisper_local")
+        .group_by(Recording.stt_model)
+    )
+    mrows = (await db.execute(q_model)).all()
+    by_whisper_model = [
+        {
+            "model": (m or "unknown"),
+            "total_minutes": round((secs or 0.0) / 60.0, 2),
+            "count": int(cnt or 0),
+        }
+        for (m, secs, cnt) in mrows
+    ]
+    by_whisper_model.sort(key=lambda x: x["total_minutes"], reverse=True)
+
+    return {
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
+        "by_provider": by_provider,
+        "by_whisper_model": by_whisper_model,
+    }
+
+
 @recordings_router.get("/{rec_id}")
 async def get_recording(
     rec_id: str,
