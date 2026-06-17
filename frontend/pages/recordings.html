@@ -4,8 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Recordings - RTL-SDR Monitor</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=14">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css?v=18">
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('ui_theme');
+                if (t === 'v2') document.documentElement.setAttribute('data-theme', 'v2');
+            } catch (e) {}
+        })();
+    </script>
     <style>
         .rec-filter-bar {
             display:flex; gap:8px; align-items:center; flex-wrap:wrap;
@@ -171,9 +180,9 @@
             <audio id="rec-player-audio" controls preload="metadata"></audio>
         </div>
     </div>
-    <script src="/js/api.js?v=7"></script>
-    <script src="/js/auth.js?v=4"></script>
-    <script src="/js/websocket.js?v=5"></script>
+    <script src="/js/api.js?v=8"></script>
+    <script src="/js/auth.js?v=5"></script>
+    <script src="/js/websocket.js?v=6"></script>
     <script>
         if (!Auth.isAuthenticated()) window.location.href = '/login';
 
@@ -267,13 +276,24 @@
             speechmatics: '🔊',
             azure: '☁️',
             whisper: '🤫',
+            whisper_local: '🤫',
+        };
+        // Human-friendly label for each provider
+        const PROVIDER_LABELS = {
+            speechmatics: 'Speechmatics',
+            azure: 'Azure',
+            whisper: 'Whisper',
+            whisper_local: 'Whisper',
         };
         function providerBadgeHTML(rec) {
             const p = rec.stt_provider;
             if (!p) return '';
             const icon = PROVIDER_ICONS[p] || '📝';
-            const label = p.charAt(0).toUpperCase() + p.slice(1);
-            return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}</span>`;
+            const label = PROVIDER_LABELS[p] || (p.charAt(0).toUpperCase() + p.slice(1));
+            // For Whisper, append the model name if available (e.g. "Whisper · Systran/faster-whisper-small")
+            const isWhisper = (p === 'whisper' || p === 'whisper_local');
+            const model = isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
+            return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}${model}</span>`;
         }
 
         // สร้าง HTML ของส่วน transcript (แยกไว้เพื่อ re-render ตอน diff)
@@ -304,7 +324,7 @@
         function updateRowFields(rowEl, oldRec, newRec) {
             // เปรียบเทียบ field ที่อาจเปลี่ยนและอัพเดตเฉพาะส่วนนั้น
             const audioDeletedChanged = (oldRec.audio_deleted ?? false) !== (newRec.audio_deleted ?? false);
-            const fields = ['transcript','transcription','stt_provider','stt_error'];
+            const fields = ['transcript','transcription','stt_provider','stt_model','stt_error'];
             const sttChanged = audioDeletedChanged || fields.some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
             if (sttChanged) {
                 const trEl = rowEl.querySelector('.transcript');
@@ -551,6 +571,7 @@
                 if (cached) {
                     cached.transcript = text;
                     cached.stt_provider = result.provider || cached.stt_provider;
+                    cached.stt_model = result.model || cached.stt_model;
                     cached.stt_error = result.error || cached.stt_error;
                     // Re-render ผ่าน transcriptHTML() เพื่อแสดงข้อความ + provider badge + error พร้อมกัน
                     if (transcriptEl) transcriptEl.innerHTML = transcriptHTML(cached);

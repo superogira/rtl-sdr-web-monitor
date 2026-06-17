@@ -6,8 +6,17 @@
     <title>Login - RTL-SDR Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css?v=18">
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('ui_theme');
+                if (t === 'v2') document.documentElement.setAttribute('data-theme', 'v2');
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body>
     <div class="login-page">

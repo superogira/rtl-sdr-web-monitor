@@ -421,7 +421,7 @@ async def transcribe_whisper_local(
             f"(host={srv_host}:{srv_port}, model={srv_model}, task={srv_task}, "
             f"lang={lang_for_api or 'auto'})"
         )
-        return {"text": text, "error": None}
+        return {"text": text, "error": None, "model": srv_model}
     except Exception as e:
         logger.error(f"Whisper Local transcription failed: {e}")
         return {"text": "", "error": str(e)}
@@ -439,6 +439,7 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
 
     text = ""
     error = None
+    model = None
     if provider == "speechmatics":
         result = await transcribe_speechmatics(audio_path, language=lang, api_key=api_key or cfg["api_key"])
         text = result["text"]
@@ -456,8 +457,16 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
         result = await transcribe_whisper_local(audio_path, language=lang)
         text = result["text"]
         error = result.get("error")
+        # Whisper is the only provider that exposes an explicit model name.
+        model = result.get("model")
     else:
         error = f"Unknown STT provider: {provider}"
         logger.error(error)
 
-    return {"text": text, "language": lang, "provider": provider, "error": error}
+    return {
+        "text": text,
+        "language": lang,
+        "provider": provider,
+        "error": error,
+        "model": model,
+    }

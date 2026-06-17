@@ -1390,3 +1390,392 @@ a:hover {
         display: none;
     }
 }
+
+/* ===========================================
+   THEME V2 — Analog Radio Style
+   (applied only when [data-theme="v2"])
+   Keeps the classic theme untouched.
+   =========================================== */
+
+/* --- Theme variables for V2 --- */
+[data-theme="v2"] {
+    --v2-display-font: 'DSEG7-Classic', 'Share Tech Mono', var(--font-mono);
+    --v2-mono-font: 'Share Tech Mono', 'VT323', var(--font-mono);
+
+    /* Button surfaces */
+    --v2-btn-top: linear-gradient(180deg, #3a4456 0%, #222a38 55%, #1a2230 100%);
+    --v2-btn-bottom-shade: rgba(0,0,0,0.55);
+    --v2-btn-ring: linear-gradient(180deg, #5a6478, #2a3140);
+
+    /* Recessed display */
+    --v2-display-bg: #08120a;
+    --v2-display-segment: #35ff7e;
+    --v2-display-segment-dim: #0f3d22;
+
+    /* Faceplate background */
+    --v2-faceplate: #20262e;
+    --v2-faceplate-2: #2a313b;
+}
+
+/* --- Faceplate (footer / panels) --- */
+[data-theme="v2"] .app-header,
+[data-theme="v2"] .app-footer,
+[data-theme="v2"] .signal-meter,
+[data-theme="v2"] .bookmark-list,
+[data-theme="v2"] .clock-widget,
+[data-theme="v2"] .freq-list,
+[data-theme="v2"] .panel-right {
+    background:
+        radial-gradient(circle at 30% 0%, rgba(255,255,255,0.04), transparent 60%),
+        linear-gradient(180deg, var(--v2-faceplate-2), var(--v2-faceplate));
+}
+
+[data-theme="v2"] .app-footer {
+    border-top: 2px solid #0e1318;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+}
+
+/* --- Shared tactile button mixin (radio-btn, step-btn, mode-btn, bw-btn) --- */
+[data-theme="v2"] .radio-btn,
+[data-theme="v2"] .step-btn,
+[data-theme="v2"] .mode-btn,
+[data-theme="v2"] .bw-btn {
+    background: var(--v2-btn-top);
+    border: 1px solid #0d1218;
+    border-radius: 6px;
+    color: #e2e8f0;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.18),
+        inset 0 -2px 3px rgba(0,0,0,0.45),
+        0 2px 0 var(--v2-btn-bottom-shade),
+        0 3px 5px rgba(0,0,0,0.5);
+    font-family: var(--v2-mono-font);
+    text-shadow: 0 1px 0 rgba(0,0,0,0.6);
+    transition: transform 0.05s ease, box-shadow 0.05s ease, background 0.15s ease;
+}
+
+[data-theme="v2"] .radio-btn:hover,
+[data-theme="v2"] .step-btn:hover,
+[data-theme="v2"] .mode-btn:hover,
+[data-theme="v2"] .bw-btn:hover {
+    background: linear-gradient(180deg, #43506a 0%, #2a3242 100%);
+    color: #fff;
+}
+
+[data-theme="v2"] .radio-btn:active,
+[data-theme="v2"] .step-btn:active,
+[data-theme="v2"] .mode-btn:active,
+[data-theme="v2"] .bw-btn:active {
+    transform: translateY(2px);
+    box-shadow:
+        inset 0 2px 4px rgba(0,0,0,0.6),
+        inset 0 1px 0 rgba(255,255,255,0.05),
+        0 0 0 transparent;
+}
+
+/* --- Round radio tune buttons (◀ ▶) — domed metallic --- */
+[data-theme="v2"] .radio-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 35% 28%, #4b566b 0%, #2c3340 45%, #1a2029 100%);
+    border: 2px solid #0e1318;
+    box-shadow:
+        inset 0 2px 1px rgba(255,255,255,0.25),
+        inset 0 -3px 4px rgba(0,0,0,0.55),
+        0 4px 0 #11151b,
+        0 6px 7px rgba(0,0,0,0.55);
+    font-size: 1rem;
+    color: #cbd5e1;
+}
+
+[data-theme="v2"] .radio-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+[data-theme="v2"] .radio-btn:active {
+    transform: translateY(3px);
+    box-shadow:
+        inset 0 3px 5px rgba(0,0,0,0.7),
+        0 1px 0 #11151b;
+}
+
+[data-theme="v2"] .radio-btn.recording {
+    background: radial-gradient(circle at 35% 28%, #ff6b6b 0%, #b91c1c 45%, #7f1d1d 100%);
+    color: #fff;
+    border-color: #450a0a;
+}
+
+/* --- Mode + BW + step selector containers --- */
+[data-theme="v2"] .mode-selector,
+[data-theme="v2"] .bw-selector,
+[data-theme="v2"] .step-buttons {
+    background: #11161d;
+    border: 1px solid #0a0e13;
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.6);
+    gap: 3px;
+}
+
+[data-theme="v2"] .mode-btn,
+[data-theme="v2"] .bw-btn,
+[data-theme="v2"] .step-btn {
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    letter-spacing: 0.5px;
+}
+
+[data-theme="v2"] .mode-btn.active {
+    background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 60%, #0369a1 100%);
+    color: #001018;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.4),
+        0 0 10px rgba(14,165,233,0.6);
+    text-shadow: none;
+}
+
+[data-theme="v2"] .bw-btn.active {
+    background: linear-gradient(180deg, #fde047 0%, #eab308 60%, #a16207 100%);
+    color: #1a1300;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.5),
+        0 0 10px rgba(234,179,8,0.6);
+    text-shadow: none;
+}
+
+[data-theme="v2"] .step-btn.active {
+    background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 60%, #0369a1 100%);
+    color: #001018;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.4),
+        0 0 8px rgba(14,165,233,0.55);
+    text-shadow: none;
+}
+
+[data-theme="v2"] .step-btn.auto-active {
+    background: linear-gradient(180deg, #4ade80 0%, #22c55e 60%, #15803d 100%);
+    color: #001908;
+    text-shadow: none;
+}
+
+/* --- Recessed VFO frequency display (inset LCD) --- */
+[data-theme="v2"] .radio-display {
+    background: var(--v2-display-bg);
+    border: 3px solid #0e1318;
+    border-radius: 10px;
+    padding: 10px 24px;
+    min-width: 420px;
+    box-shadow:
+        inset 0 0 0 1px #2a313b,
+        inset 0 6px 14px rgba(0,0,0,0.85),
+        inset 0 0 30px rgba(0,0,0,0.7),
+        0 2px 0 rgba(255,255,255,0.05),
+        0 4px 8px rgba(0,0,0,0.4);
+    background-image:
+        repeating-linear-gradient(0deg, rgba(53,255,126,0.025) 0px, rgba(53,255,126,0.025) 1px, transparent 1px, transparent 3px);
+}
+
+[data-theme="v2"] .freq-display {
+    font-family: var(--v2-display-font);
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: 3px;
+    color: var(--v2-display-segment);
+    text-shadow:
+        0 0 4px var(--v2-display-segment),
+        0 0 10px rgba(53,255,126,0.6),
+        0 0 22px rgba(53,255,126,0.35);
+}
+
+[data-theme="v2"] .freq-display .decimal {
+    font-size: 1.5rem;
+    opacity: 0.92;
+}
+
+[data-theme="v2"] .radio-info {
+    font-family: var(--v2-mono-font);
+    font-size: 0.7rem;
+    color: #5b8f72;
+}
+
+[data-theme="v2"] .radio-info .value {
+    color: var(--v2-display-segment);
+    text-shadow: 0 0 5px rgba(53,255,126,0.5);
+}
+
+[data-theme="v2"] .radio-info .label {
+    color: #3c5e4b;
+}
+
+/* --- Frequency input modal uses recessed look too --- */
+[data-theme="v2"] .freq-input-box {
+    background: linear-gradient(180deg, #2a313b, #20262e);
+    border: 2px solid #0e1318;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+[data-theme="v2"] .freq-input-box input {
+    background: var(--v2-display-bg);
+    border: 2px solid #0e1318;
+    color: var(--v2-display-segment);
+    font-family: var(--v2-display-font);
+    box-shadow: inset 0 4px 10px rgba(0,0,0,0.8);
+    text-shadow: 0 0 6px var(--v2-display-segment);
+}
+
+/* --- Clock widget uses 7-segment --- */
+[data-theme="v2"] .clock-time {
+    font-family: var(--v2-display-font);
+    font-size: 2.4rem;
+    letter-spacing: 3px;
+    color: var(--v2-display-segment);
+    text-shadow:
+        0 0 5px var(--v2-display-segment),
+        0 0 14px rgba(53,255,126,0.5);
+}
+
+/* --- Signal meter dbm uses mono analog --- */
+[data-theme="v2"] .signal-meter {
+    font-family: var(--v2-mono-font);
+}
+
+[data-theme="v2"] .signal-meter .dbm {
+    color: var(--v2-display-segment);
+    text-shadow: 0 0 5px rgba(53,255,126,0.5);
+}
+
+[data-theme="v2"] .signal-meter .bar {
+    border-radius: 1px;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.5);
+}
+
+/* --- Sliders: glowing knob like a radio potentiometer --- */
+[data-theme="v2"] .slider-group input[type="range"] {
+    height: 6px;
+    background: #11161d;
+    border: 1px solid #0a0e13;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,0.6);
+}
+
+[data-theme="v2"] .slider-group input[type="range"]::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #5a6478 0%, #2a3140 60%, #1a2029 100%);
+    border: 1px solid #0e1318;
+    box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.3),
+        0 2px 3px rgba(0,0,0,0.6),
+        0 0 6px rgba(14,165,233,0.4);
+}
+
+[data-theme="v2"] .slider-group input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #5a6478 0%, #2a3140 60%, #1a2029 100%);
+    border: 1px solid #0e1318;
+    box-shadow: 0 0 6px rgba(14,165,233,0.4);
+}
+
+[data-theme="v2"] .slider-value {
+    color: var(--v2-display-segment);
+    text-shadow: 0 0 5px rgba(53,255,126,0.5);
+}
+
+[data-theme="v2"] .step-label,
+[data-theme="v2"] .slider-label {
+    font-family: var(--v2-mono-font);
+    color: #7b8aa3;
+    letter-spacing: 1.5px;
+}
+
+/* --- Generic header buttons get tactile feel too --- */
+[data-theme="v2"] .btn {
+    background: var(--v2-btn-top);
+    border: 1px solid #0d1218;
+    border-radius: 6px;
+    color: #e2e8f0;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.15),
+        0 2px 0 rgba(0,0,0,0.4),
+        0 3px 4px rgba(0,0,0,0.4);
+    text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+}
+
+[data-theme="v2"] .btn:hover {
+    background: linear-gradient(180deg, #43506a, #2a3242);
+    border-color: var(--accent-blue);
+}
+
+[data-theme="v2"] .btn:active {
+    transform: translateY(2px);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.6);
+}
+
+[data-theme="v2"] .btn-primary {
+    background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 60%, #0369a1 100%);
+    color: #001018;
+    text-shadow: none;
+}
+
+/* --- Listen button active state keeps the glow --- */
+[data-theme="v2"] .btn-listen.active {
+    background: linear-gradient(180deg, #4ade80 0%, #22c55e 60%, #15803d 100%);
+    color: #001908;
+    text-shadow: none;
+}
+
+/* --- Bookmark / freq items subtle tactile cards --- */
+[data-theme="v2"] .bookmark-item,
+[data-theme="v2"] .freq-item,
+[data-theme="v2"] .feed-item {
+    border-radius: 6px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+[data-theme="v2"] .bookmark-item .freq,
+[data-theme="v2"] .freq-item .freq-value {
+    font-family: var(--v2-mono-font);
+    color: var(--v2-display-segment);
+    text-shadow: 0 0 5px rgba(53,255,126,0.4);
+}
+
+/* --- Theme selector (quick toggle in header) --- */
+.theme-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+.theme-switch button {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    padding: 3px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.theme-switch button.active {
+    background: var(--accent-purple);
+    color: #fff;
+}
+.theme-switch button:hover:not(.active) {
+    color: var(--text-primary);
+}
+
+/* --- Mobile tweaks for V2 --- */
+@media (max-width: 768px) {
+    [data-theme="v2"] .radio-display { min-width: auto; padding: 8px 14px; }
+    [data-theme="v2"] .freq-display { font-size: 1.5rem; letter-spacing: 2px; }
+    [data-theme="v2"] .clock-time { font-size: 1.8rem; }
+}

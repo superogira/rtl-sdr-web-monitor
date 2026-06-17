@@ -6,8 +6,19 @@
     <title>Dashboard - RTL-SDR Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=17">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
+    <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
+    <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css?v=18">
+    <script>
+        // Apply saved theme before first paint to avoid a flash of the wrong theme.
+        (function () {
+            try {
+                var t = localStorage.getItem('ui_theme');
+                if (t === 'v2') document.documentElement.setAttribute('data-theme', 'v2');
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body>
     <div class="app-container">
@@ -46,6 +57,10 @@
                 <span id="audio-status" style="font-size:0.7rem;"></span>
                 <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
                 <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
+                <span class="theme-switch" role="group" title="สลับ Theme">
+                    <button id="theme-btn-classic" onclick="App.setTheme('classic')">Classic</button>
+                    <button id="theme-btn-v2" onclick="App.setTheme('v2')">V2</button>
+                </span>
                 <a href="/settings" class="btn btn-sm" id="btn-settings">⚙️ ตั้งค่า</a>
                 <button class="btn btn-sm" onclick="Auth.logout()">ออกจากระบบ</button>
             </div>
@@ -246,6 +261,6 @@
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=5"></script>
     <script src="/js/audio.js?v=6"></script>
-    <script src="/js/app.js?v=28"></script>
+    <script src="/js/app.js?v=29"></script>
 </body>
 </html>

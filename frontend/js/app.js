@@ -40,6 +40,7 @@ const App = {
         this.setupModeSelector();
         this.setupRadioControls();
         this.initWaterfall();
+        this.initThemeSwitch();
 
         // Sync state from backend first
         await this.syncState();
@@ -86,6 +87,39 @@ const App = {
             }
         }
         el.textContent = 'v' + this.VERSION;
+    },
+
+    // === Theme (Classic / V2) ===
+    initThemeSwitch() {
+        // Apply saved theme (anti-flash script already does this before paint,
+        // but this ensures correctness if that script is missing or JS runs late).
+        const current = localStorage.getItem('ui_theme') || 'classic';
+        if (current === 'v2') {
+            document.documentElement.setAttribute('data-theme', 'v2');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
+        this._updateThemeButtons(current);
+    },
+
+    setTheme(name) {
+        // name: 'classic' | 'v2'
+        if (name !== 'classic' && name !== 'v2') return;
+        localStorage.setItem('ui_theme', name);
+        if (name === 'v2') {
+            document.documentElement.setAttribute('data-theme', 'v2');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
+        this._updateThemeButtons(name);
+        console.log(`🎨 Theme set to ${name}`);
+    },
+
+    _updateThemeButtons(active) {
+        const classic = document.getElementById('theme-btn-classic');
+        const v2 = document.getElementById('theme-btn-v2');
+        if (classic) classic.classList.toggle('active', active === 'classic');
+        if (v2) v2.classList.toggle('active', active === 'v2');
     },
 
     async syncState() {
@@ -1557,12 +1591,15 @@ const App = {
         const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
         const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
         // Provider badge (มีไอคอน) — แสดงว่าถอดด้วย STT provider อะไร
-        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', whisper: '🤫' };
+        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', whisper: '🤫', whisper_local: '🤫' };
+        const _PROVIDER_LABELS = { speechmatics: 'Speechmatics', azure: 'Azure', whisper: 'Whisper', whisper_local: 'Whisper' };
         let _providerBadge = '';
         if (rec.stt_provider) {
             const _icon = _PROVIDER_ICONS[rec.stt_provider] || '📝';
-            const _label = rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1);
-            _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}</span>`;
+            const _label = _PROVIDER_LABELS[rec.stt_provider] || (rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1));
+            const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local');
+            const _model = _isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
+            _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}</span>`;
         }
 
         return `

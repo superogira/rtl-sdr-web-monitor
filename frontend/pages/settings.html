@@ -5,8 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ตั้งค่า - RTL-SDR Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css?v=18">
+    <script>
+        // Apply saved theme before first paint to avoid a flash of the wrong theme.
+        (function () {
+            try {
+                var t = localStorage.getItem('ui_theme');
+                if (t === 'v2') document.documentElement.setAttribute('data-theme', 'v2');
+            } catch (e) {}
+        })();
+    </script>
     <style>
         .settings-page { max-width: 900px; margin: 0 auto; padding: 20px; }
         .settings-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
@@ -231,7 +241,7 @@
                     </div>
                 </div>
                 <!-- Whisper Local-specific fields (shown only when provider=whisper_local) -->
-                <div id="stt-whisper-local-section" style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
+                <div id="stt-whisper-local-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
                     <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Whisper Local API Settings</h3>
                     <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:8px;">
                         เชื่อมต่อกับ faster-whisper-server บนเครือข่ายท้องถิ่น (Gradio API)
@@ -271,36 +281,39 @@
                     </div>
                 </div>
 
-                <div class="form-group" style="margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
+                <!-- Speechmatics-specific fields (shown only when provider=speechmatics) -->
+                <div id="stt-speechmatics-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
                     <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Speechmatics API Settings</h3>
-                    <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
-                    <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                        ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
-                    </p>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
-                        <label>Operating Point (คุณภาพการถอด)</label>
-                        <select id="stt-operating-point">
-                            <option value="standard">Standard (เร็ว ประหยัดเครดิต)</option>
-                            <option value="enhanced">Enhanced (แม่นยำ ใช้เครดิตมาก)</option>
-                        </select>
+                        <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
+                        <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
+                        </p>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Operating Point (คุณภาพการถอด)</label>
+                            <select id="stt-operating-point">
+                                <option value="standard">Standard (เร็ว ประหยัดเครดิต)</option>
+                                <option value="enhanced">Enhanced (แม่นยำ ใช้เครดิตมาก)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Diarization (แยกลำโพง)</label>
+                            <select id="stt-diarization">
+                                <option value="none">None (ไม่แยก)</option>
+                                <option value="speaker">Speaker (แยกตามผู้พูด)</option>
+                                <option value="channel">Channel (แยกตามช่องสัญญาณ)</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label>Diarization (แยกลำโพง)</label>
-                        <select id="stt-diarization">
-                            <option value="none">None (ไม่แยก)</option>
-                            <option value="speaker">Speaker (แยกตามผู้พูด)</option>
-                            <option value="channel">Channel (แยกตามช่องสัญญาณ)</option>
+                        <label>Enable Entities (จับคำสำคัญ เช่น ชื่อบุคคล/สถานที่/วันที่)</label>
+                        <select id="stt-enable-entities">
+                            <option value="false">ปิด</option>
+                            <option value="true">เปิด</option>
                         </select>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label>Enable Entities (จับคำสำคัญ เช่น ชื่อบุคคล/สถานที่/วันที่)</label>
-                    <select id="stt-enable-entities">
-                        <option value="false">ปิด</option>
-                        <option value="true">เปิด</option>
-                    </select>
                 </div>
                 <!-- Azure-specific fields (shown only when provider=azure) -->
                 <div id="stt-azure-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
@@ -384,6 +397,21 @@
 
         <!-- Display Settings -->
         <div class="tab-content" id="tab-display" style="display:none;">
+            <div class="settings-section">
+                <h2>🎨 Theme หน้าจอ</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    เลือกรูปแบบการแสดงผลของ Dashboard<br>
+                    <strong>Classic</strong> = สไตล์เดิม (เข้ม แบบ operations desk)<br>
+                    <strong>V2 (Analog Radio)</strong> = ปุ่มนูน 3D เหมือนวิทยุจริง, จอ VFO บุ๋มแบบ LCD, ฟอนต์ 7-segment
+                </p>
+                <div class="form-group">
+                    <label>Theme</label>
+                    <select id="ui-theme">
+                        <option value="classic">Classic (สไตล์เดิม)</option>
+                        <option value="v2">V2 - Analog Radio (ปุ่มนูน + จอ LCD)</option>
+                    </select>
+                </div>
+            </div>
             <div class="settings-section">
                 <h2>🌊 Waterfall ความเร็วการเลื่อน</h2>
                 <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
@@ -927,8 +955,10 @@
             const val = provider.value;
             const azureSec = document.getElementById('stt-azure-section');
             const wlSec = document.getElementById('stt-whisper-local-section');
+            const smSec = document.getElementById('stt-speechmatics-section');
             if (azureSec) azureSec.style.display = (val === 'azure') ? '' : 'none';
             if (wlSec) wlSec.style.display = (val === 'whisper_local') ? '' : 'none';
+            if (smSec) smSec.style.display = (val === 'speechmatics') ? '' : 'none';
         },
 
         async saveSTT() {
@@ -1013,17 +1043,33 @@
             const dbMin = localStorage.getItem('waterfall_db_min') || '-110';
             const dbMax = localStorage.getItem('waterfall_db_max') || '-55';
             const fftSize = localStorage.getItem('fft_size') || '1024';
+            const theme = localStorage.getItem('ui_theme') || 'classic';
             const elSpeed = document.getElementById('wf-speed');
             const elDbMin = document.getElementById('wf-db-min');
             const elDbMax = document.getElementById('wf-db-max');
             const elFft = document.getElementById('wf-fft-size');
+            const elTheme = document.getElementById('ui-theme');
             if (elSpeed) elSpeed.value = speed;
             if (elDbMin) elDbMin.value = dbMin;
             if (elDbMax) elDbMax.value = dbMax;
+            if (elTheme) {
+                elTheme.value = theme;
+                // Live preview: apply theme immediately when changed
+                elTheme.addEventListener('change', () => this.applyThemePreview(elTheme.value));
+            }
             if (elFft) {
                 elFft.value = fftSize;
                 this.updateFFTWarning();
                 elFft.addEventListener('change', () => this.updateFFTWarning());
+            }
+        },
+
+        // Live preview of theme on the settings page itself
+        applyThemePreview(name) {
+            if (name === 'v2') {
+                document.documentElement.setAttribute('data-theme', 'v2');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
             }
         },
 
@@ -1066,10 +1112,14 @@
             const dbMin = document.getElementById('wf-db-min').value;
             const dbMax = document.getElementById('wf-db-max').value;
             const fftSize = parseInt(document.getElementById('wf-fft-size').value);
+            const theme = document.getElementById('ui-theme').value;
             localStorage.setItem('waterfall_speed', speed);
             localStorage.setItem('waterfall_db_min', dbMin);
             localStorage.setItem('waterfall_db_max', dbMax);
             localStorage.setItem('fft_size', String(fftSize));
+            localStorage.setItem('ui_theme', theme);
+            // Apply theme immediately (live preview already did, but ensure)
+            this.applyThemePreview(theme);
             // Send FFT size to backend
             try {
                 await API.sdr.setFFTSize(fftSize);

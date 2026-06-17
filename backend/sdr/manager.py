@@ -1017,6 +1017,7 @@ class SDRManager:
                         text = (result.get("text") or "").strip()
                         lang = result.get("language", "th")
                         provider = result.get("provider", "")
+                        model = result.get("model")
                         error = result.get("error")
                         async with async_session() as session:
                             db_rec = await session.get(Recording, rec_id)
@@ -1024,15 +1025,17 @@ class SDRManager:
                                 db_rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
                                 db_rec.transcript_language = lang
                                 db_rec.stt_provider = provider or None
+                                db_rec.stt_model = model or None
                                 db_rec.stt_error = error or None
                                 db_rec.status = RecordingStatus.COMPLETED
                                 await session.commit()
                         rec_info_copy["transcript"] = text
                         rec_info_copy["transcription"] = text
                         rec_info_copy["stt_provider"] = provider
+                        rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
-                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider})")
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model})")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         # Store error in DB so user can see what went wrong
@@ -1185,6 +1188,7 @@ class SDRManager:
                         text = (result.get("text") or "").strip()
                         lang = result.get("language", "th")
                         provider = result.get("provider", "")
+                        model = result.get("model")
                         error = result.get("error")
                         async with async_session() as session:
                             db_rec = await session.get(Recording, rec_id)
@@ -1192,15 +1196,17 @@ class SDRManager:
                                 db_rec.transcript = text or "(ไม่สามารถถอดเสียงได้)"
                                 db_rec.transcript_language = lang
                                 db_rec.stt_provider = provider or None
+                                db_rec.stt_model = model or None
                                 db_rec.stt_error = error or None
                                 db_rec.status = RecordingStatus.COMPLETED
                                 await session.commit()
                         rec_info_copy["transcript"] = text
                         rec_info_copy["transcription"] = text
                         rec_info_copy["stt_provider"] = provider
+                        rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
-                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars")
+                        logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model})")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         try:
