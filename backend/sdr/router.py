@@ -578,11 +578,12 @@ async def stt_usage_stats(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """Aggregate STT (transcription) processing time over a date range.
+    """Aggregate transcribed audio length over a date range.
 
-    Returns two breakdowns (minutes, summed from `stt_duration` seconds):
-      - by_provider: total minutes per STT provider (speechmatics/azure/whisper_local)
-      - by_whisper_model: total minutes per Whisper model name (provider=whisper_local)
+    Returns two breakdowns (minutes, summed from audio `duration` seconds):
+      - by_provider: total transcribed audio length per STT provider
+      - by_whisper_model: total transcribed audio length per Whisper model name
+        (provider=whisper_local), plus the wait/audio ratio (RTF)
 
     Query params:
       - start: ISO 8601 datetime (inclusive). Defaults to 30 days ago.
@@ -613,10 +614,13 @@ async def stt_usage_stats(
     ]
 
     # --- by provider ---
+    # total_minutes here = total TRANSCRIBED AUDIO LENGTH (sum of recording
+    # duration), NOT the time spent transcribing.
     q_provider = (
         select(
             Recording.stt_provider,
-            func.sum(Recording.stt_duration).label("total_seconds"),
+            func.coalesce(func.sum(Recording.duration), 0.0).label("total_audio_seconds"),
+            func.sum(Recording.stt_duration).label("total_stt_seconds"),
             func.count(Recording.id).label("count"),
         )
         .where(*base_filter)
@@ -626,10 +630,12 @@ async def stt_usage_stats(
     by_provider = [
         {
             "provider": (p or "unknown"),
-            "total_minutes": round((secs or 0.0) / 60.0, 2),
+            "total_minutes": round(float(audio_secs or 0.0) / 60.0, 2),
+            "total_audio_seconds": round(float(audio_secs or 0.0), 1),
+            "total_stt_seconds": round(float(stt_secs or 0.0), 1),
             "count": int(cnt or 0),
         }
-        for (p, secs, cnt) in rows
+        for (p, audio_secs, stt_secs, cnt) in rows
     ]
     by_provider.sort(key=lambda x: x["total_minutes"], reverse=True)
 
@@ -655,7 +661,7 @@ async def stt_usage_stats(
         ratio = round(secs / audio_secs, 3) if audio_secs > 0 else None
         by_whisper_model.append({
             "model": (m or "unknown"),
-            "total_minutes": round(secs / 60.0, 2),
+            "total_minutes": round(audio_secs / 60.0, 2),
             "count": int(cnt or 0),
             "total_audio_seconds": round(audio_secs, 1),
             "total_stt_seconds": round(float(secs), 1),

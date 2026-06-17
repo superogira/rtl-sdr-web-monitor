@@ -233,7 +233,7 @@
                 <div class="stt-charts-wrap" style="display:flex; flex-direction:column; gap:24px;">
                     <div>
                         <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
-                            เวลารวมที่ใช้ถอดเสียง แยกตามผู้ให้บริการ (นาที)
+                            ความยาวเสียงรวมที่ถอดได้ แยกตามผู้ให้บริการ (นาที)
                         </div>
                         <div style="position:relative; height:240px;">
                             <canvas id="stt-chart-provider"></canvas>
@@ -242,7 +242,7 @@
                     </div>
                     <div>
                         <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
-                            เวลารวมของ Whisper แยกตามโมเดล (นาที)
+                            ความยาวเสียงรวมที่ถอดได้ของ Whisper แยกตามโมเดล (นาที)
                         </div>
                         <div style="position:relative; height:240px;">
                             <canvas id="stt-chart-whisper-model"></canvas>
@@ -1215,7 +1215,11 @@
                             callbacks: {
                                 label: (ctx) => {
                                     const row = rows[ctx.dataIndex];
-                                    return `${row.total_minutes} นาที (${row.count} รายการ)`;
+                                    const lines = [`${row.total_minutes} นาที (เสียงรวม ${row.total_audio_seconds || 0} วินาที)`, `${row.count} รายการ`];
+                                    if (row.total_stt_seconds) {
+                                        lines.push(`เวลารอถอดรวม: ${row.total_stt_seconds} วินาที`);
+                                    }
+                                    return lines;
                                 },
                             },
                         },
@@ -1266,7 +1270,11 @@
                             callbacks: {
                                 label: (ctx) => {
                                     const row = rows[ctx.dataIndex];
-                                    return `${row.total_minutes} นาที (${row.count} รายการ)`;
+                                    const lines = [`${row.total_minutes} นาที (เสียงรวม ${row.total_audio_seconds || 0} วินาที)`, `${row.count} รายการ`];
+                                    if (row.total_stt_seconds) {
+                                        lines.push(`เวลารอถอดรวม: ${row.total_stt_seconds} วินาที`);
+                                    }
+                                    return lines;
                                 },
                             },
                         },
