@@ -704,7 +704,7 @@ async def transcribe_recording(
 
 
 class STTSettingsRequest(BaseModel):
-    provider: Optional[str] = None  # "speechmatics" | "whisper" | "azure"
+    provider: Optional[str] = None  # "speechmatics" | "azure" | "whisper_local"
     api_key: Optional[str] = None  # Speechmatics API key
     language: Optional[str] = None  # "th" | "en" | "auto"
     auto_transcribe: Optional[bool] = None
@@ -758,8 +758,8 @@ async def update_stt_settings(
     existing key is kept.
     """
     if req.provider is not None:
-        if req.provider not in ("speechmatics", "whisper", "azure", "whisper_local"):
-            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'whisper', 'azure', or 'whisper_local'")
+        if req.provider not in ("speechmatics", "azure", "whisper_local"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', or 'whisper_local'")
         await set_setting("stt_provider", req.provider)
 
     # Only update API key if a real (non-empty, non-masked) value is provided

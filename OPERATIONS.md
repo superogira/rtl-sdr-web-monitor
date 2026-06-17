@@ -468,12 +468,13 @@ rm -rf data/recordings/*
 | Provider | รายละเอียด | ต้องติดตั้งเพิ่ม? |
 |----------|-----------|------------------|
 | **Speechmatics** (Cloud) | API แม่นยำ รองรับไทย ต้องมี API Key และอินเทอร์เน็ต | ไม่ (มี `httpx` ใน `requirements.txt`) |
-| **Whisper** (Local) | OpenAI Whisper รันในเครื่อง ไม่ต้องเชื่อมเน็ต แต่กิน CPU/GPU | ต้อง `pip install openai-whisper` |
+| **Whisper Local** (API) | faster-whisper-server บนเครือข่ายท้องถิ่น ฟรี รองรับ GPU/CPU | ต้องติดตั้ง server แยก (ดู `docs/WHISPER_LOCAL_STT.md`) |
+| **Azure** Cognitive Services Speech | บริการ Cloud ของ Microsoft รองรับไทย | ไม่ (มี SDK ใน `requirements.txt`) |
 
 ### 8.2 การตั้งค่า STT (ผ่านหน้าเว็บ)
 
 1. ไปที่ **⚙️ ตั้งค่า → 📝 ถอดเสียง**
-2. เลือก Provider (Speechmatics หรือ Whisper)
+2. เลือก Provider (Speechmatics / Whisper Local / Azure)
 3. สำหรับ Speechmatics:
    - ใส่ API Key (สมัครได้ที่ https://speechmatics.com)
    - เลือก Language: ไทย / English / Auto
@@ -492,21 +493,13 @@ rm -rf data/recordings/*
 - ดูผลลัพธ์: transcript จะแสดงในหน้า Recordings พร้อม badge บอก provider เช่น `[speechmatics]`
 - ถ้าถอดล้มเหลว: จะแสดง `⚠️ <error message>` สีแดง
 
-### 8.4 การติดตั้ง Whisper (Optional)
+### 8.4 การติดตั้ง Whisper Local (Optional)
+
+> ดูคู่มือฉบับสมบูรณ์ได้ที่ [`docs/WHISPER_LOCAL_STT.md`](docs/WHISPER_LOCAL_STT.md)
 
 ```bash
-# ติดตั้ง Whisper (ใช้เฉพาะกรณีเลือก provider=whisper)
-cd /root/workspace/rtl-sdr-web
-./venv/bin/pip install openai-whisper
-
-# ตั้งค่า model size ใน .env (optional, default=base)
-# WHISPER_MODEL_SIZE=base    # tiny/base/small/medium/large
-# WHISPER_LANGUAGE=th
-
-# รีสตาร์ท backend หลังติดตั้ง
-pkill -f "uvicorn backend.main"; sleep 2
-nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info > /tmp/uvicorn.log 2>&1 &
-disown
+# รัน faster-whisper-server ด้วย Docker (แนะนำ) หรือดูวิธี pip ในคู่มือ
+docker compose up -d
 ```
 
 ### 8.5 การตรวจสอบ STT ผ่าน API
@@ -527,8 +520,8 @@ curl -s -X POST http://localhost:8000/api/recordings/<recording_id>/transcribe \
 |-------|---------------|
 | "Speechmatics API key not configured" | ยังไม่ได้ใส่ API Key → ไปตั้งค่าที่หน้า Settings |
 | "Job rejected/failed" | ไฟล์เสียงเงียบเกินไป หรือ format ไม่รองรับ → ลองอัดใหม่ให้นานขึ้น |
-| "Polling timed out" | ใช้เวลาถอดเกิน 5 นาที → ไฟล์ยาวเกินไป หรือ Speechmatives ไม่ตอบ |
-| "Whisper not installed" | เลือก provider=whisper แต่ไม่ได้ติดตั้ง → ดู section 8.4 |
+| "Polling timed out" | ใช้เวลาถอดเกิน 5 นาที → ไฟล์ยาวเกินไป หรือ Speechmatics ไม่ตอบ |
+| "Whisper Local host not configured" | ยังไม่ได้ตั้งค่า IP → ไปที่หน้า Settings → STT |
 | ถอดเสียงไม่ตรง | ลองเปลี่ยน operating_point=enhanced หรือตรวจสอบ language setting |
 
 ---

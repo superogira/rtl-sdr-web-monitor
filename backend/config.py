@@ -46,11 +46,9 @@ class Settings(BaseSettings):
     VAD_SILENCE_TIMEOUT: int = 3
 
     # Speech-to-Text
-    STT_PROVIDER: str = "speechmatics"  # speechmatics | whisper
+    STT_PROVIDER: str = "speechmatics"  # speechmatics | azure | whisper_local
     SPEECHMATICS_API_KEY: str = ""
     SPEECHMATICS_LANGUAGE: str = "th"
-    WHISPER_MODEL_SIZE: str = "base"
-    WHISPER_LANGUAGE: str = "th"
     # Whisper Local (faster-whisper-server / Gradio API)
     WHISPER_LOCAL_HOST: str = "192.168.1.201"
     WHISPER_LOCAL_PORT: int = 8100

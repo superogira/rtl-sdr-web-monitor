@@ -237,31 +237,6 @@ async def transcribe_speechmatics(
     }
 
 
-async def transcribe_whisper(audio_path: str, language: str = None) -> dict:
-    """Transcribe audio using local Whisper model.
-
-    Returns:
-        dict: {"text": str, "error": str|None}
-    """
-    try:
-        import whisper
-    except ImportError:
-        msg = "Whisper not installed. Install with: pip install openai-whisper"
-        logger.error(msg)
-        return {"text": "", "error": msg}
-
-    model_size = settings.WHISPER_MODEL_SIZE
-    lang = language or settings.WHISPER_LANGUAGE or "th"
-
-    try:
-        model = whisper.load_model(model_size)
-        result = model.transcribe(audio_path, language=lang)
-        return {"text": result.get("text", "").strip(), "error": None}
-    except Exception as e:
-        logger.error(f"Whisper transcription failed: {e}")
-        return {"text": "", "error": str(e)}
-
-
 async def transcribe_azure(
     audio_path: str,
     language: str = None,
@@ -466,10 +441,6 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
     error = None
     if provider == "speechmatics":
         result = await transcribe_speechmatics(audio_path, language=lang, api_key=api_key or cfg["api_key"])
-        text = result["text"]
-        error = result.get("error")
-    elif provider == "whisper":
-        result = await transcribe_whisper(audio_path, language=lang)
         text = result["text"]
         error = result.get("error")
     elif provider == "azure":
