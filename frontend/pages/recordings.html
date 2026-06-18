@@ -44,6 +44,34 @@
         }
         .rec-stt-btn:hover { background:rgba(34,211,238,0.3); }
         .rec-stt-btn:disabled { opacity:0.5; cursor:wait; }
+
+        /* === Transcript Quality Rating (ดี/พอใช้/ไม่ดี) === */
+        .rec-quality { display:inline-flex; gap:4px; align-items:center; margin-top:6px; }
+        .rec-quality .q-label {
+            font-size:0.7rem; color:var(--text-muted); margin-right:4px;
+        }
+        .rec-quality-btn {
+            padding:2px 8px; border-radius:4px; font-size:0.7rem; cursor:pointer;
+            border:1px solid var(--border); background:transparent; color:var(--text-secondary);
+            display:inline-flex; align-items:center; gap:3px; transition:all 0.15s;
+        }
+        .rec-quality-btn:hover { background:var(--bg-hover); }
+        .rec-quality-btn[data-rating="good"].active {
+            background:rgba(34,197,94,0.22); color:#86efac;
+            border-color:rgba(34,197,94,0.5); font-weight:600;
+        }
+        .rec-quality-btn[data-rating="fair"].active {
+            background:rgba(251,191,36,0.22); color:#fde68a;
+            border-color:rgba(251,191,36,0.5); font-weight:600;
+        }
+        .rec-quality-btn[data-rating="bad"].active {
+            background:rgba(239,68,68,0.22); color:#fca5a5;
+            border-color:rgba(239,68,68,0.5); font-weight:600;
+        }
+        .rec-quality-btn:disabled { opacity:0.5; cursor:wait; }
+        .rec-quality-by {
+            font-size:0.65rem; color:var(--text-muted); margin-left:6px;
+        }
         .rec-pagination {
             display:flex; gap:8px; align-items:center; justify-content:center;
             margin:1rem 0; flex-wrap:wrap;
@@ -180,7 +208,7 @@
             <audio id="rec-player-audio" controls preload="metadata"></audio>
         </div>
     </div>
-    <script src="/js/api.js?v=8"></script>
+    <script src="/js/api.js?v=9"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=6"></script>
     <script>
@@ -266,6 +294,7 @@
                     <div class="feed-text" style="margin-top:6px;">
                         <div class="transcript" id="transcript-${rec.id}" style="font-size:0.85rem; line-height:1.5;">${transcriptHtml}</div>
                     </div>
+                    ${qualityHTML(rec)}
                     ${audioUrl ? `<button class="rec-play-btn" data-rec-id="${rec.id}" onclick="RecAudioQueue.toggleRow('${rec.id}')" title="เล่น/หยุด">▶</button>` : ''}
                 </div>
             `;
@@ -319,6 +348,33 @@
             return `<button class="rec-stt-btn" id="stt-btn-${rec.id}" onclick="transcribeRec('${rec.id}')" ${hasTranscript ? 'disabled title="ถอดเสียงแล้ว"' : ''}>${hasTranscript ? '✓ ถอดแล้ว' : '📝 ถอดเสียง'}</button>`;
         }
 
+        // สร้าง HTML ของปุ่มให้คะแนนคุณภาพการถอดเสียง (ดี/พอใช้/ไม่ดี)
+        // แสดงเฉพาะรายการที่มี transcript แล้วเท่านั้น (ตามที่ผู้ใช้ยืนยัน)
+        function qualityHTML(rec) {
+            const hasTranscript = !!(rec.transcript || rec.transcription);
+            if (!hasTranscript) return '';
+            const current = rec.quality_rating || '';
+            const ratedBy = rec.quality_rated_by_username || '';
+            const byBadge = (current && ratedBy)
+                ? `<span class="rec-quality-by" title="ให้คะแนนโดย ${ratedBy}">โดย ${ratedBy}</span>`
+                : '';
+            // ปุ่มที่ active = ค่าปัจจุบัน
+            const btn = (rating, icon, label) => `
+                <button class="rec-quality-btn ${current === rating ? 'active' : ''}"
+                        data-rating="${rating}"
+                        onclick="markQuality('${rec.id}', '${rating}')"
+                        title="${label}">${icon} ${label}</button>`;
+            return `
+                <div class="rec-quality" id="quality-${rec.id}">
+                    <span class="q-label">คุณภาพการถอดเสียง:</span>
+                    ${btn('good', '👍', 'ดี')}
+                    ${btn('fair', '😐', 'พอใช้')}
+                    ${btn('bad', '👎', 'ไม่ดี')}
+                    ${byBadge}
+                </div>
+            `;
+        }
+
         // === Keyed reconciliation (diff + patch DOM โดยไม่ rebuild <audio>) ===
 
         // อัพเดต field ที่เปลี่ยนในแถวที่มีอยู่แล้ว โดยไม่ทำลาย <audio> element
@@ -350,6 +406,29 @@
                     const sigVal = newRec.signal_strength != null ? newRec.signal_strength : newRec.signal_level;
                     const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
                     metaEl.textContent = `${freq} ${mode} | ${dur} | ${sig}`;
+                }
+            }
+            // quality rating — re-render the whole quality block if it changed.
+            // Also handles the case where transcript just appeared (was hidden,
+            // now should show) since qualityHTML() depends on hasTranscript.
+            const qualityFields = ['quality_rating','quality_rated_by_username','quality_rated_at'];
+            const oldHasTranscript = !!(oldRec.transcript || oldRec.transcription);
+            const newHasTranscript = !!(newRec.transcript || newRec.transcription);
+            const transcriptAppeared = !oldHasTranscript && newHasTranscript;
+            const qualityChanged = transcriptAppeared
+                || qualityFields.some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
+            if (qualityChanged) {
+                const oldQ = rowEl.querySelector('.rec-quality');
+                const newQHtml = qualityHTML(newRec);
+                if (oldQ) {
+                    // มีอยู่แล้ว → อัพเดต (หรือลบถ้า transcript หายไป)
+                    if (newQHtml) oldQ.outerHTML = newQHtml;
+                    else oldQ.remove();
+                } else if (newQHtml) {
+                    // ยังไม่มี → แทรกใต้ transcript (ก่อนปุ่ม play ถ้ามี)
+                    const playBtn = rowEl.querySelector('.rec-play-btn');
+                    if (playBtn) playBtn.insertAdjacentHTML('beforebegin', newQHtml);
+                    else rowEl.insertAdjacentHTML('beforeend', newQHtml);
                 }
             }
         }
@@ -586,6 +665,53 @@
                 if (transcriptEl) transcriptEl.innerHTML = '<span style="color:var(--accent-red);">❌ ถอดเสียงไม่สำเร็จ: ' + (err.detail || err.message || err) + '</span>';
                 if (btn) { btn.disabled = false; btn.textContent = '📝 ถอดเสียง'; }
                 console.error('Transcribe failed:', err);
+            }
+        }
+
+        // ให้คะแนนคุณภาพการถอดเสียง (ดี/พอใช้/ไม่ดี)
+        async function markQuality(id, rating) {
+            // ปุ่มที่กด + ปุ่มทั้งหมดในกลุ่ม → ล็อคชั่วคราวกันกดซ้อน
+            const group = document.getElementById('quality-' + id);
+            const buttons = group ? group.querySelectorAll('.rec-quality-btn') : [];
+            // optimistic UI: active ทันที (สมมติว่าสำเร็จ)
+            if (group) {
+                buttons.forEach(b => {
+                    b.disabled = true;
+                    b.classList.toggle('active', b.getAttribute('data-rating') === rating);
+                });
+            }
+            try {
+                const result = await API.recordings.setQuality(id, rating);
+                // อัพเดต cache เพื่อให้ reconciliation คงสถานะ active ไว้
+                const cached = _recCache.get(id);
+                if (cached) {
+                    cached.quality_rating = result.quality_rating || rating;
+                    cached.quality_rated_by_username = result.quality_rated_by_username || cached.quality_rated_by_username;
+                }
+                // รีเรนเดอร์ badge "โดย <username>" ถ้ายังไม่มี
+                if (group) {
+                    const existing = group.querySelector('.rec-quality-by');
+                    const byName = result.quality_rated_by_username || '';
+                    if (byName) {
+                        const badgeHtml = `<span class="rec-quality-by" title="ให้คะแนนโดย ${byName}">โดย ${byName}</span>`;
+                        if (existing) existing.outerHTML = badgeHtml;
+                        else group.insertAdjacentHTML('beforeend', badgeHtml);
+                    }
+                }
+            } catch (err) {
+                // rollback: คืน active state กลับเป็นค่าเดิมใน cache
+                if (group) {
+                    const cached = _recCache.get(id);
+                    const prev = cached ? (cached.quality_rating || '') : '';
+                    buttons.forEach(b => {
+                        b.disabled = false;
+                        b.classList.toggle('active', b.getAttribute('data-rating') === prev);
+                    });
+                }
+                alert('บันทึกคะแนนไม่สำเร็จ: ' + (err.detail || err.message || err));
+                console.error('markQuality failed:', err);
+            } finally {
+                if (group) buttons.forEach(b => { b.disabled = false; });
             }
         }
 

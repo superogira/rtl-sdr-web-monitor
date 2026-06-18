@@ -72,6 +72,9 @@ def _run_migrations(conn):
         ("stt_duration", "FLOAT"),
         ("audio_deleted", "BOOLEAN DEFAULT 0 NOT NULL"),
         ("recorded_by_user_id", "VARCHAR(36)"),
+        ("quality_rating", "VARCHAR(10)"),
+        ("quality_rated_by_user_id", "VARCHAR(36)"),
+        ("quality_rated_at", "DATETIME"),
     ]
 
     for col_name, col_type in migrations:

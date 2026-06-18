@@ -733,6 +733,64 @@ async def mark_as_read(
     return {"success": True, "id": rec_id, "is_unread": 0}
 
 
+class QualityRatingRequest(BaseModel):
+    """User verdict on how good a transcription is: good | fair | bad."""
+    rating: str  # "good" | "fair" | "bad"
+
+
+# Allowed quality ratings (case-insensitive) → normalized value
+_QUALITY_RATINGS = {
+    "good": "good",
+    "fair": "fair",
+    "bad": "bad",
+}
+
+
+@recordings_router.post("/{rec_id}/quality")
+async def set_quality_rating(
+    rec_id: str,
+    req: QualityRatingRequest,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Set the user's verdict on how good a recording's transcription is.
+
+    Accepts {rating: "good" | "fair" | "bad"} (case-insensitive). Storing the
+    same rating twice is idempotent. Available to any logged-in user. Returns
+    the normalized rating.
+    """
+    from datetime import datetime, timezone
+
+    normalized = _QUALITY_RATINGS.get((req.rating or "").strip().lower())
+    if normalized is None:
+        raise HTTPException(
+            status_code=400,
+            detail="rating must be one of: good, fair, bad",
+        )
+
+    result = await db.execute(select(Recording).where(Recording.id == rec_id))
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    rec.quality_rating = normalized
+    rec.quality_rated_by_user_id = current_user.id
+    rec.quality_rated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    logger.info(
+        f"Quality rating '{normalized}' set on recording {rec_id} "
+        f"by {current_user.username}"
+    )
+    return {
+        "success": True,
+        "id": rec_id,
+        "quality_rating": normalized,
+        "quality_rated_by_user_id": current_user.id,
+        "quality_rated_by_username": current_user.username,
+    }
+
+
 class TranscriptRequest(BaseModel):
     transcript: str
 

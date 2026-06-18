@@ -245,6 +245,14 @@ const API = {
             return API.request('POST', `/api/recordings/${id}/transcribe`);
         },
         /**
+         * Set the user's verdict on how good a recording's transcription is.
+         * @param {string} id - Recording ID
+         * @param {string} rating - "good" | "fair" | "bad"
+         */
+        async setQuality(id, rating) {
+            return API.request('POST', `/api/recordings/${id}/quality`, { rating });
+        },
+        /**
          * Aggregate STT processing-time stats (minutes) for charts.
          * @param {object} params - { start: ISO, end: ISO }
          */

@@ -44,11 +44,19 @@ class Recording(Base):
     audio_deleted = Column(Boolean, default=0, nullable=False, comment="Audio file deleted by retention policy (keep_transcript mode)")
     recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    # === Transcript quality feedback ===
+    # quality_rating: user's verdict on how good the speech-to-text transcription is.
+    #   Values: "good" (ดี) | "fair" (พอใช้) | "bad" (ไม่ดี) | NULL (ยังไม่ให้คะแนน)
+    quality_rating = Column(String(10), nullable=True, comment="User verdict on transcription quality: good|fair|bad")
+    quality_rated_by_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, comment="User who rated this transcript")
+    quality_rated_at = Column(DateTime, nullable=True, comment="When the transcript was rated")
 
     # Relationship to keyword alerts
     alerts = relationship("TelegramAlert", back_populates="recording", lazy="selectin")
     # Relationship to the user who recorded this (manual recordings)
     recorded_by = relationship("User", foreign_keys=[recorded_by_user_id], lazy="selectin")
+    # Relationship to the user who rated the transcript quality
+    quality_rated_by = relationship("User", foreign_keys=[quality_rated_by_user_id], lazy="selectin")
 
     def __repr__(self):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"
@@ -81,4 +89,8 @@ class Recording(Base):
             "is_unread": self.is_unread,
             "recorded_at": self.recorded_at.isoformat() if self.recorded_at and self.recorded_at.tzinfo else (self.recorded_at.replace(tzinfo=timezone.utc).isoformat() if self.recorded_at else None),
             "created_at": self.created_at.isoformat() if self.created_at and self.created_at.tzinfo else (self.created_at.replace(tzinfo=timezone.utc).isoformat() if self.created_at else None),
+            "quality_rating": self.quality_rating,
+            "quality_rated_by_user_id": self.quality_rated_by_user_id,
+            "quality_rated_by_username": (self.quality_rated_by.username if self.quality_rated_by else None),
+            "quality_rated_at": self.quality_rated_at.isoformat() if self.quality_rated_at and self.quality_rated_at.tzinfo else (self.quality_rated_at.replace(tzinfo=timezone.utc).isoformat() if self.quality_rated_at else None),
         }
