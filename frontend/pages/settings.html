@@ -261,7 +261,7 @@
                 </div>
             </div>
 
-            <div class="settings-section">
+            <div class="settings-section" id="stt-config-section">
                 <h2>📝 Speech-to-Text (Global)</h2>
                 <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
                     ค่าเหล่านี้เก็บในฐานข้อมูล ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน
@@ -687,7 +687,7 @@
                 if (h1) h1.textContent = '⚙️ ตั้งค่า';
 
                 // Hide admin-only tab buttons and their content
-                const adminTabs = ['devices', 'recording', 'stt', 'telegram', 'keywords', 'users'];
+                const adminTabs = ['devices', 'recording', 'telegram', 'keywords', 'users'];
                 adminTabs.forEach(tabName => {
                     document.querySelectorAll('.nav-tab').forEach(btn => {
                         const onclick = btn.getAttribute('onclick') || '';
@@ -700,6 +700,10 @@
                 // Hide admin-only section in General tab (System Policy)
                 const policySection = document.getElementById('system-policy-section');
                 if (policySection) policySection.style.display = 'none';
+
+                // Hide admin-only STT config section (keep STT charts visible)
+                const sttConfigSection = document.getElementById('stt-config-section');
+                if (sttConfigSection) sttConfigSection.style.display = 'none';
             }
 
             const user = Auth.getUser();
@@ -709,7 +713,7 @@
             this.loadTimezoneSetting();
             this.loadSDRSettings();
             this.loadDisplaySettings();
-            this.loadSTTSettings();
+            if (isAdmin) this.loadSTTSettings();
             this.loadRecordingSettings();
             this.loadRecordingEnabled();
             this.renderKeywords();
@@ -719,8 +723,8 @@
                 this.loadDevices();
             }
 
-            // Set default active tab based on role
-            this.showTab(isAdmin ? 'devices' : 'general');
+            // Set default active tab to General (first tab, general settings)
+            this.showTab('general');
         },
 
         // === SDR Settings === Host/port/freq etc. come from active device config.
