@@ -183,6 +183,42 @@
             pointer-events:none;
         }
         .app-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+        /* === Bulk selection (admin) === */
+        .rec-select-bar {
+            display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+            margin-bottom:0.6rem; padding:8px 12px;
+            background:rgba(59,130,246,0.08);
+            border:1px solid rgba(59,130,246,0.25);
+            border-radius:8px;
+        }
+        .rec-select-bar[hidden] { display:none; }
+        .rec-select-bar .spacer { flex:1; }
+        .rec-select-all-label {
+            display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+            font-size:0.85rem; user-select:none;
+        }
+        .rec-bulk-delete-btn {
+            background:rgba(239,68,68,0.18); color:#fca5a5;
+            border:1px solid rgba(239,68,68,0.4);
+            padding:6px 14px; border-radius:6px; font-size:0.85rem; cursor:pointer;
+        }
+        .rec-bulk-delete-btn:hover:not(:disabled) { background:rgba(239,68,68,0.32); }
+        .rec-bulk-delete-btn:disabled { opacity:0.4; cursor:not-allowed; }
+        .rec-clear-sel-btn {
+            background:transparent; color:var(--text-muted);
+            border:1px solid var(--border);
+            padding:6px 12px; border-radius:6px; font-size:0.8rem; cursor:pointer;
+        }
+        .rec-clear-sel-btn:hover { background:var(--bg-hover); }
+        .rec-row-checkbox {
+            width:18px; height:18px; cursor:pointer; accent-color:#3b82f6;
+            flex-shrink:0; margin:0;
+        }
+        .feed-item.rec-selected {
+            background:rgba(59,130,246,0.12) !important;
+            border-left:3px solid #3b82f6;
+        }
     </style>
 </head>
 <body>
@@ -231,6 +267,18 @@
                 </button>
             </div>
 
+            <!-- === Bulk selection bar (admin only) === -->
+            <div id="rec-select-bar" class="rec-select-bar" hidden>
+                <label class="rec-select-all-label" title="เลือก/ยกเลิกทุกรายการในหน้านี้">
+                    <input type="checkbox" id="rec-select-all" class="rec-row-checkbox" onchange="onSelectAllChange(this.checked)">
+                    <span>เลือกทั้งหมด</span>
+                </label>
+                <span id="rec-selected-count" style="font-size:0.8rem; color:var(--text-muted);">เลือก 0 รายการ</span>
+                <span class="spacer"></span>
+                <button class="rec-clear-sel-btn" onclick="clearSelection()">ยกเลิกการเลือก</button>
+                <button id="rec-bulk-delete-btn" class="rec-bulk-delete-btn" onclick="bulkDeleteSelected()" disabled>🗑 ลบรายการที่เลือก (0)</button>
+            </div>
+
             <div id="recordings-list" class="text-center text-muted p-2">
                 กำลังโหลด...
             </div>
@@ -251,7 +299,7 @@
             <audio id="rec-player-audio" controls preload="metadata"></audio>
         </div>
     </div>
-    <script src="/js/api.js?v=10"></script>
+    <script src="/js/api.js?v=11"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=6"></script>
     <script>
@@ -268,6 +316,7 @@
         let _refreshTimer = null;
         let _searchTimer = null;
         let _loading = false;
+        let _selectedIds = new Set(); // id ของรายการที่ติ๊กเลือก (สำหรับ bulk delete)
 
         // === Utility: format duration (seconds → human readable) ===
         function formatDuration(sec) {
@@ -336,11 +385,16 @@
             const audioDeletedBadge = rec.audio_deleted
                 ? `<span class="rec-audio-deleted-badge" title="ไฟล์เสียงถูกลบโดยนโยบายการเก็บรักษา" style="font-size:0.7rem; color:var(--text-muted); background:rgba(156,163,175,0.15); border:1px solid var(--border); padding:2px 8px; border-radius:4px; margin-left:4px;">🔇 ลบไฟล์แล้ว</span>`
                 : '';
+            // checkbox เลือกรายการ (admin เท่านั้น) สำหรับ bulk delete
+            const selectCb = Auth.isAdmin()
+                ? `<input type="checkbox" class="rec-row-checkbox rec-row-select" data-rec-id="${rec.id}" onchange="onRowSelectChange('${rec.id}', this.checked)" title="เลือกรายการนี้">`
+                : '';
 
             return `
                 <div class="feed-item" id="rec-${rec.id}" data-rec-id="${rec.id}" data-recorded-at="${rec.recorded_at || rec.timestamp || ''}" style="margin-bottom: 8px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
                         <div style="display:flex; gap:8px; align-items:center;">
+                            ${selectCb}
                             <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
                             ${recorderBadge}
                             <span class="rec-time" style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
@@ -637,6 +691,7 @@
 
                 updateCountAndPagination();
                 if (typeof RecAudioQueue !== 'undefined') RecAudioQueue.refreshRowButtons();
+                syncSelectionUI();
             } catch (err) {
                 console.error('Failed to load recordings:', err);
                 // แสดง error เฉพาะตอนที่ยังไม่มีข้อมูล (silent refresh ไม่โชว์)
@@ -798,6 +853,7 @@
             if (!confirm('ต้องการลบรายการนี้ใช่ไหม?')) return;
             try {
                 await API.recordings.delete(id);
+                _selectedIds.delete(id);
                 _total = Math.max(0, _total - 1);
                 // หากกำลังเล่น/อยู่ในคิว ของรายการที่ถูกลบ → กำจัดออกจาก player/คิว
                 if (typeof RecAudioQueue !== 'undefined') {
@@ -813,6 +869,105 @@
                 loadRecordings();
             } catch (err) {
                 alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
+            }
+        }
+
+        // === Bulk selection (admin) ===
+
+        // อัพเดตสถานะการเลือกเมื่อติ๊ก checkbox ของแถวใดแถวหนึ่ง
+        function onRowSelectChange(id, checked) {
+            if (checked) _selectedIds.add(id);
+            else _selectedIds.delete(id);
+            syncSelectionUI();
+        }
+
+        // ติ๊ก/ยกเลิกทุกรายการในหน้าปัจจุบัน
+        function onSelectAllChange(checked) {
+            if (checked) {
+                _allItems.forEach(it => _selectedIds.add(it.id));
+            } else {
+                _allItems.forEach(it => _selectedIds.delete(it.id));
+            }
+            syncSelectionUI();
+        }
+
+        // ล้างการเลือกทั้งหมด
+        function clearSelection() {
+            _selectedIds.clear();
+            syncSelectionUI();
+        }
+
+        // sync checkbox state ทุกแถว + ปุ่ม/ตัวนับในแถบเลือก ให้ตรง _selectedIds
+        // (เรียกหลัง re-render ทุกครั้ง เพื่อ preserve สถานะการเลือกตอน auto-refresh)
+        function syncSelectionUI() {
+            // 1) sync checkbox + highlight ของแต่ละแถวที่อยู่ในหน้านี้
+            const container = document.getElementById('recordings-list');
+            const checkboxes = container ? container.querySelectorAll('.rec-row-select') : [];
+            checkboxes.forEach(cb => {
+                const id = cb.getAttribute('data-rec-id');
+                const sel = _selectedIds.has(id);
+                cb.checked = sel;
+                const row = cb.closest('.feed-item');
+                if (row) row.classList.toggle('rec-selected', sel);
+            });
+            // ตัด id ที่ไม่ได้อยู่ใน DOM ออกจาก set (เช่นเปลี่ยนหน้า/กรอง) — ยกเว้นที่ยังคงเลือกอยู่
+            // (เก็บไว้ตามเดิมเพื่อรองรับการเลือกข้ามหน้า; ลบเฉพาะที่ DOM มองไม่เห็นจริง ๆ ไม่จำเป็น
+            //  เพราะ syncSelectionUI อ้างอิง _selectedIds โดยตรงอยู่แล้ว)
+
+            // 2) สถานะ checkbox "เลือกทั้งหมด" (checked/indeterminate/unchecked)
+            const selectAllCb = document.getElementById('rec-select-all');
+            if (selectAllCb) {
+                const visibleIds = _allItems.map(it => it.id);
+                const selectedVisible = visibleIds.filter(id => _selectedIds.has(id));
+                if (selectedVisible.length === 0) {
+                    selectAllCb.checked = false; selectAllCb.indeterminate = false;
+                } else if (selectedVisible.length === visibleIds.length && visibleIds.length > 0) {
+                    selectAllCb.checked = true; selectAllCb.indeterminate = false;
+                } else {
+                    selectAllCb.checked = false; selectAllCb.indeterminate = true;
+                }
+            }
+
+            // 3) ตัวนับ + ปุ่มลบ
+            const n = _selectedIds.size;
+            const countEl = document.getElementById('rec-selected-count');
+            if (countEl) countEl.textContent = n === 0 ? 'เลือก 0 รายการ' : `เลือก ${n} รายการ`;
+            const delBtn = document.getElementById('rec-bulk-delete-btn');
+            if (delBtn) {
+                delBtn.disabled = (n === 0);
+                delBtn.textContent = `🗑 ลบรายการที่เลือก (${n})`;
+            }
+        }
+
+        // ลบรายการที่เลือกทั้งหมดในครั้งเดียว (admin เท่านั้น)
+        async function bulkDeleteSelected() {
+            const ids = Array.from(_selectedIds);
+            if (!ids.length) return;
+            if (!Auth.isAdmin()) { showToast('การลบรายการ สำหรับผู้ดูแลระบบเท่านั้น'); return; }
+            if (!confirm(`ต้องการลบรายการที่เลือก ${ids.length} รายการใช่ไหม?`)) return;
+            const delBtn = document.getElementById('rec-bulk-delete-btn');
+            if (delBtn) { delBtn.disabled = true; delBtn.textContent = '⏳ กำลังลบ...'; }
+            try {
+                const result = await API.recordings.bulkDelete(ids);
+                // กำจัดรายการที่ถูกลบออกจาก player/คิว
+                const deletedIds = new Set(result.deleted_ids || ids);
+                if (typeof RecAudioQueue !== 'undefined') {
+                    if (RecAudioQueue.current && deletedIds.has(RecAudioQueue.current.id)) {
+                        RecAudioQueue.current = null;
+                        try { RecAudioQueue._audio.pause(); RecAudioQueue._audio.removeAttribute('src'); RecAudioQueue._audio.load(); } catch (e) {}
+                        RecAudioQueue._isPlaying = false;
+                    }
+                    RecAudioQueue.pending = RecAudioQueue.pending.filter(p => !deletedIds.has(p.id));
+                    RecAudioQueue.refreshRowButtons();
+                }
+                _selectedIds.clear();
+                _total = Math.max(0, _total - (result.deleted_count || 0));
+                const nf = (result.not_found_ids && result.not_found_ids.length) ? result.not_found_ids.length : 0;
+                showToast(`ลบแล้ว ${result.deleted_count || 0} รายการ` + (nf ? ` (ไม่พบ ${nf})` : ''));
+                loadRecordings();
+            } catch (err) {
+                alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
+                syncSelectionUI();
             }
         }
 
@@ -908,6 +1063,7 @@
                     }
                     updateCountAndPagination();
                     if (typeof RecAudioQueue !== 'undefined') RecAudioQueue.onNewRecording(rec);
+                    syncSelectionUI();
                 });
             } catch (e) {
                 console.warn('WS setup failed, relying on polling only:', e);
@@ -1108,6 +1264,11 @@
         };
 
         // === Bootstrap ===
+        // แสดงแถบเลือก/ลบรวม เฉพาะผู้ดูแลระบบ
+        if (Auth.isAdmin()) {
+            const selBar = document.getElementById('rec-select-bar');
+            if (selBar) selBar.hidden = false;
+        }
         loadFrequencies();  // โหลดรายการความถี่สำหรับ dropdown
         resetAndLoad();
         startAutoRefresh();

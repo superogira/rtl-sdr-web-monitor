@@ -235,6 +235,14 @@ const API = {
         async delete(id) {
             return API.request('DELETE', `/api/recordings/${id}`);
         },
+        /**
+         * Bulk delete recordings by IDs (admin only).
+         * @param {string[]} ids - Recording IDs to delete
+         * @returns {Promise<{success, requested_count, deleted_count, deleted_ids, not_found_ids}>}
+         */
+        async bulkDelete(ids) {
+            return API.request('POST', '/api/recordings/bulk-delete', { ids });
+        },
         async markRead(id) {
             return API.request('POST', `/api/recordings/${id}/read`);
         },

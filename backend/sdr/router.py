@@ -717,6 +717,65 @@ async def delete_recording(
     return {"success": True, "id": rec_id}
 
 
+class BulkDeleteRequest(BaseModel):
+    """Bulk delete recordings by IDs (admin only)."""
+    ids: list[str]
+
+
+@recordings_router.post("/bulk-delete")
+async def bulk_delete_recordings(
+    req: BulkDeleteRequest,
+    current_user: User = Depends(require_admin),
+    db = Depends(get_db),
+):
+    """Delete multiple recordings (DB rows + audio files) in one call. Admin only.
+
+    Accepts { ids: ["..."] }. Guards against abuse with a max batch size.
+    Returns counts + which IDs were deleted vs. not found.
+    """
+    MAX_BATCH = 1000
+    ids = req.ids or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids must be a non-empty list")
+    # dedupe + cap size
+    unique_ids = list(dict.fromkeys(str(i) for i in ids))
+    if len(unique_ids) > MAX_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many ids (max {MAX_BATCH} per request, got {len(unique_ids)})",
+        )
+
+    result = await db.execute(select(Recording).where(Recording.id.in_(unique_ids)))
+    recs = result.scalars().all()
+    found_ids = []
+    for rec in recs:
+        # Delete audio file from disk (best-effort)
+        if rec.audio_file_path:
+            try:
+                fpath = FSPath(rec.audio_file_path)
+                if fpath.exists():
+                    os.remove(fpath)
+            except Exception:
+                pass
+        found_ids.append(rec.id)
+        await db.delete(rec)
+    await db.commit()
+
+    found_set = set(found_ids)
+    not_found_ids = [i for i in unique_ids if i not in found_set]
+    logger.info(
+        f"Bulk delete by {current_user.username}: requested={len(unique_ids)} "
+        f"deleted={len(found_ids)} not_found={len(not_found_ids)}"
+    )
+    return {
+        "success": True,
+        "requested_count": len(unique_ids),
+        "deleted_count": len(found_ids),
+        "deleted_ids": found_ids,
+        "not_found_ids": not_found_ids,
+    }
+
+
 @recordings_router.post("/{rec_id}/read")
 async def mark_as_read(
     rec_id: str,
