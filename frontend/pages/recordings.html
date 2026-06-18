@@ -378,12 +378,12 @@
         // สร้าง HTML ของปุ่มให้คะแนนคุณภาพการถอดเสียง (1=แย่มาก .. 6=ดีที่สุด)
         // แสดงเฉพาะรายการที่มี transcript แล้วเท่านั้น (ตามที่ผู้ใช้ยืนยัน)
         const QUALITY_RATINGS = [
-            { rating: 1, emoji: '😡', label: 'แย่มาก' },
-            { rating: 2, emoji: '👎', label: 'แย่' },
-            { rating: 3, emoji: '😐', label: 'พอใช้' },
-            { rating: 4, emoji: '🙂', label: 'ดี' },
-            { rating: 5, emoji: '👍', label: 'ดีมาก' },
             { rating: 6, emoji: '🤩', label: 'ดีที่สุด' },
+            { rating: 5, emoji: '👍', label: 'ดีมาก' },
+            { rating: 4, emoji: '🙂', label: 'ดี' },
+            { rating: 3, emoji: '😐', label: 'พอใช้' },
+            { rating: 2, emoji: '👎', label: 'แย่' },
+            { rating: 1, emoji: '😡', label: 'แย่มาก' },
         ];
         function qualityHTML(rec) {
             const hasTranscript = !!(rec.transcript || rec.transcription);
