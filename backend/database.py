@@ -72,7 +72,7 @@ def _run_migrations(conn):
         ("stt_duration", "FLOAT"),
         ("audio_deleted", "BOOLEAN DEFAULT 0 NOT NULL"),
         ("recorded_by_user_id", "VARCHAR(36)"),
-        ("quality_rating", "VARCHAR(10)"),
+        ("quality_rating", "INTEGER"),
         ("quality_rated_by_user_id", "VARCHAR(36)"),
         ("quality_rated_at", "DATETIME"),
     ]
@@ -83,6 +83,27 @@ def _run_migrations(conn):
                 text(f"ALTER TABLE recordings ADD COLUMN {col_name} {col_type}")
             )
             print(f"[migration] Added '{col_name}' column to recordings table")
+
+    # === Data migration: convert legacy string quality_rating → integer scale ===
+    # Previous schema used "good"|"fair"|"bad". New schema uses 1-6 integers.
+    # SQLite dynamic typing allows storing ints in a VARCHAR column, so we just
+    # UPDATE the values in place. Idempotent: only touches rows still holding
+    # the old string values.
+    if "quality_rating" in columns:
+        legacy_map = {
+            "good": 5,    # ดีมาก (close to old "good")
+            "fair": 3,    # พอใช้
+            "bad": 2,     # แย่
+        }
+        for old_val, new_val in legacy_map.items():
+            # case-insensitive match; update to bare integer
+            result = conn.execute(text(
+                "UPDATE recordings SET quality_rating = :new "
+                "WHERE LOWER(CAST(quality_rating AS TEXT)) = :old"
+            ), {"new": new_val, "old": old_val})
+            if result.rowcount > 0:
+                print(f"[migration] Converted {result.rowcount} quality_rating "
+                      f"'{old_val}' → {new_val}")
 
 
 def _seed_app_settings(conn):

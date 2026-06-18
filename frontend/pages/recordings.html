@@ -45,32 +45,59 @@
         .rec-stt-btn:hover { background:rgba(34,211,238,0.3); }
         .rec-stt-btn:disabled { opacity:0.5; cursor:wait; }
 
-        /* === Transcript Quality Rating (ดี/พอใช้/ไม่ดี) === */
-        .rec-quality { display:inline-flex; gap:4px; align-items:center; margin-top:6px; }
+        /* === Transcript Quality Rating (1=แย่มาก .. 6=ดีที่สุด) === */
+        .rec-quality {
+            display:flex; flex-direction:column; align-items:center; gap:6px;
+            margin-top:8px; padding-top:8px; border-top:1px dashed var(--border);
+        }
         .rec-quality .q-label {
-            font-size:0.7rem; color:var(--text-muted); margin-right:4px;
+            font-size:0.72rem; color:var(--text-muted); text-align:center;
+        }
+        .rec-quality-btns {
+            display:flex; flex-wrap:wrap; justify-content:center; gap:6px;
+            max-width:100%;
         }
         .rec-quality-btn {
-            padding:2px 8px; border-radius:4px; font-size:0.7rem; cursor:pointer;
+            min-width:44px; min-height:44px; padding:6px 10px; border-radius:8px;
+            font-size:0.72rem; cursor:pointer;
             border:1px solid var(--border); background:transparent; color:var(--text-secondary);
-            display:inline-flex; align-items:center; gap:3px; transition:all 0.15s;
+            display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:2px; transition:all 0.15s; touch-action:manipulation;
         }
-        .rec-quality-btn:hover { background:var(--bg-hover); }
-        .rec-quality-btn[data-rating="good"].active {
-            background:rgba(34,197,94,0.22); color:#86efac;
-            border-color:rgba(34,197,94,0.5); font-weight:600;
+        .rec-quality-btn:hover { background:var(--bg-hover); transform:translateY(-1px); }
+        .rec-quality-btn .q-emoji { font-size:1.1rem; line-height:1; }
+        /* Active colors: 1=red-dark .. 6=green-bright (gradient) */
+        .rec-quality-btn[data-rating="1"].active {
+            background:rgba(220,38,38,0.28); color:#fca5a5;
+            border-color:rgba(220,38,38,0.6); font-weight:600;
         }
-        .rec-quality-btn[data-rating="fair"].active {
-            background:rgba(251,191,36,0.22); color:#fde68a;
-            border-color:rgba(251,191,36,0.5); font-weight:600;
+        .rec-quality-btn[data-rating="2"].active {
+            background:rgba(239,68,68,0.24); color:#fca5a5;
+            border-color:rgba(239,68,68,0.55); font-weight:600;
         }
-        .rec-quality-btn[data-rating="bad"].active {
-            background:rgba(239,68,68,0.22); color:#fca5a5;
-            border-color:rgba(239,68,68,0.5); font-weight:600;
+        .rec-quality-btn[data-rating="3"].active {
+            background:rgba(251,191,36,0.24); color:#fde68a;
+            border-color:rgba(251,191,36,0.55); font-weight:600;
+        }
+        .rec-quality-btn[data-rating="4"].active {
+            background:rgba(132,204,22,0.24); color:#d9f99d;
+            border-color:rgba(132,204,22,0.55); font-weight:600;
+        }
+        .rec-quality-btn[data-rating="5"].active {
+            background:rgba(34,197,94,0.24); color:#86efac;
+            border-color:rgba(34,197,94,0.55); font-weight:600;
+        }
+        .rec-quality-btn[data-rating="6"].active {
+            background:rgba(16,185,129,0.28); color:#6ee7b7;
+            border-color:rgba(16,185,129,0.6); font-weight:600;
         }
         .rec-quality-btn:disabled { opacity:0.5; cursor:wait; }
         .rec-quality-by {
-            font-size:0.65rem; color:var(--text-muted); margin-left:6px;
+            font-size:0.65rem; color:var(--text-muted); margin-top:2px;
+        }
+        @media (max-width: 640px) {
+            .rec-quality-btn { min-width:48px; min-height:48px; font-size:0.68rem; }
+            .rec-quality-btns { gap:8px; }
         }
         .rec-pagination {
             display:flex; gap:8px; align-items:center; justify-content:center;
@@ -208,7 +235,7 @@
             <audio id="rec-player-audio" controls preload="metadata"></audio>
         </div>
     </div>
-    <script src="/js/api.js?v=9"></script>
+    <script src="/js/api.js?v=10"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=6"></script>
     <script>
@@ -348,28 +375,39 @@
             return `<button class="rec-stt-btn" id="stt-btn-${rec.id}" onclick="transcribeRec('${rec.id}')" ${hasTranscript ? 'disabled title="ถอดเสียงแล้ว"' : ''}>${hasTranscript ? '✓ ถอดแล้ว' : '📝 ถอดเสียง'}</button>`;
         }
 
-        // สร้าง HTML ของปุ่มให้คะแนนคุณภาพการถอดเสียง (ดี/พอใช้/ไม่ดี)
+        // สร้าง HTML ของปุ่มให้คะแนนคุณภาพการถอดเสียง (1=แย่มาก .. 6=ดีที่สุด)
         // แสดงเฉพาะรายการที่มี transcript แล้วเท่านั้น (ตามที่ผู้ใช้ยืนยัน)
+        const QUALITY_RATINGS = [
+            { rating: 1, emoji: '😡', label: 'แย่มาก' },
+            { rating: 2, emoji: '👎', label: 'แย่' },
+            { rating: 3, emoji: '😐', label: 'พอใช้' },
+            { rating: 4, emoji: '🙂', label: 'ดี' },
+            { rating: 5, emoji: '👍', label: 'ดีมาก' },
+            { rating: 6, emoji: '🤩', label: 'ดีที่สุด' },
+        ];
         function qualityHTML(rec) {
             const hasTranscript = !!(rec.transcript || rec.transcription);
             if (!hasTranscript) return '';
-            const current = rec.quality_rating || '';
+            const current = rec.quality_rating != null ? Number(rec.quality_rating) : null;
             const ratedBy = rec.quality_rated_by_username || '';
-            const byBadge = (current && ratedBy)
+            const byBadge = (current != null && ratedBy)
                 ? `<span class="rec-quality-by" title="ให้คะแนนโดย ${ratedBy}">โดย ${ratedBy}</span>`
                 : '';
             // ปุ่มที่ active = ค่าปัจจุบัน
-            const btn = (rating, icon, label) => `
-                <button class="rec-quality-btn ${current === rating ? 'active' : ''}"
-                        data-rating="${rating}"
-                        onclick="markQuality('${rec.id}', '${rating}')"
-                        title="${label}">${icon} ${label}</button>`;
+            const btn = (item) => `
+                <button class="rec-quality-btn ${current === item.rating ? 'active' : ''}"
+                        data-rating="${item.rating}"
+                        onclick="markQuality('${rec.id}', ${item.rating})"
+                        title="${item.label}">
+                    <span class="q-emoji">${item.emoji}</span>
+                    <span>${item.label}</span>
+                </button>`;
             return `
                 <div class="rec-quality" id="quality-${rec.id}">
-                    <span class="q-label">คุณภาพการถอดเสียง:</span>
-                    ${btn('good', '👍', 'ดี')}
-                    ${btn('fair', '😐', 'พอใช้')}
-                    ${btn('bad', '👎', 'ไม่ดี')}
+                    <span class="q-label">คุณภาพการถอดเสียง</span>
+                    <div class="rec-quality-btns">
+                        ${QUALITY_RATINGS.map(btn).join('')}
+                    </div>
                     ${byBadge}
                 </div>
             `;
@@ -668,16 +706,18 @@
             }
         }
 
-        // ให้คะแนนคุณภาพการถอดเสียง (ดี/พอใช้/ไม่ดี)
+        // ให้คะแนนคุณภาพการถอดเสียง (1=แย่มาก .. 6=ดีที่สุด)
         async function markQuality(id, rating) {
             // ปุ่มที่กด + ปุ่มทั้งหมดในกลุ่ม → ล็อคชั่วคราวกันกดซ้อน
             const group = document.getElementById('quality-' + id);
             const buttons = group ? group.querySelectorAll('.rec-quality-btn') : [];
+            // rating เป็น int; data-rating เป็น string → เปรียบเทียบแบบ string
+            const ratingStr = String(rating);
             // optimistic UI: active ทันที (สมมติว่าสำเร็จ)
             if (group) {
                 buttons.forEach(b => {
                     b.disabled = true;
-                    b.classList.toggle('active', b.getAttribute('data-rating') === rating);
+                    b.classList.toggle('active', b.getAttribute('data-rating') === ratingStr);
                 });
             }
             try {
@@ -685,7 +725,7 @@
                 // อัพเดต cache เพื่อให้ reconciliation คงสถานะ active ไว้
                 const cached = _recCache.get(id);
                 if (cached) {
-                    cached.quality_rating = result.quality_rating || rating;
+                    cached.quality_rating = result.quality_rating != null ? result.quality_rating : rating;
                     cached.quality_rated_by_username = result.quality_rated_by_username || cached.quality_rated_by_username;
                 }
                 // รีเรนเดอร์ badge "โดย <username>" ถ้ายังไม่มี
@@ -702,7 +742,7 @@
                 // rollback: คืน active state กลับเป็นค่าเดิมใน cache
                 if (group) {
                     const cached = _recCache.get(id);
-                    const prev = cached ? (cached.quality_rating || '') : '';
+                    const prev = (cached && cached.quality_rating != null) ? String(cached.quality_rating) : '';
                     buttons.forEach(b => {
                         b.disabled = false;
                         b.classList.toggle('active', b.getAttribute('data-rating') === prev);

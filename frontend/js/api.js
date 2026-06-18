@@ -247,7 +247,7 @@ const API = {
         /**
          * Set the user's verdict on how good a recording's transcription is.
          * @param {string} id - Recording ID
-         * @param {string} rating - "good" | "fair" | "bad"
+         * @param {number} rating - 1..6 (1=แย่มาก, 6=ดีที่สุด)
          */
         async setQuality(id, rating) {
             return API.request('POST', `/api/recordings/${id}/quality`, { rating });

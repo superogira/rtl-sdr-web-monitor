@@ -734,15 +734,23 @@ async def mark_as_read(
 
 
 class QualityRatingRequest(BaseModel):
-    """User verdict on how good a transcription is: good | fair | bad."""
-    rating: str  # "good" | "fair" | "bad"
+    """User verdict on how good a transcription is (1-6 scale).
+
+    1 = แย่มาก (worst), 6 = ดีที่สุด (best).
+    """
+    rating: int  # 1..6
 
 
-# Allowed quality ratings (case-insensitive) → normalized value
-_QUALITY_RATINGS = {
-    "good": "good",
-    "fair": "fair",
-    "bad": "bad",
+# Quality rating metadata: 1 (worst) → 6 (best).
+# Maps the integer score to a Thai label + emoji used by the UI. Defined here
+# as the single source of truth for the backend; the frontend mirrors it.
+_QUALITY_RATING_META = {
+    1: {"label": "แย่มาก", "emoji": "😡"},
+    2: {"label": "แย่",     "emoji": "👎"},
+    3: {"label": "พอใช้",   "emoji": "😐"},
+    4: {"label": "ดี",       "emoji": "🙂"},
+    5: {"label": "ดีมาก",   "emoji": "👍"},
+    6: {"label": "ดีที่สุด", "emoji": "🤩"},
 }
 
 
@@ -755,17 +763,17 @@ async def set_quality_rating(
 ):
     """Set the user's verdict on how good a recording's transcription is.
 
-    Accepts {rating: "good" | "fair" | "bad"} (case-insensitive). Storing the
-    same rating twice is idempotent. Available to any logged-in user. Returns
-    the normalized rating.
+    Accepts {rating: 1..6} where 1 = แย่มาก and 6 = ดีที่สุด. Storing the same
+    rating twice is idempotent. Available to any logged-in user. Returns the
+    normalized integer rating plus its Thai label.
     """
     from datetime import datetime, timezone
 
-    normalized = _QUALITY_RATINGS.get((req.rating or "").strip().lower())
-    if normalized is None:
+    rating = req.rating
+    if not isinstance(rating, int) or rating not in _QUALITY_RATING_META:
         raise HTTPException(
             status_code=400,
-            detail="rating must be one of: good, fair, bad",
+            detail=f"rating must be an integer between 1 and 6 (got {rating!r})",
         )
 
     result = await db.execute(select(Recording).where(Recording.id == rec_id))
@@ -773,19 +781,20 @@ async def set_quality_rating(
     if not rec:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    rec.quality_rating = normalized
+    rec.quality_rating = rating
     rec.quality_rated_by_user_id = current_user.id
     rec.quality_rated_at = datetime.now(timezone.utc)
     await db.commit()
 
     logger.info(
-        f"Quality rating '{normalized}' set on recording {rec_id} "
-        f"by {current_user.username}"
+        f"Quality rating {rating} ({_QUALITY_RATING_META[rating]['label']}) "
+        f"set on recording {rec_id} by {current_user.username}"
     )
     return {
         "success": True,
         "id": rec_id,
-        "quality_rating": normalized,
+        "quality_rating": rating,
+        "quality_rating_label": _QUALITY_RATING_META[rating]["label"],
         "quality_rated_by_user_id": current_user.id,
         "quality_rated_by_username": current_user.username,
     }
