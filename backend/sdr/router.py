@@ -694,10 +694,10 @@ async def get_recording(
 @recordings_router.delete("/{rec_id}")
 async def delete_recording(
     rec_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db = Depends(get_db),
 ):
-    """Delete a recording (DB row + audio file)."""
+    """Delete a recording (DB row + audio file). Admin only."""
     result = await db.execute(select(Recording).where(Recording.id == rec_id))
     rec = result.scalar_one_or_none()
     if not rec:
@@ -758,14 +758,15 @@ _QUALITY_RATING_META = {
 async def set_quality_rating(
     rec_id: str,
     req: QualityRatingRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db = Depends(get_db),
 ):
     """Set the user's verdict on how good a recording's transcription is.
 
     Accepts {rating: 1..6} where 1 = แย่มาก and 6 = ดีที่สุด. Storing the same
-    rating twice is idempotent. Available to any logged-in user. Returns the
-    normalized integer rating plus its Thai label.
+    rating twice is idempotent. Admin only: regular users can view existing
+    ratings but cannot set them. Returns the normalized integer rating plus
+    its Thai label.
     """
     from datetime import datetime, timezone
 

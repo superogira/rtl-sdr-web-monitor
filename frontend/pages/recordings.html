@@ -168,6 +168,21 @@
         }
         #rec-player-pp:hover { background:rgba(59,130,246,0.35); }
         .app-main.rec-has-player { padding-bottom:96px !important; }
+
+        /* === Top-center Toast (non-blocking notification) === */
+        .app-toast {
+            position:fixed; top:16px; left:50%;
+            transform:translateX(-50%) translateY(-8px);
+            z-index:9999; max-width:90vw;
+            background:rgba(31,41,55,0.96); color:#f3f4f6;
+            border:1px solid var(--border, #374151);
+            padding:10px 18px; border-radius:8px;
+            font-size:0.85rem; line-height:1.4; text-align:center;
+            box-shadow:0 8px 24px rgba(0,0,0,0.45);
+            opacity:0; transition:opacity 0.2s ease, transform 0.2s ease;
+            pointer-events:none;
+        }
+        .app-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
     </style>
 </head>
 <body>
@@ -265,6 +280,24 @@
             return `${s}วิ`;
         }
 
+        // === Utility: toast notification (top-center, auto-dismiss) ===
+        let _toastTimer = null;
+        function showToast(message, durationMs) {
+            durationMs = durationMs || 2500;
+            let el = document.getElementById('app-toast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'app-toast';
+                el.className = 'app-toast';
+                document.body.appendChild(el);
+            }
+            el.textContent = message;
+            // force reflow ก่อนเพิ่ม class เพื่อให้ transition ทำงาน
+            requestAnimationFrame(() => { el.classList.add('show'); });
+            if (_toastTimer) clearTimeout(_toastTimer);
+            _toastTimer = setTimeout(() => { el.classList.remove('show'); }, durationMs);
+        }
+
         // === HTML builders ===
 
         // สร้าง HTML ของแถวรายการ (ใช้ทั้งตอนสร้างใหม่และตอนอัพเดต field)
@@ -316,7 +349,7 @@
                         <div class="rec-actions">
                             ${metaHtml}
                             ${btnHtml}
-                            <button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ลบ</button>
+                            ${Auth.isAdmin() ? `<button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ลบ</button>` : ''}
                         </div>
                     </div>
                     <div class="feed-text" style="margin-top:6px;">
@@ -709,6 +742,11 @@
 
         // ให้คะแนนคุณภาพการถอดเสียง (1=แย่มาก .. 6=ดีที่สุด)
         async function markQuality(id, rating) {
+            // การให้คะแนนคุณภาพการถอดเสียง สำหรับผู้ดูแลระบบเท่านั้น
+            if (!Auth.isAdmin()) {
+                showToast('การให้คะแนนคุณภาพการถอดเสียง สำหรับผู้ดูแลระบบเท่านั้น');
+                return;
+            }
             // ปุ่มที่กด + ปุ่มทั้งหมดในกลุ่ม → ล็อคชั่วคราวกันกดซ้อน
             const group = document.getElementById('quality-' + id);
             const buttons = group ? group.querySelectorAll('.rec-quality-btn') : [];
