@@ -45,6 +45,14 @@
         .status-off { background: rgba(239,68,68,0.2); color: var(--accent-red); }
         .back-link { color: var(--text-secondary); text-decoration: none; font-size: 0.85rem; }
         .back-link:hover { color: var(--accent-cyan); }
+        .settings-user-box { display:flex; align-items:center; gap:10px; }
+        .logout-btn {
+            background: rgba(239,68,68,0.12); color: var(--accent-red);
+            border: 1px solid rgba(239,68,68,0.35);
+            padding: 6px 14px; border-radius: 6px; font-size: 0.8rem;
+            cursor: pointer; text-decoration: none; white-space: nowrap;
+        }
+        .logout-btn:hover { background: rgba(239,68,68,0.25); }
     </style>
 </head>
 <body>
@@ -54,7 +62,10 @@
                 <a href="/dashboard" class="back-link">← กลับ Dashboard</a>
                 <h1>⚙️ ตั้งค่าระบบ</h1>
             </div>
-            <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
+            <div class="settings-user-box">
+                <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
+                <button class="logout-btn" onclick="Auth.logout()">ออกจากระบบ</button>
+            </div>
         </div>
 
         <!-- Tabs -->
