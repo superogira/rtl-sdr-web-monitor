@@ -1,7 +1,7 @@
 # 🚀 How to Restart & Check (Quick Reference)
 
 > ไฟล์นี้สรุปคำสั่งสั้นๆ สำหรับ restart server และตรวจสอบสถานะ
-> รายละเอียดเต็มอยู่ใน `OPERATIONS.md` section 4
+> รายละเอียดเต็มอยู่ใน `OPERATIONS.md`
 
 ---
 
@@ -9,48 +9,84 @@
 
 | รายการ | ค่า |
 |---|---|
-| **รูปแบบการรัน** | systemd service |
-| **Service name** | `rtl-sdr-web.service` |
+| **รูปแบบการรัน** | uvicorn process (nohup, background) — ไม่ใช่ systemd |
 | **Path** | `/root/workspace/rtl-sdr-web` |
 | **Python** | `/root/workspace/rtl-sdr-web/venv/bin/python3` |
 | **Port** | `8000` |
+| **Log file** | `/var/log/rtl-sdr-web/uvicorn.log` |
 | **การทำ Migration** | อัตโนมัติ (auto-add columns ใน `backend/database.py` `_run_migrations`) |
 
 ---
 
 ## 🔄 Restart Server (หลังแก้ Python code)
 
-```bash
-# Restart
-sudo systemctl restart rtl-sdr-web
+เพราะรันเป็น uvicorn process ตรงๆ (ไม่มี systemd service) ต้อง kill + start เอง
 
-# ตรวจสถานะหลัง restart
-systemctl is-active rtl-sdr-web
-# ควรได้: active
+### วิธีที่ 1: คำสั่งเดียว (แนะนำ)
+
+```bash
+cd /root/workspace/rtl-sdr-web
+
+# หา PID ของ uvicorn เดิม แล้ว kill + restart ในบรรทัดเดียว
+OLD_PID=$(ss -tlnp | grep ':8000' | grep -oP 'pid=\K[0-9]+' | head -1)
+echo "Old pid: $OLD_PID"
+[ -n "$OLD_PID" ] && kill "$OLD_PID" && sleep 2
+( kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" )  # force kill ถ้ายังไม่ตาย
+
+mkdir -p /var/log/rtl-sdr-web
+nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info \
+  > /var/log/rtl-sdr-web/uvicorn.log 2>&1 &
+
+sleep 3
+curl -s http://localhost:8000/api/health   # ควรได้: {"status":"ok",...}
 ```
 
-> ⚠️ **แก้ไฟล์ CSS/JS/HTML** → ไม่ต้อง restart (refresh browser ด้วย Ctrl+Shift+R)
-> ⚠️ **แก้ไฟล์ Python (.py)** → ต้อง restart
+### วิธีที่ 2: ทีละขั้น
+
+```bash
+# 1) หา PID ปัจจุบัน
+ss -tlnp | grep ':8000'
+# ผลลัพธ์จะมี pid=XXXX เช่น: users:(("uvicorn",pid=196008,fd=15))
+
+# 2) ฆ่า process เดิม
+kill 196008            # แทนด้วย PID จริง
+sleep 2
+kill -0 196008 2>/dev/null && kill -9 196008   # force kill ถ้ายังค้าง
+
+# 3) เริ่ม server ใหม่ (background + redirect log)
+cd /root/workspace/rtl-sdr-web
+mkdir -p /var/log/rtl-sdr-web
+nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info \
+  > /var/log/rtl-sdr-web/uvicorn.log 2>&1 &
+
+# 4) ตรวจสถานะ
+sleep 3
+curl -s http://localhost:8000/api/health
+```
+
+> ⚠️ **แก้ไฟล์ CSS/JS/HTML** → ไม่ต้อง restart (refresh browser ด้วย Ctrl+Shift+R; อย่าลืม bump `?v=N` ใน `<script src=...>` / `<link href=...>`)
+> ⚠️ **แก้ไฟล์ Python (.py)** → ต้อง restart (ตามวิธีข้างบน)
 
 ---
 
 ## 🩺 ตรวจสอบสถานะ (Health Check)
 
 ```bash
-# 1. ตรวจว่า service รันอยู่ไหม
-systemctl is-active rtl-sdr-web
+# 1. ตรวจว่า service รันอยู่ไหม (ดู process + port)
+ps aux | grep uvicorn | grep -v grep
+ss -tlnp | grep 8000
 
 # 2. HTTP health check
-curl -s http://localhost:8000/api/health | python3 -m json.tool
+curl -s http://localhost:8000/api/health
 
 # 3. ดู log แบบ real-time
-journalctl -u rtl-sdr-web -f
+tail -f /var/log/rtl-sdr-web/uvicorn.log
 
 # 4. ดู log 50 บรรทัดล่าสุด
-journalctl -u rtl-sdr-web --no-pager -n 50
+tail -n 50 /var/log/rtl-sdr-web/uvicorn.log
 
 # 5. ตรวจ SDR status
-curl -s http://localhost:8000/api/sdr/status | python3 -m json.tool
+curl -s http://localhost:8000/api/sdr/status
 ```
 
 ---
@@ -73,17 +109,17 @@ curl -s http://localhost:8000/api/sdr/status | python3 -m json.tool
 ## 🔧 คำสั่งทั่วไป
 
 ```bash
-# Start (ถ้า service หยุดอยู่)
-sudo systemctl start rtl-sdr-web
+# หาก server หยุดอยู่ → start ใหม่
+cd /root/workspace/rtl-sdr-web
+mkdir -p /var/log/rtl-sdr-web
+nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info \
+  > /var/log/rtl-sdr-web/uvicorn.log 2>&1 &
 
-# Stop
-sudo systemctl stop rtl-sdr-web
+# หยุด server
+kill $(ss -tlnp | grep ':8000' | grep -oP 'pid=\K[0-9]+' | head -1)
 
-# Status แบบละเอียด
-systemctl status rtl-sdr-web
-
-# Enable (ให้ start อัตโนมัติตอน boot)
-sudo systemctl enable rtl-sdr-web
+# ดู process ทั้งหมดที่เกี่ยวข้อง
+ps aux | grep -E "uvicorn|rtl-sdr" | grep -v grep
 ```
 
 ---
@@ -91,8 +127,8 @@ sudo systemctl enable rtl-sdr-web
 ## 🐛 ถ้ามีปัญหา
 
 ```bash
-# Server crash / restart loop
-journalctl -u rtl-sdr-web --no-pager -n 100
+# Server crash / restart loop → ดู log
+tail -n 100 /var/log/rtl-sdr-web/uvicorn.log
 
 # ตรวจ syntax ก่อน restart
 cd /root/workspace/rtl-sdr-web
@@ -100,8 +136,18 @@ cd /root/workspace/rtl-sdr-web
 
 # ตรวจ port ชนกัน
 ss -tlnp | grep 8000
+
+# ถ้า port ไม่ปล่อยหลัง kill → หาและ force kill
+fuser -k 8000/tcp
 ```
 
 ---
 
-_อัปเดตล่าสุด: 2025-06-16_
+## 📝 หมายเหตุ
+
+- ก่อนหน้านี้เคยใช้ `systemd` (`rtl-sdr-web.service`) แต่ในสภาพแวดล้อมปัจจุบันไม่ได้ติดตั้ง service นี้ไว้ (รันเป็น uvicorn process ตรงๆ แทน)
+- ถ้าต้องการใช้ systemd อีกครั้ง ให้สร้าง unit file ที่ `/etc/systemd/system/rtl-sdr-web.service` แล้ว `systemctl daemon-reload && systemctl enable --now rtl-sdr-web`
+
+---
+
+_อัปเดตล่าสุด: 2026-06-18_
