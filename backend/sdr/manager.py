@@ -15,6 +15,7 @@ import soundfile as sf
 
 from backend.config import settings
 from backend.sdr.rtl_tcp import RtlTcpClient
+from backend.sdr.connection_pool import pool as connection_pool, PRIORITY_LIVE
 from backend.audio.demod import (
     DemodMode, demodulate, compute_signal_level, StreamingDemodulator,
 )
@@ -62,15 +63,24 @@ class SDRManager:
     # Channel bandwidth (Hz) — user-adjustable via /api/sdr/bandwidth.
     # Default 12kHz = NBFM voice. Wider values for WBFM/broadcast.
     _DEFAULT_CHANNEL_BW = 12000
+    # Idle streaming timeout: when no listeners, count down to release the
+    # device so background recording jobs can use it.
+    _IDLE_STREAMING_TIMEOUT = 60  # seconds
 
     def __init__(self):
         persisted = self._load_persisted_settings()
-        self.client = RtlTcpClient(host=persisted["host"], port=persisted["port"])
-        # Apply persisted frequency/sample_rate/gain as initial device values.
-        self.client._frequency = persisted["frequency"]
-        self.client._sample_rate = persisted["sample_rate"]
-        self.client._gain = persisted["gain"]
-        self.client._ppm = persisted["freq_correction_ppm"]
+        # Keep a plain client for status/host/port before the first connect.
+        # On connect() we swap self.client to a SharedConnectionConsumer from
+        # the connection pool so that recording jobs and live listening share
+        # one RTL-TCP connection per device.
+        self._legacy_client = RtlTcpClient(host=persisted["host"], port=persisted["port"])
+        self._legacy_client._frequency = persisted["frequency"]
+        self._legacy_client._sample_rate = persisted["sample_rate"]
+        self._legacy_client._gain = persisted["gain"]
+        self._legacy_client._ppm = persisted["freq_correction_ppm"]
+        self.client = self._legacy_client
+        self._consumer_id: Optional[str] = None
+        self._pool_device_id: Optional[str] = None
         self.mode = DemodMode.FM
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
         self.is_streaming = False
@@ -85,6 +95,9 @@ class SDRManager:
         self._manual_start_time: Optional[float] = None
         self._auto_silence_start: Optional[float] = None
         self._auto_record = persisted["auto_record"]
+        # Idle streaming timeout: when no listeners, count down to release
+        # the device so background recording jobs can use it.
+        self._idle_since: Optional[float] = None
 
         self._audio_buffer: list[np.ndarray] = []
         self._signal_level = -120.0
@@ -113,6 +126,7 @@ class SDRManager:
         # VFO passband margin ratio (configurable via app settings 0.40–0.49).
         # Controls how far from center the VFO can tune (max_offset = sample_rate * ratio).
         self._vfo_margin_ratio: float = 0.40
+        self._active_device_id: Optional[str] = None
         self._stream_task: Optional[asyncio.Task] = None
         # Stateful streaming demodulator — carries filter state across chunks
         # to eliminate per-chunk boundary clicks (~20 Hz buzz) in live audio
@@ -172,7 +186,23 @@ class SDRManager:
             "vfo_margin_ratio": round(self._vfo_margin_ratio, 2),
             "listeners": audio_broadcaster.listener_count,
             "max_listeners": audio_broadcaster.max_listeners,
+            "device_id": self._active_device_id,
+            # Background recording jobs active on any device (for dashboard
+            # indicator below the clock).
+            "active_job_captures": self._collect_job_captures(),
         }
+
+    def _collect_job_captures(self) -> list:
+        """Return runtime_status of all active background job captures."""
+        try:
+            from backend.sdr.job_scheduler import job_scheduler
+            caps = []
+            for cap in job_scheduler._captures.values():
+                if cap.is_running:
+                    caps.append(cap.runtime_status())
+            return caps
+        except Exception:
+            return []
 
     # ------------------------------------------------------------------
     # Persisted settings (host/port/freq/etc. survive restarts)
@@ -269,28 +299,47 @@ class SDRManager:
             return result.scalar_one_or_none()
 
     def _apply_device_config(self, device) -> None:
-        """Apply a device's config (host/port/freq/sr/gain/ppm) to the client.
+        """Apply a device's connection config (host/port only) to the client.
 
-        Sync; only updates the in-memory client target + tuner values. The
-        caller is responsible for (re)connecting if desired.
+        Per the new recording-jobs design, device config stores ONLY host/port
+        (+ optional note). Tuner parameters (frequency/sample_rate/gain/ppm)
+        are intentionally NOT part of the device config anymore — they are
+        managed per recording-job window and via the legacy live tuner
+        endpoints. We keep the current client tuner values untouched here so
+        switching active devices does not clobber the live frequency with a
+        stale/dummy value (which caused "Failed to connect to RTL-TCP").
+
+        Sync; only updates the in-memory client target. The caller is
+        responsible for (re)connecting if desired.
         """
         cfg = device.get_config()
         host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
         port = int(cfg.get("port") or settings.RTL_TCP_PORT)
         self.client.set_connection(host, port)
-        if "frequency" in cfg:
+        # NOTE: We deliberately do NOT overwrite frequency/sample_rate/gain/ppm
+        # from the device config. Those values are now per-recording-job.
+        # We do, however, accept them if present (backward compat with rows
+        # created before the schema change) — but never with a 0/falsey value.
+        if cfg.get("frequency"):
             self.client._frequency = int(cfg["frequency"])
-        if "sample_rate" in cfg:
+        if cfg.get("sample_rate"):
             self.client._sample_rate = int(cfg["sample_rate"])
-        if "gain" in cfg:
-            self.client._gain = int(cfg["gain"])
-        if "freq_correction_ppm" in cfg:
-            self.client._ppm = int(cfg["freq_correction_ppm"])
-        # Keep legacy sdr_settings.json in sync (host/port/freq/etc.)
+        if cfg.get("gain") is not None and cfg.get("gain") != "":
+            try:
+                self.client._gain = int(cfg["gain"])
+            except (TypeError, ValueError):
+                pass
+        if cfg.get("freq_correction_ppm") is not None and cfg.get("freq_correction_ppm") != "":
+            try:
+                self.client._ppm = int(cfg["freq_correction_ppm"])
+            except (TypeError, ValueError):
+                pass
+        # Keep legacy sdr_settings.json in sync (host/port at minimum)
         self._save_persisted_settings()
         logger.info(f"Applied device '{device.name}' ({device.type}) config: "
-                    f"{host}:{port}, {self.client._frequency} Hz, "
-                    f"{self.client._sample_rate} SPS, gain {self.client._gain}")
+                    f"{host}:{port} (tuner values preserved: "
+                    f"{self.client._frequency} Hz, {self.client._sample_rate} SPS, "
+                    f"gain {self.client._gain})")
 
     async def load_active_device(self) -> bool:
         """Load and apply the active device's config at startup.
@@ -305,6 +354,7 @@ class SDRManager:
             if device is None:
                 logger.info("No active SDR device in DB; using legacy config")
                 return False
+            self._active_device_id = device.id
             self._apply_device_config(device)
             return True
         except Exception as e:
@@ -335,6 +385,8 @@ class SDRManager:
             await session.commit()
             device_dict = device.to_dict()
 
+        # Cache the active device id for status reporting
+        self._active_device_id = device_id
         # Apply the config to the client (in-memory)
         self._apply_device_config(device)
 
@@ -382,24 +434,79 @@ class SDRManager:
             logger.warning(f"Failed to sync active device config: {e}")
 
     # ------------------------------------------------------------------
-    # Connection lifecycle
+    # Connection lifecycle (via shared connection pool)
     # ------------------------------------------------------------------
     async def connect(self) -> dict:
-        """Connect to RTL-TCP server."""
+        """Connect to RTL-TCP server via the shared connection pool.
+
+        Acquires a SharedConnectionConsumer with PRIORITY_LIVE so that
+        recording jobs on the same device yield to interactive listening.
+        """
         if self.is_streaming:
             await self.stop_streaming()
-        if self.client.connected:
-            await self.client.disconnect()
-            await asyncio.sleep(0.5)
 
-        success = await self.client.connect()
+        # Release any existing pool consumer first
+        await self._release_pool_consumer()
+
+        # Determine device_id and host/port from current client state
+        device_id = self._active_device_id or "_legacy"
+        host = self.client.host
+        port = self.client.port
+
+        # Acquire a shared consumer for live listening
+        consumer = await connection_pool.acquire(
+            device_id, host, port,
+            consumer_id="live", priority=PRIORITY_LIVE,
+        )
+        # Preconfigure tuner values before connecting so the RTL-TCP
+        # handshake sends correct freq/sr/gain/ppm.
+        consumer.preconfigure(
+            self.client._frequency,
+            self.client._sample_rate,
+            self.client._gain,
+            self.client._ppm,
+        )
+        ok = await consumer.connect()
+        if ok:
+            self.client = consumer
+            self._consumer_id = "live"
+            self._pool_device_id = device_id
+        else:
+            # Clean up: release the failed consumer so the pool can tear down
+            # the failed connection (otherwise refcount leak blocks reconnect).
+            try:
+                await connection_pool.release(device_id, "live")
+            except Exception:
+                pass
+            # Revert to legacy client for status reporting
+            self.client = self._legacy_client
+            self._consumer_id = None
+            self._pool_device_id = None
         self._save_persisted_settings()
-        return {"success": success, "status": self.status}
+        return {"success": ok, "status": self.status}
+
+    async def _release_pool_consumer(self) -> None:
+        """Release the current pool consumer and revert to legacy client."""
+        if self._consumer_id and self._pool_device_id:
+            # Sync tuner values back to legacy client before releasing
+            if hasattr(self.client, '_frequency'):
+                self._legacy_client._frequency = self.client._frequency
+                self._legacy_client._sample_rate = self.client._sample_rate
+                self._legacy_client._gain = self.client._gain
+                self._legacy_client._ppm = self.client._ppm
+                self._legacy_client.host = self.client.host
+                self._legacy_client.port = self.client.port
+            await connection_pool.release(
+                self._pool_device_id, self._consumer_id
+            )
+            self._consumer_id = None
+            self._pool_device_id = None
+            self.client = self._legacy_client
 
     async def disconnect(self):
-        """Disconnect from RTL-TCP."""
+        """Disconnect from RTL-TCP (release pool consumer)."""
         await self.stop_streaming()
-        await self.client.disconnect()
+        await self._release_pool_consumer()
 
     # FM broadcast band (WBFM) — auto-select wide channel bandwidth when tuning here.
     WBFM_BANDS = [(65_800_000, 74_000_000), (76_000_000, 95_000_000), (87_500_000, 108_000_000)]
@@ -716,6 +823,19 @@ class SDRManager:
     def on_spectrum(self, callback):
         self._spectrum_callbacks.append(callback)
 
+    def _device_has_active_jobs(self) -> bool:
+        """Check if the active device has any running background recording job."""
+        try:
+            from backend.sdr.job_scheduler import job_scheduler
+            if not self._active_device_id:
+                return False
+            for cap in job_scheduler._captures.values():
+                if cap.device_id == self._active_device_id and cap.is_running:
+                    return True
+            return False
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------
     # Main streaming loop — dual-track recording
     # ------------------------------------------------------------------
@@ -784,8 +904,42 @@ class SDRManager:
                                 logger.info(f"Manual recording hit max duration ({self._max_recording_duration}s), finishing")
                                 await self._finish_manual_recording()
 
-                    # === TRACK 2: Auto recording (independent) ===
-                    if self._auto_record and self.is_streaming:
+                    # === Idle streaming timeout (release device for jobs) ===
+                    if audio_broadcaster.has_listeners:
+                        self._idle_since = None
+                    else:
+                        if self._idle_since is None:
+                            self._idle_since = time.time()
+                        elapsed_idle = time.time() - self._idle_since
+                        if elapsed_idle > self._IDLE_STREAMING_TIMEOUT \
+                                and self._device_has_active_jobs():
+                            logger.info(
+                                f"⏱️ No listeners for {elapsed_idle:.0f}s and device has "
+                                f"active jobs → stopping live streaming to free device"
+                            )
+                            if self._auto_recording:
+                                await self._finish_auto_recording()
+                            await self.stop_streaming()
+                            break
+
+                    # === TRACK 2: Auto recording (gated by active listeners) ===
+                    # Auto-record from live listening requires active listeners,
+                    # UNLESS the device has no background jobs (in which case we
+                    # allow auto-record to continue even without listeners).
+                    device_has_jobs = self._device_has_active_jobs()
+                    should_auto_record = (
+                        self._auto_record
+                        and self.is_streaming
+                        and (audio_broadcaster.has_listeners or not device_has_jobs)
+                    )
+                    if not should_auto_record and self._auto_recording:
+                        logger.info(
+                            "🎙️ Auto recording finishing: no active listeners and "
+                            "device has background jobs"
+                        )
+                        await self._finish_auto_recording()
+
+                    if should_auto_record:
                         above_squelch = self._signal_level > self._squelch_level
 
                         if above_squelch and not self._auto_recording:
@@ -812,6 +966,9 @@ class SDRManager:
                             elapsed = time.time() - self._auto_start_time
                             if elapsed > self._max_recording_duration:
                                 await self._finish_auto_recording()
+
+                    # else: auto-record paused (no listeners + device has jobs)
+                    # — recording job will pick up that frequency instead.
 
                 except Exception as inner_e:
                     consecutive_errors += 1
@@ -915,8 +1072,16 @@ class SDRManager:
         self._manual_start_time = None
         return result
 
-    async def _save_recording(self, audio_data: np.ndarray, duration: float, source: str) -> dict:
-        """Save audio data to WAV file, insert into DB, and notify callbacks."""
+    async def _save_recording(
+        self, audio_data: np.ndarray, duration: float, source: str,
+        device_id: Optional[str] = None, user_id: Optional[str] = None,
+    ) -> dict:
+        """Save audio data to WAV file, insert into DB, and notify callbacks.
+
+        Args:
+            device_id: SDR device that produced this recording (nullable).
+            user_id: For manual recordings, the user who pressed record.
+        """
         recordings_dir = Path(settings.RECORDINGS_DIR)
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -950,6 +1115,8 @@ class SDRManager:
                     status=RecordingStatus.COMPLETED,
                     source=source,
                     is_unread=1,
+                    device_id=device_id or self._active_device_id,
+                    recorded_by_user_id=user_id if source == "manual" else None,
                     recorded_at=now,
                     created_at=now,
                 )
@@ -1119,6 +1286,7 @@ class SDRManager:
                     source="manual",
                     recorded_by_user_id=user_id,
                     is_unread=1,
+                    device_id=self._active_device_id,
                     recorded_at=now,
                     created_at=now,
                 )

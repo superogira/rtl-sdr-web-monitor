@@ -283,6 +283,37 @@ const API = {
             return API.request('PUT', '/api/settings/stt', data);
         },
     },
+
+    // Recording Jobs (scheduled/always-on background recording)
+    recordingJobs: {
+        async list() {
+            return API.request('GET', '/api/recording-jobs');
+        },
+        async availableDevices() {
+            return API.request('GET', '/api/recording-jobs/available-devices');
+        },
+        async create(data) {
+            return API.request('POST', '/api/recording-jobs', data);
+        },
+        async update(id, data) {
+            return API.request('PUT', `/api/recording-jobs/${id}`, data);
+        },
+        async remove(id) {
+            return API.request('DELETE', `/api/recording-jobs/${id}`);
+        },
+        async setEnabled(id, enabled) {
+            return API.request('POST', `/api/recording-jobs/${id}/enabled`, { enabled: !!enabled });
+        },
+        async getServerTimezone() {
+            return API.request('GET', '/api/recording-jobs/server-timezone');
+        },
+        async runtimeStatus() {
+            return API.request('GET', '/api/recording-jobs/runtime-status');
+        },
+        async setServerTimezone(timezone) {
+            return API.request('PUT', '/api/recording-jobs/server-timezone', { timezone });
+        },
+    },
 };
 
 // === Helper Functions ===

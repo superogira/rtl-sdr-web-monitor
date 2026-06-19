@@ -19,6 +19,13 @@ QUALITY_RATING_LABELS = {
 }
 
 
+SOURCE_LABELS = {
+    "auto": "อัดอัตโนมัติ",
+    "manual": "อัดด้วยตนเอง",
+    "auto_job": "อัดตามกำหนดการ",
+}
+
+
 class RecordingStatus(str, enum.Enum):
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
@@ -66,6 +73,9 @@ class Recording(Base):
     quality_rating = Column(Integer, nullable=True, comment="User verdict on transcription quality: 1=worst .. 6=best")
     quality_rated_by_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, comment="User who rated this transcript")
     quality_rated_at = Column(DateTime, nullable=True, comment="When the transcript was rated")
+    # === Source device + job tracking ===
+    device_id = Column(String(36), ForeignKey("sdr_devices.id"), nullable=True, comment="SDR device used for this recording")
+    recording_job_id = Column(String(36), ForeignKey("recording_jobs.id"), nullable=True, comment="Recording job that produced this (auto_job source only)")
 
     # Relationship to keyword alerts
     alerts = relationship("TelegramAlert", back_populates="recording", lazy="selectin")
@@ -73,6 +83,8 @@ class Recording(Base):
     recorded_by = relationship("User", foreign_keys=[recorded_by_user_id], lazy="selectin")
     # Relationship to the user who rated the transcript quality
     quality_rated_by = relationship("User", foreign_keys=[quality_rated_by_user_id], lazy="selectin")
+    # Relationship to the SDR device used
+    device = relationship("SdrDevice", foreign_keys=[device_id], lazy="selectin")
 
     def __repr__(self):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"
@@ -99,6 +111,10 @@ class Recording(Base):
             "stt_duration": self.stt_duration,
             "status": self.status.value if self.status else None,
             "source": self.source or "auto",
+            "source_label": SOURCE_LABELS.get(self.source or "auto", self.source or "auto"),
+            "device_id": self.device_id,
+            "device_name": (self.device.name if self.device else None),
+            "recording_job_id": self.recording_job_id,
             "recorded_by_user_id": self.recorded_by_user_id,
             "recorded_by_username": (self.recorded_by.username if self.recorded_by else None),
             "recorded_by_display_name": (self.recorded_by.display_name if self.recorded_by else None),

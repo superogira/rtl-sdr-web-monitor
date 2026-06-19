@@ -407,19 +407,23 @@ async def list_recordings(
     source: Optional[str] = None,
     search: Optional[str] = None,
     frequency_mhz: Optional[float] = None,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
     """List recordings from database (paginated, newest first).
 
     Optional filters:
-    - source: "auto" | "manual"
+    - source: "auto" | "manual" | "auto_job"
     - search: case-insensitive substring match on transcript, audio_file_name, mode, frequency (kHz)
     - frequency_mhz: filter by center frequency with ±5 kHz tolerance (e.g. 145.5 matches 145.4975–145.5025 MHz)
+    - device_id: filter by SDR device ID
     """
     query = select(Recording).order_by(Recording.recorded_at.desc())
     if source:
         query = query.where(Recording.source == source)
+    if device_id:
+        query = query.where(Recording.device_id == device_id)
     if frequency_mhz is not None:
         tol_hz = FREQ_TOLERANCE_KHZ * 1e3
         center_hz = frequency_mhz * 1e6
@@ -450,6 +454,8 @@ async def list_recordings(
     count_q = select(func.count(Recording.id))
     if source:
         count_q = count_q.where(Recording.source == source)
+    if device_id:
+        count_q = count_q.where(Recording.device_id == device_id)
     if frequency_mhz is not None:
         tol_hz = FREQ_TOLERANCE_KHZ * 1e3
         center_hz = frequency_mhz * 1e6
@@ -478,6 +484,8 @@ async def list_recordings(
     dur_q = select(func.coalesce(func.sum(Recording.duration), 0.0))
     if source:
         dur_q = dur_q.where(Recording.source == source)
+    if device_id:
+        dur_q = dur_q.where(Recording.device_id == device_id)
     if frequency_mhz is not None:
         tol_hz = FREQ_TOLERANCE_KHZ * 1e3
         center_hz = frequency_mhz * 1e6

@@ -16,6 +16,7 @@ from backend.sdr.router import (
     settings_router,
     devices_router,
 )
+from backend.sdr.recording_jobs_router import recording_jobs_router
 
 
 @asynccontextmanager
@@ -42,6 +43,15 @@ async def lifespan(app: FastAPI):
     # Load the active SDR device's config from the registry (overrides the
     # legacy sdr_settings.json connection values if an active device exists).
     await sdr_manager.load_active_device()
+
+    # Start the background recording job scheduler (multi-device capture).
+    # Runs independently from the interactive SDRManager — it spawns its own
+    # RtlTcpClient per active recording job.
+    from backend.sdr.job_scheduler import job_scheduler
+    try:
+        await job_scheduler.start()
+    except Exception as e:
+        print(f"⚠️ JobScheduler start failed (will retry on next tick): {e}")
 
     # Auto-start streaming in background (24/7 operation)
     if settings.AUTO_START_STREAMING:
@@ -85,6 +95,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("👋 Shutting down...")
+    from backend.sdr.job_scheduler import job_scheduler
+    try:
+        await job_scheduler.stop()
+    except Exception as e:
+        print(f"⚠️ JobScheduler stop error: {e}")
 
 
 # Create FastAPI app
@@ -104,6 +119,7 @@ app.include_router(sdr_router)
 app.include_router(recordings_router)
 app.include_router(settings_router)
 app.include_router(devices_router)
+app.include_router(recording_jobs_router)
 
 
 # === Health Check ===

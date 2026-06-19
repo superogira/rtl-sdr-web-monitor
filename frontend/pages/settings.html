@@ -159,25 +159,23 @@
             </div>
 
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>🎙️ การอัดเสียงอัตโนมัติ</h2>
+                <h2>🎙️ การอัดเสียงอัตโนมัติ (เมื่อผู้ใช้ฟังสด)</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    ควบคุมการอัดเสียงอัตโนมัติในขณะที่ผู้ใช้งานกำลังฟังสดที่ความถี่ใดความถี่หนึ่ง
+                    <br>การตั้งค่า Squelch สำหรับการอัดจะย้ายไปอยู่ในส่วน "การตั้งค่าการอัดเสียงของอุปกรณ์" ด้านล่าง
+                </p>
                 <div class="form-group">
-                    <label>Auto Record</label>
+                    <label>Auto Record (เมื่อผู้ใช้ฟังสด)</label>
                     <select id="rec-auto">
-                        <option value="true">เปิด (อัดอัตโนมัติเมื่อจับสัญญาณ)</option>
+                        <option value="true">เปิด (อัดอัตโนมัติเมื่อจับสัญญาณตามค่าที่ตั้งใน Dashboard)</option>
                         <option value="false">ปิด (อัดเองเท่านั้น)</option>
                     </select>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Squelch Level (dB) - เริ่มอัดเมื่อสัญญาณแรงกว่า</label>
-                        <input type="number" id="rec-squelch" value="-70">
-                    </div>
-                    <div class="form-group">
                         <label>Silence Timeout (วินาที) - หยุดอัดเมื่อเงียบเกิน</label>
                         <input type="number" id="rec-silence" value="5">
                     </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label>Min Recording Duration (วินาที)</label>
                         <input type="number" id="rec-min" value="2">
@@ -187,8 +185,44 @@
                         <input type="number" id="rec-max" value="300">
                     </div>
                 </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึกการอัดอัตโนมัติ</button>
+                </div>
+            </div>
 
-                <h2 style="margin-top:2rem;">🗂️ การเก็บรักษา (Retention)</h2>
+            <!-- การตั้งค่าการอัดเสียงของอุปกรณ์ (Recording Jobs) -->
+            <div class="settings-section" style="margin-top:1.5rem;">
+                <h2>📡 การตั้งค่าการอัดเสียงของอุปกรณ์</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    ตั้งค่าให้อุปกรณ์ SDR อัดเสียงที่ความถี่ที่ต้องการอัตโนมัติ (ทำงานเป็น background)
+                    <br>อุปกรณ์หนึ่งใช้ได้ครั้งละหนึ่งการตั้งค่าการอัด และสามารถอัดได้หลายความถี่พร้อมกันในช่วงความถี่ที่กำหนด
+                    <br>เวลาในตารางเวลาใช้ <b>เขตเวลาของเซิร์ฟเวอร์</b> (ตั้งค่าได้ที่ส่วน "เขตเวลาของเซิร์ฟเวอร์" ด้านล่าง)
+                </p>
+                <div id="recording-jobs-list" style="margin-bottom:1rem;"></div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="btn-add-recording-job" onclick="RecordingJobsUI.openEditor()">➕ เพิ่มการอัดเสียง</button>
+                </div>
+            </div>
+
+            <!-- เขตเวลาของเซิร์ฟเวอร์ -->
+            <div class="settings-section" style="margin-top:1.5rem;">
+                <h2>🌍 เขตเวลาของเซิร์ฟเวอร์</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                    กำหนดเขตเวลาที่ใช้สำหรับตารางเวลาการอัดเสียงของอุปกรณ์ (เช่น 08:00–10:30 จะหมายถึงเวลาในเขตเวลานี้)
+                </p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>เขตเวลา (IANA Timezone)</label>
+                        <input type="text" id="server-timezone" value="Asia/Bangkok" placeholder="Asia/Bangkok">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="RecordingJobsUI.saveServerTimezone()">💾 บันทึกเขตเวลา</button>
+                </div>
+            </div>
+
+            <div class="settings-section" style="margin-top:1.5rem;">
+                <h2>🗂️ การเก็บรักษา (Retention)</h2>
                 <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
                     ระบบจะลบรายการเก่าอัตโนมัติตามเงื่อนไขด้านล่าง (อันไหนเข้าเงื่อนไขก่อนก็ลบก่อน) ค่า 0 = ไม่จำกัด
                 </p>
@@ -681,6 +715,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="/js/api.js?v=9"></script>
     <script src="/js/auth.js?v=5"></script>
+    <script src="/js/recording_jobs.js?v=1"></script>
     <script>
     const Settings = {
         keywords: ['ฉุกเฉิน', 'เหตุด่วน', 'help', 'emergency'],
@@ -781,6 +816,10 @@
             // Load STT usage charts when the STT tab is opened (lazy load on demand).
             if (tabId === 'stt') {
                 this.loadSTTStats();
+            }
+            // Refresh recording jobs when the recording tab is opened.
+            if (tabId === 'recording' && window.RecordingJobsUI) {
+                RecordingJobsUI.refresh();
             }
         },
 
@@ -935,15 +974,11 @@
             try {
                 const cfg = await API.sdr.getRecordingConfig();
                 const elAuto = document.getElementById('rec-auto');
-                const elSquelch = document.getElementById('rec-squelch');
                 const elSilence = document.getElementById('rec-silence');
                 const elMin = document.getElementById('rec-min');
                 const elMax = document.getElementById('rec-max');
                 if (elAuto && typeof cfg.auto_record === 'boolean') {
                     elAuto.value = cfg.auto_record ? 'true' : 'false';
-                }
-                if (elSquelch && typeof cfg.squelch_level === 'number') {
-                    elSquelch.value = cfg.squelch_level;
                 }
                 if (elSilence && cfg.vad_silence_timeout !== undefined) {
                     elSilence.value = cfg.vad_silence_timeout;
@@ -970,7 +1005,6 @@
 
         async saveRecording() {
             const auto_record = document.getElementById('rec-auto').value === 'true';
-            const squelch_level = parseFloat(document.getElementById('rec-squelch').value);
             const vad_silence_timeout = parseInt(document.getElementById('rec-silence').value);
             const min_recording_duration = parseInt(document.getElementById('rec-min').value);
             const max_recording_duration = parseInt(document.getElementById('rec-max').value);
@@ -981,7 +1015,6 @@
             try {
                 const result = await API.sdr.setRecordingConfig({
                     auto_record,
-                    squelch_level,
                     vad_silence_timeout,
                     min_recording_duration,
                     max_recording_duration,
@@ -1790,6 +1823,9 @@
             const container = document.getElementById('device-config-fields');
             const cfg = this._wizardConfig || {};
             if (type === 'rtl_tcp') {
+                // NOTE: Tuner settings (frequency, sample_rate, gain, mode, ppm,
+                // bandwidth) have been MOVED to per-device recording jobs.
+                // The device registry now only stores connection info + note.
                 container.innerHTML = `
                     <div class="form-row">
                         <div class="form-group">
@@ -1801,51 +1837,14 @@
                             <input type="number" id="dc-port" value="${cfg.port || 1234}" placeholder="1234">
                         </div>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>ความถี่เริ่มต้น (Hz)</label>
-                            <input type="number" id="dc-frequency" value="${cfg.frequency || 145500000}">
-                        </div>
-                        <div class="form-group">
-                            <label>Sample Rate (Hz)</label>
-                            <input type="number" id="dc-sample_rate" value="${cfg.sample_rate || 2048000}">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Gain (dB)</label>
-                            <input type="number" id="dc-gain" value="${cfg.gain !== undefined ? cfg.gain : 30}">
-                        </div>
-                        <div class="form-group">
-                            <label>Demodulation Mode</label>
-                            <select id="dc-mode">
-                                <option value="FM" ${cfg.mode === 'FM' ? 'selected' : ''}>FM</option>
-                                <option value="AM" ${cfg.mode === 'AM' ? 'selected' : ''}>AM</option>
-                                <option value="USB" ${cfg.mode === 'USB' ? 'selected' : ''}>USB</option>
-                                <option value="LSB" ${cfg.mode === 'LSB' ? 'selected' : ''}>LSB</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Frequency Correction (PPM)</label>
-                            <input type="number" id="dc-ppm" value="${cfg.freq_correction_ppm !== undefined ? cfg.freq_correction_ppm : 0}" step="1" min="-200" max="200">
-                        </div>
-                        <div class="form-group">
-                            <label>Bandwidth (Hz)</label>
-                            <select id="dc-bandwidth">
-                                <option value="6000" ${cfg.channel_bw === 6000 ? 'selected' : ''}>6 kHz - Narrow</option>
-                                <option value="12000" ${(cfg.channel_bw === 12000 || cfg.channel_bw === undefined) ? 'selected' : ''}>12 kHz - Normal</option>
-                                <option value="25000" ${cfg.channel_bw === 25000 ? 'selected' : ''}>25 kHz - Wide</option>
-                                <option value="50000" ${cfg.channel_bw === 50000 ? 'selected' : ''}>50 kHz - Extra Wide</option>
-                                <option value="200000" ${cfg.channel_bw === 200000 ? 'selected' : ''}>200 kHz - Broadcast FM</option>
-                            </select>
-                        </div>
-                    </div>
                     <div class="form-group">
                         <label>หมายเหตุ / รายละเอียดอุปกรณ์ (ไม่บังคับ)</label>
                         <input type="text" id="dc-description" value="${cfg.description || ''}" placeholder="เช่น ตั้งอยู่บนหลังคา">
                     </div>
+                    <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:8px;">
+                        💡 การตั้งค่าความถี่, Sample Rate, Gain, Demodulation Mode, Frequency Correction และ Bandwidth
+                        ย้ายไปอยู่ในส่วน "การตั้งค่าการอัดเสียงของอุปกรณ์" (แท็บ การอัดเสียง)
+                    </p>
                 `;
             } else {
                 container.innerHTML = '<div class="text-muted">ยังไม่รองรับการตั้งค่าสำหรับประเภทนี้</div>';
@@ -1856,15 +1855,22 @@
             if (type !== 'rtl_tcp') return {};
             const host = document.getElementById('dc-host').value.trim();
             const port = parseInt(document.getElementById('dc-port').value) || 1234;
-            const frequency = parseInt(document.getElementById('dc-frequency').value);
-            const sample_rate = parseInt(document.getElementById('dc-sample_rate').value);
-            const gain = parseInt(document.getElementById('dc-gain').value);
-            const mode = document.getElementById('dc-mode').value;
-            const freq_correction_ppm = parseInt(document.getElementById('dc-ppm').value) || 0;
-            const channel_bw = parseInt(document.getElementById('dc-bandwidth').value) || 12000;
             const description = document.getElementById('dc-description').value.trim();
             if (!host) { alert('กรุณาใส่ Host'); return null; }
-            return { host, port, frequency, sample_rate, gain, mode, freq_correction_ppm, channel_bw, description };
+            // Preserve any legacy tuner fields that may already be stored, but
+            // the UI no longer exposes them (they're managed per recording job).
+            const legacy = this._wizardConfig || {};
+            return {
+                host, port, description,
+                // Keep legacy values if present (so existing deployments don't
+                // lose their last-known-good tuner config), but they're not edited here.
+                frequency: legacy.frequency,
+                sample_rate: legacy.sample_rate,
+                gain: legacy.gain,
+                mode: legacy.mode,
+                freq_correction_ppm: legacy.freq_correction_ppm,
+                channel_bw: legacy.channel_bw,
+            };
         },
 
         async saveDeviceFromWizard() {

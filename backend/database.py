@@ -75,6 +75,8 @@ def _run_migrations(conn):
         ("quality_rating", "INTEGER"),
         ("quality_rated_by_user_id", "VARCHAR(36)"),
         ("quality_rated_at", "DATETIME"),
+        ("device_id", "VARCHAR(36)"),
+        ("recording_job_id", "VARCHAR(36)"),
     ]
 
     for col_name, col_type in migrations:
@@ -123,6 +125,9 @@ def _seed_app_settings(conn):
         "stt_diarization": "none",
         "stt_enable_entities": "false",
         "manual_recording_enabled": "true",
+        # Server timezone for scheduled recording jobs (admin-configurable).
+        # IANA name, e.g. "Asia/Bangkok". Used by the recording scheduler.
+        "server_timezone": "Asia/Bangkok",
     }
 
     from datetime import datetime, timezone
@@ -199,6 +204,7 @@ async def init_db():
     from backend.models import app_setting  # noqa: F401  (register AppSetting model)
     from backend.models import recording  # noqa: F401  (register Recording model)
     from backend.models import sdr_device  # noqa: F401  (register SdrDevice model)
+    from backend.models import recording_job  # noqa: F401  (register RecordingJob models)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

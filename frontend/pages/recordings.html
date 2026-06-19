@@ -240,8 +240,13 @@
                 <label style="font-size:0.85rem;">ประเภท:</label>
                 <select id="filter-source" onchange="onSourceChange()">
                     <option value="">ทั้งหมด</option>
-                    <option value="auto">🔄 อัตโนมัติ</option>
-                    <option value="manual">✋ บันทึกเอง</option>
+                    <option value="auto">🔵 อัดอัตโนมัติ</option>
+                    <option value="manual">🟢 อัดด้วยตนเอง</option>
+                    <option value="auto_job">🟣 อัดตามกำหนดการ</option>
+                </select>
+                <label style="font-size:0.85rem;">อุปกรณ์:</label>
+                <select id="filter-device" onchange="resetAndLoad()">
+                    <option value="">ทุกอุปกรณ์</option>
                 </select>
                 <label style="font-size:0.85rem;">ความถี่:</label>
                 <select id="filter-frequency" onchange="resetAndLoad()">
@@ -368,14 +373,23 @@
             const metaHtml = `<span class="rec-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>`;
             const btnHtml = sttBtnHTML(rec);
             const source = rec.source || 'auto';
+            // Source badge: auto=🔵, manual=🟢, auto_job=🟣
             const badgeClass = source === 'manual' ? 'manual' : 'auto';
             const recorderName = rec.recorded_by_username || '';
-            const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
-            const badgeTitle = source === 'manual'
-                ? (recorderName ? `ผู้ใช้กดบันทึก: ${recorderName}` : 'ผู้ใช้กดบันทึก')
-                : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ';
+            const deviceName = rec.device_name || '';
+            const SOURCE_BADGES = {
+                'auto':     { label: '🔵 อัดอัตโนมัติ',    title: 'อัดอัตโนมัติเมื่อตรวจพบสัญญาณ (ผู้ใช้กำลังฟัง)' },
+                'manual':   { label: '🟢 อัดด้วยตนเอง',  title: 'ผู้ใช้กดบันทึก' },
+                'auto_job': { label: '🟣 อัดตามกำหนดการ', title: 'อัดตามกำหนดการอัตโนมัติ (Background Job)' },
+            };
+            const sb = SOURCE_BADGES[source] || SOURCE_BADGES['auto'];
+            const badgeLabel = sb.label;
+            const badgeTitle = sb.title + (source === 'manual' && recorderName ? `: ${recorderName}` : '');
             const recorderBadge = (source === 'manual' && recorderName)
                 ? `<span class="rec-recorder" title="บันทึกโดย ${recorderName}" style="font-size:0.7rem; color:var(--text-muted); background:rgba(34,211,238,0.08); border:1px solid var(--border); padding:2px 8px; border-radius:4px;">👤 ${recorderName}</span>`
+                : '';
+            const deviceBadge = deviceName
+                ? `<span class="rec-device" title="อุปกรณ์ที่ใช้อัด" style="font-size:0.7rem; color:var(--text-muted); background:rgba(168,85,247,0.08); border:1px solid var(--border); padding:2px 8px; border-radius:4px;">📺 ${deviceName}</span>`
                 : '';
             const transcriptHtml = transcriptHTML(rec);
             const hasAudio = rec.has_audio != null ? rec.has_audio : (!!(rec.audio_file_name || rec.url) && !rec.audio_deleted);
@@ -397,6 +411,7 @@
                             ${selectCb}
                             <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
                             ${recorderBadge}
+                            ${deviceBadge}
                             <span class="rec-time" style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${time}</span>
                             ${audioDeletedBadge}
                         </div>
@@ -658,6 +673,7 @@
             const search = document.getElementById('search-input').value.trim();
             const freqVal = document.getElementById('filter-frequency').value;
             const frequencyMhz = freqVal ? parseFloat(freqVal) : null;
+            const deviceId = document.getElementById('filter-device').value || undefined;
             const offset = (_page - 1) * _pageSize;
             try {
                 const data = await API.recordings.list({
@@ -666,6 +682,7 @@
                     source: source || undefined,
                     search: search || undefined,
                     frequency_mhz: isNaN(frequencyMhz) ? undefined : frequencyMhz,
+                    device_id: deviceId,
                 });
                 const items = data.items || [];
                 _total = data.total || 0;
@@ -1035,6 +1052,12 @@
                             return; // ไม่ตรงความถี่ที่เลือก → ไม่ prepend
                         }
                     }
+                    // ตรวจ device filter (ถ้าเลือกไว้)
+                    const devFilter = document.getElementById('filter-device').value;
+                    if (devFilter) {
+                        const recDevId = rec.device_id ? String(rec.device_id) : '';
+                        if (recDevId !== devFilter) return;
+                    }
 
                     // กัน duplicate
                     if (_recCache.has(rec.id)) return;
@@ -1263,12 +1286,36 @@
             },
         };
 
+        // === Device dropdown ===
+        async function loadDevices() {
+            const select = document.getElementById('filter-device');
+            if (!select) return;
+            const currentVal = select.value;
+            try {
+                const data = await API.sdr.devices.list();
+                const items = data.devices || data || [];
+                select.innerHTML = '<option value="">ทุกอุปกรณ์</option>';
+                for (const item of items) {
+                    const opt = document.createElement('option');
+                    opt.value = item.id;
+                    opt.textContent = item.name;
+                    select.appendChild(opt);
+                }
+                if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+                    select.value = currentVal;
+                }
+            } catch (e) {
+                console.warn('Failed to load devices:', e);
+            }
+        }
+
         // === Bootstrap ===
         // แสดงแถบเลือก/ลบรวม เฉพาะผู้ดูแลระบบ
         if (Auth.isAdmin()) {
             const selBar = document.getElementById('rec-select-bar');
             if (selBar) selBar.hidden = false;
         }
+        loadDevices();      // โหลดรายการอุปกรณ์สำหรับ dropdown
         loadFrequencies();  // โหลดรายการความถี่สำหรับ dropdown
         resetAndLoad();
         startAutoRefresh();

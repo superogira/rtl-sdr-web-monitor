@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 # Supported device/connection types and their default config schema.
 # The frontend wizard uses this to render the correct form per type.
+#
+# NOTE: Per the new recording-jobs design, a device entry stores ONLY the
+# connection parameters (host/port) and an optional note. Tuner parameters
+# (frequency / sample_rate / gain / freq_correction_ppm / demod / bandwidth)
+# now live on each recording job's window. This avoids a stale-value bug
+# where switching active devices would apply an old/dummy frequency and
+# break the live connection ("Failed to connect to RTL-TCP").
 DEVICE_TYPES = {
     "rtl_tcp": {
         "label": "RTL-TCP",
@@ -29,14 +36,8 @@ DEVICE_TYPES = {
              "placeholder": "192.168.1.101"},
             {"key": "port", "label": "Port", "type": "number", "required": True,
              "default": 1234},
-            {"key": "frequency", "label": "ความถี่เริ่มต้น (Hz)", "type": "number",
-             "required": True, "default": 145500000},
-            {"key": "sample_rate", "label": "Sample Rate (Hz)", "type": "number",
-             "required": True, "default": 2048000},
-            {"key": "gain", "label": "Gain (dB)", "type": "number", "required": True,
-             "default": 30},
-            {"key": "freq_correction_ppm", "label": "Frequency Correction (PPM)",
-             "type": "number", "required": False, "default": 0},
+            {"key": "note", "label": "หมายเหตุ", "type": "text", "required": False,
+             "placeholder": "เช่น Dongle บนหลังคา"},
         ],
     },
 }
@@ -47,10 +48,7 @@ def _default_rtl_tcp_config() -> dict:
     return {
         "host": "127.0.0.1",
         "port": 1234,
-        "frequency": 145500000,
-        "sample_rate": 2048000,
-        "gain": 30,
-        "freq_correction_ppm": 0,
+        "note": "",
     }
 
 

@@ -758,7 +758,8 @@ const App = {
         } catch (e) { /* ignore */ }
     },
 
-    updateAutoRecordIndicator(isAuto, source) {
+    updateAutoRecordIndicator(isAuto, source, data) {
+        // Inline button indicator (next to record button)
         let el = document.getElementById('auto-rec-indicator');
         if (isAuto) {
             if (!el) {
@@ -773,6 +774,43 @@ const App = {
         } else if (el) {
             el.remove();
         }
+
+        // Recording status list (below clock)
+        const list = document.getElementById('recording-status-list');
+        if (!list) return;
+        const items = [];
+        // Auto recording from live listening
+        if (isAuto) {
+            const freqHz = (data && data.vfo_frequency) || this.currentFreq || 0;
+            const mode = (data && data.mode) || this.currentMode || 'FM';
+            const bwHz = (data && data.channel_bw) || this._channelBw || 12000;
+            const freqMhz = (freqHz / 1e6).toFixed(4);
+            const bwKhz = (bwHz / 1000).toFixed(0);
+            items.push(
+                `<div class="rec-status-item" style="display:flex;align-items:center;gap:4px;font-size:0.7rem;color:var(--accent-yellow);margin-top:4px;">`
+                + `<span style="animation:blink 1s infinite;">🔴</span>`
+                + `<span>อัดอัตโนมัติ: ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz</span>`
+                + `</div>`
+            );
+        }
+        // Background job captures (from status payload, if provided)
+        if (data && Array.isArray(data.active_job_captures)) {
+            for (const cap of data.active_job_captures) {
+                if (!Array.isArray(cap.frequencies)) continue;
+                for (const f of cap.frequencies) {
+                    if (!f.is_recording) continue;
+                    const freqMhz = (f.frequency_hz / 1e6).toFixed(4);
+                    const bwKhz = ((f.bandwidth_hz || 12000) / 1000).toFixed(0);
+                    items.push(
+                        `<div class="rec-status-item" style="display:flex;align-items:center;gap:4px;font-size:0.7rem;color:var(--accent-yellow);margin-top:2px;">`
+                        + `<span style="animation:blink 1s infinite;">📼</span>`
+                        + `<span>Job ${cap.job_label || cap.job_id.slice(0,8)}: ${freqMhz} MHz | ${f.demod_mode} | BW ${bwKhz}kHz</span>`
+                        + `</div>`
+                    );
+                }
+            }
+        }
+        list.innerHTML = items.join('');
     },
 
     // === Volume ===
@@ -884,7 +922,7 @@ const App = {
             }
             // Sync auto-recording indicator (independent from manual record button)
             if (data.auto_recording !== undefined || data.recording_source !== undefined) {
-                this.updateAutoRecordIndicator(data.auto_recording, data.recording_source);
+                this.updateAutoRecordIndicator(data.auto_recording, data.recording_source, data);
             }
             if (changed) {
                 this.updateUI();

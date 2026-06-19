@@ -127,6 +127,8 @@
                         <div class="clock-time" id="clock-time">--:--:--</div>
                         <div class="clock-date" id="clock-date">-- ๆๆๆๆ ๆๆๆ</div>
                         <div class="clock-day" id="clock-day">วันๆๆๆๆๆ</div>
+                        <!-- Active recording indicator (auto from live listening + background jobs) -->
+                        <div class="recording-status-list" id="recording-status-list"></div>
                     </div>
 
                     <!-- Bookmarked Frequency List -->
@@ -257,10 +259,11 @@
         </footer>
     </div>
 
-    <script src="/js/api.js?v=8"></script>
+    <script src="/js/api.js?v=9"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=5"></script>
     <script src="/js/audio.js?v=6"></script>
     <script src="/js/app.js?v=29"></script>
+    <script src="/js/dashboard_jobs.js?v=3"></script>
 </body>
 </html>
