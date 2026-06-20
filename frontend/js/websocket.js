@@ -17,6 +17,9 @@ const WS = {
     _doConnect() {
         try {
             this.ws = new WebSocket(this.url);
+            // Receive binary frames as ArrayBuffer so we can read spectrum data
+            // directly as a typed array (no base64 + atob + per-byte loop).
+            this.ws.binaryType = 'arraybuffer';
 
             this.ws.onopen = () => {
                 console.log('🔌 WebSocket connected');
@@ -26,9 +29,23 @@ const WS = {
             };
 
             this.ws.onmessage = (event) => {
+                // Binary frame: 2-byte type tag + payload.
+                //   \x01\x00 = spectrum (int16 LE values, dB * 100)
+                if (event.data instanceof ArrayBuffer) {
+                    const view = new DataView(event.data);
+                    const tag = view.getUint16(0, true);
+                    if (tag === 0x0001) {
+                        // Spectrum: read int16 array directly from the buffer,
+                        // skipping the 2-byte tag. Much faster than the old
+                        // base64 → atob → charCodeAt loop.
+                        const spectrum = new Int16Array(event.data, 2);
+                        this._emit('spectrum', spectrum);
+                    }
+                    return;
+                }
+                // Text frame: JSON {type, data}
                 try {
                     const msg = JSON.parse(event.data);
-                    // msg = { type: "status"|"spectrum"|"new_recording", data: {...} }
                     if (msg.type && msg.data !== undefined) {
                         this._emit(msg.type, msg.data);
                     }

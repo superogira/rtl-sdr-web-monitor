@@ -161,12 +161,15 @@ async def websocket_endpoint(websocket: WebSocket):
     status_counter = 0
     try:
         while True:
-            # Send spectrum data (already base64-encoded int16 in manager.py)
+            # Send spectrum data as a BINARY WebSocket frame.
+            # Frame format: 2-byte type tag (b"\x01\x00" = spectrum) + int16 LE
+            # payload. This replaces the old base64-in-JSON scheme, removing
+            # the ~33% base64 expansion and the per-byte atob() loop on the
+            # client. Binary frames and text (JSON) frames can coexist on one
+            # WebSocket connection; the client distinguishes them by type.
             if spectrum_data["latest"]:
-                await websocket.send_text(json.dumps({
-                    "type": "spectrum",
-                    "data": spectrum_data["latest"]
-                }))
+                payload = spectrum_data["latest"]
+                await websocket.send_bytes(b"\x01\x00" + payload)
                 spectrum_data["latest"] = None
 
             # Send status at ~1 FPS (every 30th iteration)

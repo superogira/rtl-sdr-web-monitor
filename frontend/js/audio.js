@@ -382,8 +382,35 @@ const LiveAudio = {
     },
 
     /**
+     * G.711 µ-law decode table (256 entries). Built lazily on first use via
+     * _buildUlawTable() using the canonical ITU-T G.711 decode formula.
+     * Stores int16 PCM values; the frontend converts to Float32 for Web Audio.
+     */
+    _ulawTable: null,
+
+    _buildUlawTable() {
+        const t = new Int16Array(256);
+        for (let i = 0; i < 256; i++) {
+            let uval = ~i & 0xFF;            // bit-invert
+            const sign = (uval & 0x80) !== 0;
+            let exponent = (uval >> 4) & 0x07;
+            let mantissa = uval & 0x0F;
+            let sample = ((mantissa << 3) + 0x84) << exponent;
+            sample -= 0x84;                  // remove bias
+            t[i] = sign ? -sample : sample;
+        }
+        this._ulawTable = t;
+        return t;
+    },
+
+    /**
      * Parse binary frame and schedule playback.
-     * Frame format: "AUD1" (4B) + sample_rate (4B LE) + num_samples (4B LE) + PCM int16 data
+     * Supports two frame formats:
+     *   - "AUD2" (preferred): 4B magic + 4B sample_rate LE + 4B num_samples LE
+     *     + num_samples bytes of G.711 µ-law (1 byte/sample). Half the
+     *     bandwidth of AUD1 at the same sample rate.
+     *   - "AUD1" (legacy):    4B magic + 4B sample_rate LE + 4B num_samples LE
+     *     + num_samples×2 bytes of PCM int16 LE.
      */
     _handleFrame(buffer) {
         if (!this.ctx || !this.isPlaying) return;
@@ -395,7 +422,7 @@ const LiveAudio = {
             view.getUint8(0), view.getUint8(1),
             view.getUint8(2), view.getUint8(3)
         );
-        if (magic !== "AUD1") {
+        if (magic !== "AUD1" && magic !== "AUD2") {
             console.warn("Invalid audio frame magic:", magic);
             return;
         }
@@ -409,12 +436,22 @@ const LiveAudio = {
             this._sampleRate = sampleRate;
         }
 
-        // Decode PCM int16 → Float32
         const float32 = new Float32Array(numSamples);
         const offset = 12;  // After 12-byte header
-        for (let i = 0; i < numSamples; i++) {
-            const sample = view.getInt16(offset + i * 2, true);
-            float32[i] = sample / 32768;
+
+        if (magic === "AUD2") {
+            // µ-law: 1 byte/sample → Float32 via decode table
+            const tbl = this._ulawTable || this._buildUlawTable();
+            const bytes = new Uint8Array(buffer, offset, numSamples);
+            for (let i = 0; i < numSamples; i++) {
+                float32[i] = tbl[bytes[i]] / 32768;
+            }
+        } else {
+            // AUD1: PCM int16 LE → Float32
+            for (let i = 0; i < numSamples; i++) {
+                const sample = view.getInt16(offset + i * 2, true);
+                float32[i] = sample / 32768;
+            }
         }
 
         // Create AudioBuffer

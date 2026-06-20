@@ -73,6 +73,31 @@ _HARD_CAP_LISTENERS = 128
 # IQ packet rather than queueing seconds of stale audio.
 _IQ_QUEUE_MAX = 4
 
+# G.711 µ-law segment upper ends for the biased magnitude (ITU-T G.711). Used
+# by pcm16_to_ulaw() to compress int16 PCM → 8-bit µ-law (half the bandwidth
+# of raw int16 PCM at the same sample rate).
+_ULAW_SEG_UEND = np.array(
+    [0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF], dtype=np.int32
+)
+
+
+def pcm16_to_ulaw(samples: np.ndarray) -> np.ndarray:
+    """Encode int16 PCM to G.711 µ-law bytes (uint8).
+
+    Fully vectorized, standard-compliant (matches audioop.lin2ulaw and the
+    canonical Sun/ITU reference). Output is half the size of the int16 input.
+    """
+    BIAS = 0x84
+    CLIP = 32635
+    s = samples.astype(np.int32)
+    mask = np.where(s < 0, 0x7F, 0xFF)
+    s = np.minimum(np.abs(s), CLIP) + BIAS
+    # Segment = number of segment boundaries strictly below the biased value.
+    seg = np.clip((s[:, None] > _ULAW_SEG_UEND[None, :]).sum(axis=1), 0, 7)
+    mant = (s >> (seg + 3)) & 0x0F
+    uval = (seg << 4) | mant
+    return (uval ^ mask).astype(np.uint8)
+
 
 class Listener:
     """One connected audio client.
@@ -381,10 +406,15 @@ class AudioBroadcaster:
 
     def _batch_listener(self, listener: Listener, audio: np.ndarray,
                         audio_rate: int):
-        """Accumulate audio into ~100ms AUD1 frames. Runs on loop thread.
+        """Accumulate audio into ~100ms AUD2 frames. Runs on loop thread.
 
-        Returns a binary AUD1 frame (bytes) ready to send, or None if the
+        Returns a binary AUD2 frame (bytes) ready to send, or None if the
         batch isn't full yet.
+
+        Frame format (AUD2, G.711 µ-law):
+            magic "AUD2" (4B) + sample_rate (u32 LE) + num_samples (u32 LE)
+            + num_samples bytes of µ-law (1 byte/sample, half the bandwidth
+            of the legacy AUD1 int16 PCM frames).
         """
         if audio is None or len(audio) == 0:
             return None
@@ -401,16 +431,17 @@ class AudioBroadcaster:
         listener._batch_buf.clear()
         listener._batch_samples = 0
 
-        # Capture audio for manual recording (per-listener)
+        # Capture audio for manual recording (per-listener, full-quality PCM)
         if listener.is_recording:
             listener.record_buffer.append(merged.copy())
 
-        # float32 [-1,1] → int16 PCM
+        # float32 [-1,1] → int16 PCM → G.711 µ-law (1 byte/sample)
         pcm = np.clip(merged, -1.0, 1.0)
         pcm = (pcm * 32767).astype(np.int16)
-        # Frame header: magic "AUD1" + sample_rate (u32 LE) + num_samples (u32 LE)
-        header = struct.pack("<4sII", b"AUD1", int(listener._batch_sample_rate), len(pcm))
-        return header + pcm.tobytes()
+        ulaw = pcm16_to_ulaw(pcm)
+        # Frame header: magic "AUD2" + sample_rate (u32 LE) + num_samples (u32 LE)
+        header = struct.pack("<4sII", b"AUD2", int(listener._batch_sample_rate), len(ulaw))
+        return header + ulaw.tobytes()
 
     def _enqueue_frame(self, ln: Listener, frame: bytes) -> None:
         """Push a finished AUD1 frame to the listener's output queue.

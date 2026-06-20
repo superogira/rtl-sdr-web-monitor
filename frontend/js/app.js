@@ -1089,10 +1089,16 @@ const App = {
         });
 
         WS.on('spectrum', (data) => {
-            // Decode base64 int16 binary (Phase 2: efficient transfer)
+            // Decode spectrum data into an Int16Array.
+            // Supported shapes (kept for backward compatibility):
+            //   - Int16Array (preferred): sent directly from a binary WS frame
+            //     (2-byte type tag + int16 LE payload). No base64/JSON overhead.
+            //   - string: legacy base64-encoded int16 bytes.
+            //   - Array<number>: legacy JSON mode.
             let spectrum;
-            if (typeof data === 'string') {
-                // Binary mode: base64 → int16 array
+            if (data instanceof Int16Array) {
+                spectrum = data;
+            } else if (typeof data === 'string') {
                 const binary = atob(data);
                 const len = binary.length / 2;
                 spectrum = new Int16Array(len);
@@ -1100,7 +1106,6 @@ const App = {
                     spectrum[i] = (binary.charCodeAt(i*2) | (binary.charCodeAt(i*2+1) << 8)) << 16 >> 16;
                 }
             } else if (Array.isArray(data)) {
-                // Legacy JSON mode (backwards compatible)
                 spectrum = data;
             } else {
                 return;

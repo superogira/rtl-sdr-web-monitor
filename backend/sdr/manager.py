@@ -1097,14 +1097,17 @@ class SDRManager:
             if len(spectrum) < target_bins:
                 spectrum = np.pad(spectrum, (0, target_bins - len(spectrum)), mode='edge')
 
-            import base64
             spectrum_int16 = np.clip(spectrum, -32768, 32767).astype(np.int16)
-            spectrum_b64 = base64.b64encode(spectrum_int16.tobytes()).decode('ascii')
-            self._last_spectrum = spectrum_b64
+            # Send raw int16 LE bytes (no base64). The /ws endpoint wraps this
+            # in a binary WebSocket frame (2-byte type header + payload), and
+            # the frontend reads it directly as an Int16Array — skipping the
+            # ~33% base64 expansion and the per-byte atob() loop.
+            spectrum_bytes = spectrum_int16.tobytes()
+            self._last_spectrum = spectrum_bytes
 
             for cb in self._spectrum_callbacks:
                 try:
-                    cb(spectrum_b64)
+                    cb(spectrum_bytes)
                 except Exception as e:
                     logger.error(f"Spectrum callback error: {e}")
         except Exception as e:
