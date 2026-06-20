@@ -264,17 +264,52 @@ const App = {
 
     async toggleStream() {
         const btn = document.getElementById('btn-stream');
+        if (!btn) return;
+
+        // Prevent double-clicks / race conditions while a request is in flight
+        // (this was a contributor to the "flip back and forth" loop: clicking
+        // again before the previous start/stop resolved).
+        if (this._streamBusy) return;
+        this._streamBusy = true;
+
         if (this.isStreaming) {
-            try { await API.sdr.streamStop(); } catch(e) {}
-            this.isStreaming = false;
-            btn.textContent = '▶ รับสัญญาณ';
+            // STOP
+            const prevText = btn.textContent;
+            btn.textContent = '⏳ กำลังหยุด...';
+            btn.disabled = true;
+            try {
+                await API.sdr.streamStop();
+                this.isStreaming = false;
+                this.updateUI();
+            } catch (e) {
+                // Even on error, trust the WS status broadcast to correct us.
+                console.error('Stream stop failed:', e);
+                alert('หยุดรับสัญญาณไม่สำเร็จ: ' + (e.detail || e.message || e));
+                this.updateUI();
+            } finally {
+                btn.disabled = false;
+                this._streamBusy = false;
+            }
         } else {
+            // START — backend now auto-connects, so we no longer require the
+            // user to press "ฟังสด" first.
+            btn.textContent = '⏳ กำลังเชื่อมต่อ...';
+            btn.disabled = true;
             try {
                 await API.sdr.streamStart();
+                // Only flip to "streaming" once the backend confirms success.
+                // The old code flipped optimistically, so if the stream died a
+                // moment later the button appeared to toggle on then off.
                 this.isStreaming = true;
-                btn.textContent = '⏹ หยุดรับ';
+                this.isConnected = true;  // auto-connect succeeded → mark connected
+                this.updateUI();
             } catch (err) {
+                // Do NOT flip the button; show the reason from the backend.
+                this.updateUI();
                 alert('ไม่สามารถเริ่มรับสัญญาณ: ' + (err.detail || err.message || err));
+            } finally {
+                btn.disabled = false;
+                this._streamBusy = false;
             }
         }
     },
@@ -962,6 +997,29 @@ const App = {
         }
     },
 
+    // Lightweight toast so users know why streaming stopped (instead of the
+    // button just silently flipping back to "รับสัญญาณ"). Auto-dismisses.
+    _showStreamStoppedToast(msg) {
+        const text = msg || 'หยุดรับสัญญาณแล้ว (อาจเป็นเพราะอุปกรณ์ RTL-TCP หลุด หรือไม่มีผู้ฟังครบเวลา)';
+        let el = document.getElementById('stream-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'stream-toast';
+            el.style.cssText = (
+                'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);'
+                + 'background:#2b2b2b;color:#ffd166;border:1px solid #ffd166;'
+                + 'padding:10px 16px;border-radius:8px;z-index:9999;'
+                + 'font-size:0.85rem;box-shadow:0 4px 12px rgba(0,0,0,0.4);'
+                + 'max-width:90vw;text-align:center;'
+            );
+            document.body.appendChild(el);
+        }
+        el.textContent = '⚠️ ' + text;
+        el.style.display = 'block';
+        if (this._streamToastTimer) clearTimeout(this._streamToastTimer);
+        this._streamToastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+    },
+
     // === WebSocket Listeners ===
     setupWSListeners() {
         WS.on('status', (data) => {
@@ -973,7 +1031,15 @@ const App = {
                 changed = true;
             }
             if (data.streaming !== undefined && data.streaming !== this.isStreaming) {
+                // If the backend stopped streaming shortly after we started it
+                // (e.g. RTL-TCP unreachable, dongle unplugged, too many errors),
+                // inform the user instead of silently flipping the button back.
+                const wasStreaming = this.isStreaming;
                 this.isStreaming = data.streaming;
+                if (wasStreaming && !data.streaming) {
+                    console.warn('📡 Streaming was stopped by the backend.');
+                    this._showStreamStoppedToast();
+                }
                 changed = true;
             }
             if (data.signal_level_db !== undefined) {

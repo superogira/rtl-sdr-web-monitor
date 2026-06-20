@@ -455,13 +455,18 @@ class SDRManager:
     # ------------------------------------------------------------------
     # Connection lifecycle (via shared connection pool)
     # ------------------------------------------------------------------
-    async def connect(self) -> dict:
+    async def connect(self, stop_if_streaming: bool = True) -> dict:
         """Connect to RTL-TCP server via the shared connection pool.
 
         Acquires a SharedConnectionConsumer with PRIORITY_LIVE so that
         recording jobs on the same device yield to interactive listening.
+
+        When ``stop_if_streaming`` is False the currently running stream loop
+        is left intact — used by in-loop reconnection so a transient RTL-TCP
+        drop does not tear down streaming (which previously made the
+        "รับสัญญาณ" button flip back and forth shortly after pressing it).
         """
-        if self.is_streaming:
+        if stop_if_streaming and self.is_streaming:
             await self.stop_streaming()
 
         # Release any existing pool consumer first
@@ -781,8 +786,17 @@ class SDRManager:
     async def start_streaming(self):
         if self.is_streaming:
             return {"error": "Already streaming"}
+        # Auto-connect if not already connected, so "รับสัญญาณ" works without
+        # first pressing "ฟังสด". Previously this returned an error when nobody
+        # had connected yet, which forced users to press "ฟังสด" first and also
+        # caused the toggle button to flip back ("วนอยู่แบบนี้").
         if not self.client.connected:
-            return {"error": "Not connected to RTL-TCP"}
+            try:
+                connect_result = await self.connect(stop_if_streaming=False)
+            except Exception as e:
+                return {"error": f"ไม่สามารถเชื่อมต่อ RTL-TCP ได้: {e}"}
+            if not connect_result.get("success"):
+                return {"error": "ไม่สามารถเชื่อมต่อ RTL-TCP ได้ กรุณาตรวจสอบอุปกรณ์/เซิร์ฟเวอร์"}
         self.is_streaming = True
         self._stream_task = asyncio.create_task(self._stream_loop())
         return {"streaming": True}
@@ -862,10 +876,47 @@ class SDRManager:
         logger.info("Streaming started")
         consecutive_errors = 0
         max_errors = 50
+        # Bounded auto-reconnect so a transient RTL-TCP drop (network blip,
+        # dongle reset, rtl_tcp restart) does not immediately end streaming
+        # and flip the UI button back to "รับสัญญาณ". The loop reconnects up
+        # to max_reconnect_attempts times, keeping self.is_streaming = True
+        # during the retries so clients do not see a flicker.
+        reconnect_attempts = 0
+        max_reconnect_attempts = 5
         _spectrum_counter = 0
         _SPECTRUM_INTERVAL = 2
         try:
-            while self.is_streaming and self.client.connected:
+            while self.is_streaming:
+                # If the RTL-TCP connection dropped, try to reconnect instead
+                # of exiting immediately (the old `and self.client.connected`
+                # condition exited on the first drop and caused the flip-flop).
+                if not self.client.connected:
+                    if reconnect_attempts >= max_reconnect_attempts:
+                        logger.error(
+                            f"RTL-TCP reconnect failed {reconnect_attempts}x; "
+                            f"stopping stream"
+                        )
+                        break
+                    reconnect_attempts += 1
+                    logger.warning(
+                        f"🔌 RTL-TCP disconnected mid-stream; reconnecting "
+                        f"({reconnect_attempts}/{max_reconnect_attempts})..."
+                    )
+                    try:
+                        rc = await self.connect(stop_if_streaming=False)
+                    except Exception as e:
+                        logger.error(f"Reconnect attempt raised: {e}")
+                        rc = {"success": False}
+                    if not rc.get("success"):
+                        # Back off before the next attempt (linear up to 5s)
+                        await asyncio.sleep(min(2.0 * reconnect_attempts, 5.0))
+                        continue
+                    # Reconnected successfully — reset counters and resume
+                    reconnect_attempts = 0
+                    consecutive_errors = 0
+                    logger.info("🔌 RTL-TCP reconnected; resuming stream")
+                    continue
+
                 try:
                     samples_per_chunk = max(1024, int(self.client._sample_rate * 0.05))
                     iq_data = await self.client.read_samples(samples_per_chunk * 2)
