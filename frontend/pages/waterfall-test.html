@@ -65,8 +65,9 @@
     ro.observe(document.getElementById('canvas-wrap'));
     resizeCanvas();
 
+    // Accept typed arrays (Int16Array from binary WS frames) or plain arrays.
     function addSpectrumLine(spectrumData) {
-        if (!Array.isArray(spectrumData) || spectrumData.length === 0) return;
+        if (!spectrumData || spectrumData.length === 0) return;
         
         drawCount++;
         buffer.push(new Float32Array(spectrumData));
@@ -174,7 +175,10 @@
         console.log('🔌 Connecting to', url);
         statusEl.textContent = '⏳ Connecting...';
         
+        // Receive binary frames as ArrayBuffer so we can read spectrum data
+        // directly as a typed array (matches the main app's websocket.js).
         ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
         
         ws.onopen = () => {
             statusEl.textContent = '✅ Connected';
@@ -193,11 +197,21 @@
         };
         
         ws.onmessage = (e) => {
+            // Binary frame: 2-byte type tag (LE) + payload.
+            //   0x0001 = spectrum (int16 LE, raw dB values)
+            if (e.data instanceof ArrayBuffer) {
+                if (e.data.byteLength < 2) return;
+                const tag = new DataView(e.data).getUint16(0, true);
+                if (tag === 0x0001) {
+                    // int16 array view skipping the 2-byte tag header
+                    addSpectrumLine(new Int16Array(e.data, 2));
+                }
+                return;
+            }
+            // Text frame: JSON {type, data}
             try {
                 const msg = JSON.parse(e.data);
-                if (msg.type === 'spectrum' && msg.data) {
-                    addSpectrumLine(msg.data);
-                } else if (msg.type === 'status') {
+                if (msg.type === 'status') {
                     if (drawCount <= 3) console.log('📡 Status:', msg.data);
                 }
             } catch(err) {

@@ -30,7 +30,7 @@ const WS = {
 
             this.ws.onmessage = (event) => {
                 // Binary frame: 2-byte type tag + payload.
-                //   \x01\x00 = spectrum (int16 LE values, dB * 100)
+                //   \x01\x00 = spectrum (int16 LE values, raw dB)
                 if (event.data instanceof ArrayBuffer) {
                     const view = new DataView(event.data);
                     const tag = view.getUint16(0, true);
