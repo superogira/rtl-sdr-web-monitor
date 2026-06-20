@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v8',  // Center freq button (admin) + VFO tune for all
+    VERSION: '2024.06.14-v9',  // Waterfall zoom & pan (wheel/pinch + drag)
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -175,6 +175,9 @@ const App = {
         // Sync sample rate (BW display + freq-low/high + SRATE button active state)
         if (data.sample_rate !== undefined) {
             this._sampleRate = data.sample_rate;
+            // Passband changed → keep the zoom view inside the new bounds.
+            this._wfClampPan();
+            this._waterfallDirty = true;
             const bw = document.getElementById('radio-bw');
             if (bw) {
                 const sr = data.sample_rate;
@@ -610,6 +613,9 @@ const App = {
 
     setSampleRate(rate) {
         this._sampleRate = rate;
+        // Sample-rate change alters the passband width → re-clamp the zoom view.
+        this._wfClampPan();
+        this._waterfallDirty = true;
         // Update BW display
         const bw = document.getElementById('radio-bw');
         if (bw) {
@@ -627,9 +633,8 @@ const App = {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const w = rect.width;
-        const sr = this._sampleRate || 2048000;
-        const norm = x / w;  // 0..1
-        const freq = Math.round(this.currentFreq + (norm - 0.5) * sr);
+        // Map the click through the current zoom/pan view.
+        const freq = Math.round(this._wfXToFreq(x, w));
         this.setVFO(freq);
     },
 
@@ -761,10 +766,9 @@ const App = {
         const freqCenter = document.getElementById('freq-center');
         if (freqCenter) freqCenter.textContent = `${mhz.toFixed(4)} MHz`;
 
-        // Compute freq-low and freq-high from center ± half sample rate
-        const halfBw = this._sampleRate / 2;
-        const lowMhz = (this.currentFreq - halfBw) / 1e6;
-        const highMhz = (this.currentFreq + halfBw) / 1e6;
+        // Compute freq-low / freq-high from the *visible* window (respects zoom/pan)
+        const lowMhz = this._wfViewLow() / 1e6;
+        const highMhz = this._wfViewHigh() / 1e6;
         const freqLow = document.getElementById('freq-low');
         const freqHigh = document.getElementById('freq-high');
         if (freqLow) freqLow.textContent = `${lowMhz.toFixed(4)} MHz`;
@@ -1063,6 +1067,132 @@ const App = {
     _waterfallLineBins: 0,          // track line image width (= numBins)
     _waterfallPendingLines: [],     // queue of new lines to draw
     _waterfallDirty: false,         // need to composite to main canvas
+    _waterfallBins: 0,              // native FFT bin count (= back buffer width)
+    _waterfallZoomMax: 20,          // max zoom factor
+
+    // === Zoom & Pan state ===
+    // _wfZoom: 1 = full passband visible; >1 = zoomed in.
+    // _wfPanOffsetHz shifts the *view* center within the passband
+    // (the hardware center frequency is unchanged).
+    _wfZoom: 1,
+    _wfPanOffsetHz: 0,
+    _wfPressActive: false,          // mouse left button held (potential drag)
+    _wfPressStartX: 0,
+    _wfPressStartPan: 0,
+    _wfPressMoved: false,           // did the press turn into a drag?
+    _wfSuppressClick: false,        // swallow next click after a drag
+    _wfTouch: null,                 // current touch gesture state
+
+    // --- view math helpers (Hz / pixels) ---
+    _wfVisibleBw() {
+        const sr = this._sampleRate || 2048000;
+        return sr / (this._wfZoom || 1);
+    },
+    _wfViewCenter() {
+        return this.currentFreq + (this._wfPanOffsetHz || 0);
+    },
+    _wfViewLow() {
+        return this._wfViewCenter() - this._wfVisibleBw() / 2;
+    },
+    _wfViewHigh() {
+        return this._wfViewCenter() + this._wfVisibleBw() / 2;
+    },
+    _wfFreqToX(freq, w) {
+        return ((freq - this._wfViewLow()) / this._wfVisibleBw()) * w;
+    },
+    _wfXToFreq(x, w) {
+        return this._wfViewLow() + (x / w) * this._wfVisibleBw();
+    },
+    _wfClampPanValue(off) {
+        const sr = this._sampleRate || 2048000;
+        const zoom = this._wfZoom || 1;
+        const maxOff = Math.max(0, (sr - sr / zoom) / 2);
+        return Math.max(-maxOff, Math.min(maxOff, off));
+    },
+    _wfClampPan() {
+        this._wfPanOffsetHz = this._wfClampPanValue(this._wfPanOffsetHz || 0);
+    },
+    // Apply a new zoom level, keeping anchorFreq under screen x=anchorX.
+    _wfSetZoom(zoom, anchorFreq, anchorX, w) {
+        zoom = Math.max(1, Math.min(this._waterfallZoomMax, zoom));
+        this._wfZoom = zoom;
+        if (anchorFreq != null && Number.isFinite(anchorFreq) && w > 0) {
+            const visibleBwNew = this._wfVisibleBw();
+            const newViewCenter = anchorFreq - (anchorX / w - 0.5) * visibleBwNew;
+            this._wfPanOffsetHz = this._wfClampPanValue(newViewCenter - this.currentFreq);
+        } else {
+            this._wfClampPan();
+        }
+        this._waterfallDirty = true;
+        this._wfUpdateBadge();
+        this._updateWaterfallCursor();
+    },
+    _wfResetZoom() {
+        this._wfZoom = 1;
+        this._wfPanOffsetHz = 0;
+        this._waterfallDirty = true;
+        this._wfUpdateBadge();
+        this._updateWaterfallCursor();
+    },
+    _updateWaterfallCursor() {
+        const canvas = this.waterfallCanvas;
+        if (!canvas) return;
+        const zoom = this._wfZoom || 1;
+        canvas.style.cursor = zoom > 1.001
+            ? (this._wfPressActive ? 'grabbing' : 'grab')
+            : 'crosshair';
+    },
+    _wfEnsureBadge() {
+        let el = document.getElementById('wf-zoom-badge');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'wf-zoom-badge';
+            el.className = 'wf-zoom-badge';
+            const cont = this.waterfallCanvas ? this.waterfallCanvas.parentElement : null;
+            if (cont) cont.appendChild(el);
+        }
+        return el;
+    },
+    _wfUpdateBadge() {
+        const el = this._wfEnsureBadge();
+        if (!el) return;
+        if ((this._wfZoom || 1) > 1.001) {
+            el.textContent = `🔍 ${this._wfZoom.toFixed(1)}x`;
+            el.style.display = '';
+        } else {
+            el.style.display = 'none';
+        }
+    },
+    // Ensure offscreen back buffer is at native FFT-bin resolution
+    // (width = numBins) and matches the current canvas height.
+    // Content is preserved across height changes; cleared on bin-count change.
+    _ensureBackBuffer(numBins) {
+        const h = this._waterfallCanvasH;
+        if (!Number.isFinite(numBins) || numBins <= 0 || h <= 0) return;
+        const bb = this._waterfallBackBuffer;
+        if (bb && bb.width === numBins && bb.height === h) return;
+        // Preserve old content only when bin width is unchanged (height change).
+        let oldCanvas = null;
+        if (bb && bb.width === numBins && bb.height > 0) {
+            oldCanvas = document.createElement('canvas');
+            oldCanvas.width = bb.width;
+            oldCanvas.height = bb.height;
+            oldCanvas.getContext('2d').drawImage(bb, 0, 0);
+        }
+        if (!this._waterfallBackBuffer) {
+            this._waterfallBackBuffer = document.createElement('canvas');
+            this._waterfallBackCtx = this._waterfallBackBuffer.getContext('2d');
+        }
+        this._waterfallBackBuffer.width = numBins;
+        this._waterfallBackBuffer.height = h;
+        const bbCtx = this._waterfallBackCtx;
+        bbCtx.fillStyle = '#0a0a1a';
+        bbCtx.fillRect(0, 0, numBins, h);
+        if (oldCanvas) bbCtx.drawImage(oldCanvas, 0, 0);
+        this._waterfallBins = numBins;
+        this._waterfallLineBins = 0;  // force line canvas rebuild
+        this._waterfallDirty = true;
+    },
 
     initWaterfall() {
         const canvas = document.getElementById('waterfall-canvas');
@@ -1080,31 +1210,15 @@ const App = {
             const w = parent.clientWidth;
             const h = parent.clientHeight;
             if (w > 0 && h > 0 && (w !== this._waterfallCanvasW || h !== this._waterfallCanvasH)) {
-                // PRESERVE existing waterfall content on resize (don't clear!)
-                const oldW = this._waterfallCanvasW;
-                const oldH = this._waterfallCanvasH;
-                let oldCanvas = null;
-                if (oldW > 0 && oldH > 0 && this._waterfallBackBuffer) {
-                    oldCanvas = document.createElement('canvas');
-                    oldCanvas.width = oldW;
-                    oldCanvas.height = oldH;
-                    oldCanvas.getContext('2d').drawImage(this._waterfallBackBuffer, 0, 0);
-                }
                 this._waterfallCanvasW = w;
                 this._waterfallCanvasH = h;
                 canvas.width = w;
                 canvas.height = h;
-                this._waterfallBackBuffer.width = w;
-                this._waterfallBackBuffer.height = h;
-                const bb = this._waterfallBackCtx;
-                // Fill background
-                bb.fillStyle = '#0a0a1a';
-                bb.fillRect(0, 0, w, h);
-                // Restore old content (top-left aligned)
-                if (oldCanvas) {
-                    bb.drawImage(oldCanvas, 0, 0);
-                }
-                this._waterfallLineBins = 0;  // force rebuild of line canvas/img
+                // Fill background so canvas isn't blank before the first frame.
+                this.waterfallCtx.fillStyle = '#0a0a1a';
+                this.waterfallCtx.fillRect(0, 0, w, h);
+                // Back buffer is native-bin resolution — re-ensure on height change.
+                if (this._waterfallBins > 0) this._ensureBackBuffer(this._waterfallBins);
                 this._waterfallDirty = true;
             }
         };
@@ -1115,40 +1229,162 @@ const App = {
         window.addEventListener('resize', resize);
         requestAnimationFrame(resize);
 
-        // Waterfall click → set VFO (listening frequency)
-        canvas.style.cursor = 'crosshair';
-        canvas.addEventListener('click', (e) => this._onWaterfallClick(e));
-
-        // Hover frequency tooltip (shown after 0.3s dwell)
+        // === Zoom & Pan interaction ===
         this._hoverFreqEl = document.getElementById('waterfall-hover-freq');
         this._hoverFreqTimer = null;
-        canvas.addEventListener('mousemove', (e) => {
-            if (!this._hoverFreqEl) return;
-            // Update tooltip position immediately
+        this._wfPressActive = false;
+        this._wfSuppressClick = false;
+        this._wfTouch = null;
+        this._updateWaterfallCursor();
+        this._wfUpdateBadge();
+
+        // --- Mouse wheel: zoom in/out anchored at the cursor ---
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
-            // Clamp within canvas bounds
+            const w = rect.width;
+            const anchorFreq = this._wfXToFreq(x, w);
+            const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+            this._wfSetZoom((this._wfZoom || 1) * factor, anchorFreq, x, w);
+        }, { passive: false });
+
+        // --- Double click: reset zoom to 1x ---
+        canvas.addEventListener('dblclick', () => this._wfResetZoom());
+
+        // --- Mouse drag to pan (when zoomed); a plain click sets the VFO ---
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            this._wfPressActive = true;
+            this._wfPressStartX = e.clientX;
+            this._wfPressStartPan = this._wfPanOffsetHz || 0;
+            this._wfPressMoved = false;
+            this._wfSuppressClick = false;
+            this._updateWaterfallCursor();
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const w = rect.width;
+            // Drag-pan while the left button is held.
+            if (this._wfPressActive && (e.buttons & 1)) {
+                const dx = e.clientX - this._wfPressStartX;
+                if (!this._wfPressMoved && Math.abs(dx) > 4) this._wfPressMoved = true;
+                if (this._wfPressMoved) {
+                    this._wfSuppressClick = true;
+                    const visibleBw = this._wfVisibleBw();
+                    const dHz = -(dx / w) * visibleBw;
+                    this._wfPanOffsetHz = this._wfClampPanValue(this._wfPressStartPan + dHz);
+                    this._waterfallDirty = true;
+                    this._wfUpdateBadge();
+                    if (this._hoverFreqEl) this._hoverFreqEl.classList.remove('visible');
+                    return;
+                }
+            }
+            // Hover frequency tooltip (shown after 0.3s dwell)
+            if (!this._hoverFreqEl) return;
             const clampedX = Math.max(0, Math.min(x, rect.width));
             this._hoverFreqEl.style.left = `${clampedX}px`;
             this._hoverFreqEl.style.top = `${e.clientY - rect.top}px`;
-            // Hide immediately on move (before dwell complete)
             this._hoverFreqEl.classList.remove('visible');
-            // Clear any pending timer
             if (this._hoverFreqTimer) clearTimeout(this._hoverFreqTimer);
-            // Start dwell timer (0.3s) — show tooltip if mouse stays still
             this._hoverFreqTimer = setTimeout(() => {
                 if (!this._hoverFreqEl) return;
-                const sr = this._sampleRate || 2048000;
-                const norm = clampedX / rect.width;  // 0..1
-                const freq = Math.round(this.currentFreq + (norm - 0.5) * sr);
+                const freq = this._wfXToFreq(clampedX, rect.width);
                 this._hoverFreqEl.textContent = this._formatFreq(freq);
                 this._hoverFreqEl.classList.add('visible');
             }, 300);
         });
+
+        const endPress = () => {
+            this._wfPressActive = false;
+            this._updateWaterfallCursor();
+        };
+        canvas.addEventListener('mouseup', () => endPress());
         canvas.addEventListener('mouseleave', () => {
+            endPress();
             if (this._hoverFreqTimer) { clearTimeout(this._hoverFreqTimer); this._hoverFreqTimer = null; }
             if (this._hoverFreqEl) this._hoverFreqEl.classList.remove('visible');
         });
+
+        // Click → set VFO (swallowed if it followed a drag).
+        canvas.addEventListener('click', (e) => {
+            if (this._wfSuppressClick) { this._wfSuppressClick = false; return; }
+            this._onWaterfallClick(e);
+        });
+
+        // --- Touch gestures ---
+        // 1 finger: drag = pan, tap = set VFO
+        // 2 fingers: pinch = zoom (anchored at midpoint)
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                const t = e.touches[0];
+                this._wfTouch = {
+                    mode: 'pan',
+                    startX: t.clientX,
+                    startPan: this._wfPanOffsetHz || 0,
+                    moved: false,
+                };
+            } else if (e.touches.length === 2) {
+                const a = e.touches[0], b = e.touches[1];
+                const rect = canvas.getBoundingClientRect();
+                const midX = ((a.clientX + b.clientX) / 2) - rect.left;
+                this._wfTouch = {
+                    mode: 'pinch',
+                    startDist: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+                    startZoom: this._wfZoom || 1,
+                    anchorX: midX,
+                    anchorFreq: this._wfXToFreq(midX, rect.width),
+                };
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (!this._wfTouch) return;
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const w = rect.width;
+            if (this._wfTouch.mode === 'pan' && e.touches.length === 1) {
+                const t = e.touches[0];
+                const dx = t.clientX - this._wfTouch.startX;
+                if (!this._wfTouch.moved && Math.abs(dx) > 8) this._wfTouch.moved = true;
+                if (this._wfTouch.moved) {
+                    const visibleBw = this._wfVisibleBw();
+                    const dHz = -(dx / w) * visibleBw;
+                    this._wfPanOffsetHz = this._wfClampPanValue(this._wfTouch.startPan + dHz);
+                    this._waterfallDirty = true;
+                    this._wfUpdateBadge();
+                }
+            } else if (this._wfTouch.mode === 'pinch' && e.touches.length === 2) {
+                const a = e.touches[0], b = e.touches[1];
+                const dist = Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY));
+                const scale = dist / this._wfTouch.startDist;
+                this._wfSetZoom(this._wfTouch.startZoom * scale, this._wfTouch.anchorFreq, this._wfTouch.anchorX, w);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', (e) => {
+            const t = this._wfTouch;
+            // Tap (single finger, no move) → set VFO at the touch point.
+            if (t && t.mode === 'pan' && !t.moved && e.changedTouches.length === 1) {
+                const ct = e.changedTouches[0];
+                this._onWaterfallClick({ clientX: ct.clientX, clientY: ct.clientY });
+            }
+            if (e.touches.length === 0) {
+                this._wfTouch = null;
+            } else if (e.touches.length === 1) {
+                // Transition from pinch back to one-finger pan seamlessly.
+                const f = e.touches[0];
+                this._wfTouch = {
+                    mode: 'pan',
+                    startX: f.clientX,
+                    startPan: this._wfPanOffsetHz || 0,
+                    moved: true,
+                };
+            }
+        }, { passive: true });
+        canvas.addEventListener('touchcancel', () => { this._wfTouch = null; }, { passive: true });
 
         // Start render loop
         this._waterfallRenderLoop();
@@ -1261,74 +1497,90 @@ const App = {
         const dbScale = lutNMinus1 / dbRange;
 
         // Drain pending lines into the back buffer (scroll-blit).
+        // Back buffer is kept at NATIVE FFT-bin resolution (width = numBins)
+        // so that zooming in reveals real detail instead of upscaled blur.
         const pending = this._waterfallPendingLines;
         if (pending.length > 0) {
-            const numNew = Math.min(pending.length, h);
-            // Scroll existing content DOWN by numNew pixels via drawImage self-blit.
-            if (numNew < h) {
-                bbCtx.drawImage(bb, 0, 0, w, h - numNew, 0, numNew, w, h - numNew);
-            }
-            // Clear the top numNew rows
-            bbCtx.fillStyle = '#0a0a1a';
-            bbCtx.fillRect(0, 0, w, numNew);
-
-            // Setup line canvas at numBins width (for bilinear scaling)
             const firstLine = pending[pending.length - 1];
             const numBins = firstLine.length;
             if (numBins <= 0) {
                 pending.length = 0;
-                return;
-            }
-            if (this._waterfallLineBins !== numBins || !this._waterfallLineCanvas) {
-                this._waterfallLineCanvas = document.createElement('canvas');
-                this._waterfallLineCanvas.width = numBins;
-                this._waterfallLineCanvas.height = 1;
-                this._waterfallLineCtx = this._waterfallLineCanvas.getContext('2d');
-                this._waterfallLineImg = this._waterfallLineCtx.createImageData(numBins, 1);
-                this._waterfallLineBins = numBins;
-            }
-            const lineCanvas = this._waterfallLineCanvas;
-            const lineCtx = this._waterfallLineCtx;
-            const imgData = this._waterfallLineImg;
-            const pixels = imgData.data;
-
-            // Enable smoothing on back buffer for bilinear scaling (Fix A)
-            bbCtx.imageSmoothingEnabled = true;
-            bbCtx.imageSmoothingQuality = 'high';
-
-            for (let i = 0; i < numNew; i++) {
-                const line = pending[pending.length - numNew + i];
-                const y = numNew - 1 - i;
-
-                // Render spectrum into ImageData at numBins resolution (native FFT bins)
-                for (let x = 0; x < numBins; x++) {
-                    const val = line[x];
-                    let lutIdx = ((val - dbMin) * dbScale) | 0;
-                    if (lutIdx < 0) lutIdx = 0;
-                    else if (lutIdx > lutNMinus1) lutIdx = lutNMinus1;
-                    const lutOff = lutIdx * 3;
-                    const off = x * 4;
-                    pixels[off] = lut[lutOff];
-                    pixels[off + 1] = lut[lutOff + 1];
-                    pixels[off + 2] = lut[lutOff + 2];
-                    pixels[off + 3] = 255;
+            } else {
+                this._ensureBackBuffer(numBins);
+                const bbW = numBins;  // back buffer width = native FFT bins
+                const numNew = Math.min(pending.length, h);
+                // Scroll existing content DOWN by numNew pixels.
+                if (numNew < h) {
+                    bbCtx.drawImage(bb, 0, 0, bbW, h - numNew, 0, numNew, bbW, h - numNew);
                 }
-                lineCtx.putImageData(imgData, 0, 0);
+                // Clear the top numNew rows
+                bbCtx.fillStyle = '#0a0a1a';
+                bbCtx.fillRect(0, 0, bbW, numNew);
 
-                // drawImage with scale → browser does bilinear interpolation (Fix A)
-                // Vertical overlap blend (Fix B): draw with alpha 0.85 at top edge
-                // to blend with existing content, producing smoother vertical transitions
-                bbCtx.globalAlpha = 0.85;
-                bbCtx.drawImage(lineCanvas, 0, 0, numBins, 1, 0, y, w, 1);
-                bbCtx.globalAlpha = 1.0;
+                // Setup line canvas at numBins width (1:1 with the back buffer)
+                if (this._waterfallLineBins !== numBins || !this._waterfallLineCanvas) {
+                    this._waterfallLineCanvas = document.createElement('canvas');
+                    this._waterfallLineCanvas.width = numBins;
+                    this._waterfallLineCanvas.height = 1;
+                    this._waterfallLineCtx = this._waterfallLineCanvas.getContext('2d');
+                    this._waterfallLineImg = this._waterfallLineCtx.createImageData(numBins, 1);
+                    this._waterfallLineBins = numBins;
+                }
+                const lineCanvas = this._waterfallLineCanvas;
+                const lineCtx = this._waterfallLineCtx;
+                const imgData = this._waterfallLineImg;
+                const pixels = imgData.data;
+
+                bbCtx.imageSmoothingEnabled = true;
+                bbCtx.imageSmoothingQuality = 'high';
+
+                for (let i = 0; i < numNew; i++) {
+                    const line = pending[pending.length - numNew + i];
+                    const y = numNew - 1 - i;
+
+                    // Render spectrum into ImageData at native FFT-bin resolution
+                    for (let x = 0; x < numBins; x++) {
+                        const val = line[x];
+                        let lutIdx = ((val - dbMin) * dbScale) | 0;
+                        if (lutIdx < 0) lutIdx = 0;
+                        else if (lutIdx > lutNMinus1) lutIdx = lutNMinus1;
+                        const lutOff = lutIdx * 3;
+                        const off = x * 4;
+                        pixels[off] = lut[lutOff];
+                        pixels[off + 1] = lut[lutOff + 1];
+                        pixels[off + 2] = lut[lutOff + 2];
+                        pixels[off + 3] = 255;
+                    }
+                    lineCtx.putImageData(imgData, 0, 0);
+
+                    // 1:1 blit (native resolution) with slight alpha blend for
+                    // smoother vertical transitions.
+                    bbCtx.globalAlpha = 0.85;
+                    bbCtx.drawImage(lineCanvas, 0, 0, numBins, 1, 0, y, numBins, 1);
+                    bbCtx.globalAlpha = 1.0;
+                }
+                pending.length = 0;
+                this._waterfallDirty = true;
             }
-            pending.length = 0;
-            this._waterfallDirty = true;
         }
 
-        // Composite to main canvas only when dirty, then draw grid + overlays.
+        // Composite the visible (zoomed) slice of the back buffer to the main
+        // canvas, then draw grid + overlays on top.
         if (this._waterfallDirty) {
-            ctx.drawImage(bb, 0, 0);
+            const bbW = this._waterfallBins || (this._waterfallBackBuffer ? this._waterfallBackBuffer.width : w);
+            const sr = this._sampleRate || 2048000;
+            const lowHzFull = this.currentFreq - sr / 2;  // back buffer left edge freq
+            const viewLowHz = this._wfViewLow();
+            const viewBwHz = this._wfVisibleBw();
+            // Source rectangle (back-buffer pixel space) for the visible window.
+            let srcX = ((viewLowHz - lowHzFull) / sr) * bbW;
+            let srcW = (viewBwHz / sr) * bbW;
+            // Clamp to back-buffer bounds to avoid drawImage artifacts.
+            srcX = Math.max(0, Math.min(bbW - 1, srcX));
+            srcW = Math.max(1, Math.min(bbW - srcX, srcW));
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(this._waterfallBackBuffer, srcX, 0, srcW, h, 0, 0, w, h);
             this._drawFreqGrid(ctx, w, h);
             this._drawChannelBwOverlay(ctx, w, h);
             this._drawVFOCursor(ctx, w, h);
@@ -1348,12 +1600,12 @@ const App = {
      */
     _drawChannelBwOverlay(ctx, w, h) {
         const bw = this._channelBw || 12000;
-        const sr = this._sampleRate || 2048000;
-        const bwPx = Math.min(w, (bw / sr) * w);
+        const viewBw = this._wfVisibleBw();
+        const bwPx = Math.min(w, (bw / viewBw) * w);
         if (bwPx < 4) return;  // too small to draw
 
-        // Draw at VFO position (center + offset), not waterfall center
-        const cx = w / 2 + ((this._vfoOffsetHz || 0) / sr) * w;
+        // Draw at VFO position (center + offset) within the current zoom view
+        const cx = this._wfFreqToX(this.currentFreq + (this._vfoOffsetHz || 0), w);
         const left = cx - bwPx / 2;
         const right = cx + bwPx / 2;
 
@@ -1416,9 +1668,8 @@ const App = {
      * listening frequency. Drawn on every dirty frame so it tracks clicks.
      */
     _drawVFOCursor(ctx, w, h) {
-        const sr = this._sampleRate || 2048000;
-        const offset = this._vfoOffsetHz || 0;
-        const cx = w / 2 + (offset / sr) * w;
+        // VFO position within the current zoom view
+        const cx = this._wfFreqToX(this.currentFreq + (this._vfoOffsetHz || 0), w);
 
         ctx.save();
 
@@ -1447,16 +1698,16 @@ const App = {
 
     _drawFreqGrid(ctx, w, h) {
         const centerHz = this.currentFreq;
-        const sr = this._sampleRate || 2048000;
-        const lowHz = centerHz - sr / 2;
-        const highHz = centerHz + sr / 2;
+        // Grid covers the *visible* (zoomed) window, not the full passband.
+        const lowHz = this._wfViewLow();
+        const highHz = this._wfViewHigh();
         const bwHz = highHz - lowHz;
 
-        // Choose "nice" tick interval based on bandwidth
-        // Target ~6-10 grid lines across the width
+        // Choose "nice" tick interval based on the visible bandwidth.
+        // Target ~6-10 grid lines across the width.
         const targetCount = 8;
         const rawStep = bwHz / targetCount;
-        const steps = [10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000];
+        const steps = [1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000];
         let stepHz = steps[steps.length - 1];
         for (const s of steps) {
             if (s >= rawStep) { stepHz = s; break; }
@@ -1669,36 +1920,37 @@ const App = {
     // deltaHz > 0 (tuned UP): content moves LEFT (signals appear to slide left)
     // deltaHz < 0 (tuned DOWN): content moves RIGHT
     _shiftWaterfallBuffer(deltaHz) {
-        const w = this._waterfallCanvasW;
+        // Back buffer is native-bin resolution → shift in bin units.
+        const bbW = this._waterfallBins;
         const h = this._waterfallCanvasH;
-        if (w <= 0 || h <= 0) return;
+        if (bbW <= 0 || h <= 0) return;
         const sr = this._sampleRate;
         if (sr <= 0) return;
 
-        // Convert Hz delta to pixel delta
-        const deltaPx = Math.round((deltaHz / sr) * w);
+        // Convert Hz delta to back-buffer pixel (bin) delta
+        const deltaPx = Math.round((deltaHz / sr) * bbW);
         if (deltaPx === 0) return;
 
         const bb = this._waterfallBackBuffer;
         const bbCtx = this._waterfallBackCtx;
 
-        // If shift is larger than canvas width, just clear everything
-        if (Math.abs(deltaPx) >= w) {
+        // If shift is larger than the back buffer width, just clear everything
+        if (Math.abs(deltaPx) >= bbW) {
             bbCtx.fillStyle = '#0a0a1a';
-            bbCtx.fillRect(0, 0, w, h);
+            bbCtx.fillRect(0, 0, bbW, h);
             this._waterfallDirty = true;
             return;
         }
 
         if (deltaPx > 0) {
             // Freq went UP → content shifts LEFT
-            bbCtx.drawImage(bb, deltaPx, 0, w - deltaPx, h, 0, 0, w - deltaPx, h);
+            bbCtx.drawImage(bb, deltaPx, 0, bbW - deltaPx, h, 0, 0, bbW - deltaPx, h);
             bbCtx.fillStyle = '#0a0a1a';
-            bbCtx.fillRect(w - deltaPx, 0, deltaPx, h);
+            bbCtx.fillRect(bbW - deltaPx, 0, deltaPx, h);
         } else {
             // Freq went DOWN → content shifts RIGHT
             const absDelta = -deltaPx;
-            bbCtx.drawImage(bb, 0, 0, w - absDelta, h, absDelta, 0, w - absDelta, h);
+            bbCtx.drawImage(bb, 0, 0, bbW - absDelta, h, absDelta, 0, bbW - absDelta, h);
             bbCtx.fillStyle = '#0a0a1a';
             bbCtx.fillRect(0, 0, absDelta, h);
         }
