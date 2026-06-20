@@ -2092,6 +2092,13 @@ const App = {
             const _dur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
             _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}${_dur}</span>`;
         }
+        // Delete button (admin only) — icon at the top-right corner of each
+        // feed item. Uses a small 🗑 icon to avoid taking horizontal space.
+        // stopPropagation prevents the click from triggering the feed item's
+        // own click handler (if any).
+        const _delBtn = (typeof Auth !== 'undefined' && Auth.isAdmin())
+            ? `<button class="feed-del-btn" title="ลบรายการนี้" onclick="event.stopPropagation(); App.deleteFeedItem('${rec.id}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;font-size:0.85rem;border-radius:4px;opacity:0.6;transition:opacity 0.15s, color 0.15s, background 0.15s;" onmouseover="this.style.opacity='1';this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.12)';" onmouseout="this.style.opacity='0.6';this.style.color='var(--text-muted)';this.style.background='none';">🗑</button>`
+            : '';
 
         return `
             <div class="feed-item" id="feed-${rec.id}">
@@ -2101,6 +2108,7 @@ const App = {
                         <span class="source-badge ${badgeClass}" title="${source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ'}">${badgeLabel}</span>
                         ${recorderLabel ? `<span style="font-size:0.65rem; color:var(--text-muted); white-space:nowrap;">${recorderLabel}</span>` : ''}
                         <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
+                        ${_delBtn}
                     </div>
                 </div>
                 <div class="feed-text">
@@ -2109,6 +2117,28 @@ const App = {
                 ${audioUrl ? `<audio controls style="width:100%;height:28px;margin-top:4px;" src="${audioUrl}"></audio>` : ''}
             </div>
         `;
+    },
+
+    /**
+     * Delete a single recording from the dashboard feed.
+     * Confirms with the user before deleting both the DB record and the audio
+     * file (handled by the backend DELETE /api/recordings/{id} endpoint).
+     * Admin only.
+     */
+    async deleteFeedItem(recId) {
+        if (typeof Auth === 'undefined' || !Auth.isAdmin()) return;
+        if (!confirm('ต้องการลบรายการนี้ใช่ไหม? (จะลบทั้ง record และไฟล์เสียง)')) return;
+        try {
+            await API.recordings.delete(recId);
+            // Remove from local data + re-render
+            this.recordings = this.recordings.filter(r => r.id !== recId);
+            const el = document.getElementById('feed-' + recId);
+            if (el) el.remove();
+            console.log('🗑 Deleted feed item:', recId);
+        } catch (err) {
+            console.error('Delete feed item failed:', err);
+            alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
+        }
     },
 
     addLiveFeedItem(data) {
