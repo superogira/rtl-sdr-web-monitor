@@ -715,7 +715,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="/js/api.js?v=9"></script>
     <script src="/js/auth.js?v=5"></script>
-    <script src="/js/recording_jobs.js?v=1"></script>
+    <script src="/js/recording_jobs.js?v=3"></script>
     <script>
     const Settings = {
         keywords: ['ฉุกเฉิน', 'เหตุด่วน', 'help', 'emergency'],
@@ -897,9 +897,10 @@
                 // Non-active device → offer to activate it.
                 actionsEl.innerHTML = `
                     <p style="font-size:0.78rem; color:var(--text-secondary); margin:0; flex:1;">
-                        อุปกรณ์นี้ยังไม่ได้ใช้งาน — กดปุ่มเพื่อเริ่มใช้อุปกรณ์นี้ (สถานะจะแสดงหลังเลือกใช้งาน)
+                        อุปกรณ์นี้ยังไม่ได้ใช้สำหรับ "ฟังสด" — กดปุ่มเพื่อสลับให้อุปกรณ์นี้เป็นอุปกรณ์ที่ใช้ในหน้า Dashboard
+                        <br>(ไม่กระทบการอัดเสียงอัตโนมัติ ที่ทำงานแบบ background ได้อิสระต่ออุปกรณ์)
                     </p>
-                    <button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${viewing}')">⚡ เริ่มใช้อุปกรณ์นี้</button>
+                    <button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${viewing}')">🔊 ฟังสดอุปกรณ์นี้</button>
                 `;
             }
         },
@@ -1653,6 +1654,19 @@
                     el.innerHTML = '<div class="text-center text-muted" style="padding:24px;">ยังไม่มีอุปกรณ์ SDR ในระบบ กด "เพิ่มอุปกรณ์" เพื่อเริ่มต้น</div>';
                     return;
                 }
+                // Build a lookup of per-device background recording status.
+                // active_job_captures comes from GET /api/sdr/status and lists all
+                // DeviceCapture instances currently running (across ALL devices,
+                // not just the active one). Each entry has device_id/connected/state.
+                const jobCaps = (this._lastStatus && Array.isArray(this._lastStatus.active_job_captures))
+                    ? this._lastStatus.active_job_captures
+                    : [];
+                const jobByDev = {};
+                jobCaps.forEach(c => {
+                    // Keep the first (or any) running capture for the device.
+                    if (c && c.device_id && !jobByDev[c.device_id]) jobByDev[c.device_id] = c;
+                });
+
                 el.innerHTML = devices.map(d => {
                     const isActive = (d.id === activeId) || d.is_active;
                     const cfg = d.config || {};
@@ -1661,27 +1675,65 @@
                         ? `${cfg.host || '-'}:${cfg.port || 1234}`
                         : '';
                     const desc = cfg.description || '';
-                    // Short status badges (connection / streaming / recording)
-                    // For the active device these reflect the live global status.
-                    // For non-active devices the device is considered "offline/idle".
+
+                    // Determine the REAL per-device status.
+                    // - Active device: reflects live global status (waterfall/live audio).
+                    // - Any device with a running job capture: reflects that job's
+                    //   connection/recording state (background auto-record).
+                    // - Otherwise: the device is free (idle).
                     const st = (isActive && this._lastStatus) ? this._lastStatus : null;
-                    const connBadge = isActive
-                        ? (st && st.connected
-                            ? '<span class="status-badge status-on">เชื่อมต่อ</span>'
-                            : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>')
-                        : '<span class="status-badge status-off">ไม่ได้ใช้งาน</span>';
+                    const job = jobByDev[d.id] || null;
+
+                    // --- Connection badge ---
+                    let connBadge;
+                    if (isActive) {
+                        connBadge = (st && st.connected)
+                            ? '<span class="status-badge status-on">เชื่อมต่อ (สด)</span>'
+                            : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
+                    } else if (job) {
+                        connBadge = job.connected
+                            ? '<span class="status-badge status-on">เชื่อมต่อ (job)</span>'
+                            : '<span class="status-badge status-off">รอเชื่อมต่อ (job)</span>';
+                    } else {
+                        connBadge = '<span class="status-badge status-off">ว่าง</span>';
+                    }
+
+                    // --- Streaming badge (only meaningful for live/active) ---
                     const streamBadge = (st && st.streaming)
                         ? '<span class="status-badge status-on">กำลังรับ</span>'
                         : '<span class="status-badge status-off">หยุดรับ</span>';
-                    const recBadge = (st && st.recording)
-                        ? '<span class="status-badge status-on">กำลังอัด</span>'
-                        : '<span class="status-badge status-off">ไม่ได้อัด</span>';
+
+                    // --- Recording badge ---
+                    let recBadge;
+                    if (isActive && st && st.recording) {
+                        recBadge = '<span class="status-badge status-on">กำลังอัด (สด)</span>';
+                    } else if (job && job.state === 'RUNNING') {
+                        // Check if any channel is actively recording a transmission
+                        const chs = (job.frequencies || []);
+                        const anyRec = chs.some(c => c && c.is_recording);
+                        recBadge = anyRec
+                            ? '<span class="status-badge status-on">กำลังอัด (job)</span>'
+                            : '<span class="status-badge status-on" style="background:rgba(14,165,233,0.15); color:var(--accent-cyan);">รอสัญญาณ (job)</span>';
+                    } else {
+                        recBadge = '<span class="status-badge status-off">ไม่ได้อัด</span>';
+                    }
+
+                    // --- Top-right role badge ---
+                    let roleBadge;
+                    if (isActive) {
+                        roleBadge = '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">● กำลังฟังสด</span>';
+                    } else if (job) {
+                        roleBadge = '<span class="status-badge status-on" style="background:rgba(14,165,233,0.2); color:var(--accent-cyan);">● กำลังอัดอัตโนมัติ</span>';
+                    } else {
+                        roleBadge = '<span class="status-badge status-off">พร้อมใช้งาน</span>';
+                    }
+
                     return `
-                        <div style="background:var(--surface-1); border:1px solid ${isActive ? 'var(--accent-cyan)' : 'var(--border)'}; border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                        <div style="background:var(--surface-1); border:1px solid ${(isActive || job) ? 'var(--accent-cyan)' : 'var(--border)'}; border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
                             <div style="flex:1; min-width:220px;">
                                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                                     <strong>${d.name}</strong>
-                                    ${isActive ? '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">● กำลังใช้งาน</span>' : '<span class="status-badge status-off">พร้อมใช้งาน</span>'}
+                                    ${roleBadge}
                                 </div>
                                 <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px;">
                                     ${typeLabel} ${connInfo ? `· ${connInfo}` : ''}
@@ -1692,7 +1744,7 @@
                                 </div>
                             </div>
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                                ${!isActive ? `<button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${d.id}')">⚡ ใช้อุปกรณ์นี้</button>` : ''}
+                                ${!isActive ? `<button class="btn btn-sm btn-primary" title="สลับให้อุปกรณ์นี้เป็นอุปกรณ์ที่ใช้ฟังสดในหน้า Dashboard (ไม่กระทบการอัดเสียงอัตโนมัติ)" onclick="Settings.activateDevice('${d.id}')">🔊 ฟังสดอุปกรณ์นี้</button>` : '<span class="status-badge status-on" style="background:rgba(16,185,129,0.15); align-self:center;">กำลังฟังสด</span>'}
                                 <button class="btn btn-sm" onclick="Settings.viewDevice('${d.id}')">📊 ดูสถานะ/ตั้งค่า</button>
                                 <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteDevice('${d.id}')">🗑️ ลบ</button>
                             </div>
@@ -1823,14 +1875,18 @@
             const container = document.getElementById('device-config-fields');
             const cfg = this._wizardConfig || {};
             if (type === 'rtl_tcp') {
-                // NOTE: Tuner settings (frequency, sample_rate, gain, mode, ppm,
-                // bandwidth) have been MOVED to per-device recording jobs.
-                // The device registry now only stores connection info + note.
+                // NOTE: frequency / sample_rate / mode / bandwidth are configured
+                // per recording job (tab "การอัดเสียง"). Here we store connection
+                // info + *default* Gain & Frequency Correction which pre-fill the
+                // "เพิ่มการอัดเสียง" editor so admins don't have to retype them.
+                const defGain = (cfg.gain !== undefined && cfg.gain !== null) ? cfg.gain : 30;
+                const defPpm = (cfg.freq_correction_ppm !== undefined && cfg.freq_correction_ppm !== null)
+                    ? cfg.freq_correction_ppm : 0;
                 container.innerHTML = `
                     <div class="form-row">
                         <div class="form-group">
                             <label>Host / IP Address</label>
-                            <input type="text" id="dc-host" value="${cfg.host || ''}" placeholder="192.168.1.101">
+                            <input type="text" id="dc-host" value="${this._escapeAttr(cfg.host || '')}" placeholder="192.168.1.101">
                         </div>
                         <div class="form-group">
                             <label>Port</label>
@@ -1839,10 +1895,26 @@
                     </div>
                     <div class="form-group">
                         <label>หมายเหตุ / รายละเอียดอุปกรณ์ (ไม่บังคับ)</label>
-                        <input type="text" id="dc-description" value="${cfg.description || ''}" placeholder="เช่น ตั้งอยู่บนหลังคา">
+                        <input type="text" id="dc-description" value="${this._escapeAttr(cfg.description || cfg.note || '')}" placeholder="เช่น ตั้งอยู่บนหลังคา">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Gain เริ่มต้น (dB) — สำหรับการอัดเสียง</label>
+                            <input type="number" id="dc-gain" value="${defGain}" min="0" max="60">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                                ค่า Gain พื้นฐานที่จะนำไปกรอกอัตโนมัติตอนตั้งค่าการอัดเสียง (เปลี่ยนทีหลังได้)
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Frequency Correction เริ่มต้น (PPM) — สำหรับการอัดเสียง</label>
+                            <input type="number" id="dc-ppm" value="${defPpm}" min="-200" max="200">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                                ค่าปรับความถี่พื้นฐาน ใช้กรอกอัตโนมัติตอนตั้งค่าการอัดเสียง
+                            </p>
+                        </div>
                     </div>
                     <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:8px;">
-                        💡 การตั้งค่าความถี่, Sample Rate, Gain, Demodulation Mode, Frequency Correction และ Bandwidth
+                        💡 การตั้งค่าความถี่, Sample Rate, Demodulation Mode และ Bandwidth
                         ย้ายไปอยู่ในส่วน "การตั้งค่าการอัดเสียงของอุปกรณ์" (แท็บ การอัดเสียง)
                     </p>
                 `;
@@ -1851,24 +1923,46 @@
             }
         },
 
+        _escapeAttr(s) {
+            // Escape a string for safe inclusion in an HTML attribute value.
+            // Uses \x escapes in source so the entities survive auto-formatting.
+            const A = String.fromCharCode(38);  // &
+            return String(s == null ? '' : s)
+                .replace(/\x26/g, A + 'amp;')
+                .replace(/\x22/g, A + 'quot;')
+                .replace(/\x27/g, A + '#39;')
+                .replace(/\x3c/g, A + 'lt;')
+                .replace(/\x3e/g, A + 'gt;');
+        },
+
         _collectDeviceConfig(type) {
             if (type !== 'rtl_tcp') return {};
             const host = document.getElementById('dc-host').value.trim();
             const port = parseInt(document.getElementById('dc-port').value) || 1234;
             const description = document.getElementById('dc-description').value.trim();
             if (!host) { alert('กรุณาใส่ Host'); return null; }
+            // Recording defaults (Gain / Frequency Correction) — these pre-fill
+            // the recording job editor. User can override per job later.
+            const gain = parseInt(document.getElementById('dc-gain').value);
+            const ppm = parseInt(document.getElementById('dc-ppm').value);
+            const wfMin = parseInt(document.getElementById('dc-wf-db-min').value);
+            const wfMax = parseInt(document.getElementById('dc-wf-db-max').value);
             // Preserve any legacy tuner fields that may already be stored, but
             // the UI no longer exposes them (they're managed per recording job).
             const legacy = this._wizardConfig || {};
             return {
-                host, port, description,
+                host, port,
+                note: description,
+                description,
+                gain: Number.isFinite(gain) ? gain : 30,
+                freq_correction_ppm: Number.isFinite(ppm) ? ppm : 0,
+                waterfall_db_min: Number.isFinite(wfMin) ? wfMin : -110,
+                waterfall_db_max: Number.isFinite(wfMax) ? wfMax : -55,
                 // Keep legacy values if present (so existing deployments don't
                 // lose their last-known-good tuner config), but they're not edited here.
                 frequency: legacy.frequency,
                 sample_rate: legacy.sample_rate,
-                gain: legacy.gain,
                 mode: legacy.mode,
-                freq_correction_ppm: legacy.freq_correction_ppm,
                 channel_bw: legacy.channel_bw,
             };
         },

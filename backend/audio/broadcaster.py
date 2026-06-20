@@ -10,11 +10,6 @@ OpenWebRX-style MULTI-LISTENER architecture
   - Each listener owns its own asyncio.Queue; the /ws/audio endpoint drains
     that queue and sends the PCM frames to that single WebSocket.
 
-This is the key difference from the old "single global demodulator + broadcast
-the SAME audio to everyone" model: one user tuning no longer moves everyone
-else's listening frequency. This is exactly how OpenWebRX lets many users
-listen to many frequencies from one SDR.
-
 Concurrency / CPU
 -----------------
 Demodulation (scipy filters) is CPU-heavy. To avoid blocking the event loop
@@ -23,6 +18,27 @@ dedicated worker thread (ThreadPoolExecutor). scipy/numpy release the GIL
 during their C calls, so this yields real parallelism across listeners.
 asyncio.Queue operations (put_nowait) are kept on the event-loop thread
 because asyncio.Queue is not thread-safe.
+
+NON-BLOCKING feed_iq (important for low stutter)
+------------------------------------------------
+feed_iq() does NOT demodulate inline. It only enqueues the raw IQ packet into
+each listener's bounded iq_queue and returns immediately. A per-listener
+background asyncio task (_listener_worker) drains that iq_queue, demodulates
+in a worker thread, batches, and pushes AUD1 frames to the listener's output
+queue (drained by the /ws/audio endpoint).
+
+This means a slow listener (e.g. WBFM 200 kHz on a busy CPU) can no longer
+stall the global SDR read loop or starve other listeners — only its own
+iq_queue will drop. Previously feed_iq() did `await asyncio.gather(...)` of
+ALL listeners inline, blocking the stream loop and causing stutter/freeze.
+
+Global-audio reuse
+------------------
+The SDRManager already demodulates the "global" channel (center freq + global
+VFO/mode/bw) for recording & signal level. When a listener listens to exactly
+that same channel, we reuse the already-computed audio instead of demodulating
+a second time, cutting CPU load roughly in half in the common case where most
+users listen to the default/center channel.
 """
 import asyncio
 import concurrent.futures
@@ -30,7 +46,7 @@ import logging
 import struct
 import time
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -52,6 +68,10 @@ _POOL_CEILING = 128
 # Absolute minimum and maximum for the configurable max_listeners value.
 _MIN_LISTENERS = 1
 _HARD_CAP_LISTENERS = 128
+# Bounded IQ input queue per listener. Small on purpose: real-time audio cares
+# about the LATEST samples, so when a listener falls behind we drop the oldest
+# IQ packet rather than queueing seconds of stale audio.
+_IQ_QUEUE_MAX = 4
 
 
 class Listener:
@@ -71,7 +91,14 @@ class Listener:
                  vfo_offset_hz: float = 0.0,
                  user_id=None, user_role=None):
         self.id = str(uuid.uuid4())
+        # Output queue: AUD1 frames ready to send to the WebSocket client.
         self.queue: "asyncio.Queue" = asyncio.Queue(maxsize=200)
+        # Input queue: raw IQ packets waiting to be demodulated by this
+        # listener's background worker. Bounded + drop-oldest so a slow
+        # listener cannot accumulate stale IQ and flood the client.
+        self.iq_queue: "asyncio.Queue" = asyncio.Queue(maxsize=_IQ_QUEUE_MAX)
+        # Background worker task that demodulates this listener's IQ.
+        self.task: Optional[asyncio.Task] = None
         self.demod = StreamingDemodulator()
         self.sample_rate = int(sample_rate)
         self.audio_rate = int(audio_rate)
@@ -92,6 +119,9 @@ class Listener:
         # stats
         self.frames_sent = 0
         self.created_at = time.time()
+        # Drop diagnostics (incremented under event-loop thread only)
+        self.iq_drops = 0       # IQ packets dropped on input (slow listener)
+        self.queue_drops = 0    # AUD1 frames dropped on output (slow subscriber)
 
     def set_vfo_offset(self, offset_hz: float) -> None:
         """Set this listener's VFO offset (Hz) relative to the center freq."""
@@ -112,8 +142,12 @@ class Listener:
 class AudioBroadcaster:
     """Manages live, INDEPENDENT audio streams to multiple WebSocket clients.
 
-    IQ flows: SDRManager._stream_loop → feed_iq() → per-listener demod (thread)
-    → per-listener queue → /ws/audio endpoint task → websocket.send_bytes()
+    IQ flows: SDRManager._stream_loop → feed_iq() (non-blocking enqueue)
+      → per-listener iq_queue → _listener_worker (per listener)
+        → run_in_executor(_demod_listener_raw)  [CPU-heavy, parallel]
+        → _batch_listener → AUD1 frame
+      → per-listener output queue → /ws/audio endpoint task
+        → websocket.send_bytes()
     """
 
     def __init__(self):
@@ -165,6 +199,9 @@ class AudioBroadcaster:
 
         The caller (/ws/audio endpoint) owns the returned Listener and drains
         `listener.queue` with `listener.queue.get()`.
+
+        A per-listener background worker task is started to demodulate IQ
+        off the event-loop hot path (non-blocking feed_iq).
         """
         if len(self._listeners) >= self.max_listeners:
             logger.warning(
@@ -178,13 +215,28 @@ class AudioBroadcaster:
         )
         async with self._lock:
             self._listeners[id(listener)] = listener
+            # Start the per-listener demod worker (non-blocking pipeline).
+            listener.task = asyncio.create_task(
+                self._listener_worker(listener),
+                name=f"demod-{listener.id[:8]}",
+            )
         logger.info("🔊 Audio listener added (total: %d)", len(self._listeners))
         return listener
 
     async def unsubscribe(self, listener: Listener) -> None:
-        """Remove a listener."""
+        """Remove a listener and stop its background worker."""
         async with self._lock:
-            self._listeners.pop(id(listener), None)
+            existed = self._listeners.pop(id(listener), None)
+        if existed is None:
+            return
+        task = listener.task
+        listener.task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         logger.info("🔊 Audio listener removed (total: %d)", len(self._listeners))
 
     def reset_all_vfo(self) -> None:
@@ -197,56 +249,119 @@ class AudioBroadcaster:
         for ln in self._listeners.values():
             ln.set_vfo_offset(0.0)
 
-    async def feed_iq(self, iq_bytes: bytes, sample_rate: int,
-                      audio_rate: int) -> None:
-        """Demodulate one IQ chunk INDEPENDENTLY for every listener.
+    def feed_iq(self, iq_bytes: bytes, sample_rate: int,
+                audio_rate: int,
+                global_audio: Optional[np.ndarray] = None,
+                g_mode: Optional[DemodMode] = None,
+                g_channel_bw: Optional[int] = None,
+                g_vfo_offset_hz: Optional[float] = None) -> None:
+        """Enqueue one IQ chunk to every listener's worker (NON-BLOCKING).
 
-        Each listener is demodulated in a worker thread (parallel; GIL-friendly
-        via numpy/scipy). The resulting PCM frames are pushed to each
-        listener's queue on the event-loop thread.
+        Synchronous on purpose: it only does put_nowait() on each listener's
+        asyncio.Queue (which is safe to call from the event-loop thread) and
+        returns immediately. Demodulation happens later in each listener's
+        background worker. This keeps the SDR read loop unblocked.
+
+        Each listener's background task picks the packet up and demodulates
+        independently. If a listener's iq_queue is full (slow consumer), the
+        OLDEST packet is dropped so the listener stays close to real time
+        (drop counters are incremented for diag).
+
+        `global_audio` (optional) is the audio already demodulated by
+        SDRManager for the global channel (mode=g_mode, channel_bw=
+        g_channel_bw, vfo=g_vfo_offset_hz). Listeners whose params match the
+        global channel reuse this audio and skip their own demodulation,
+        halving CPU in the common case.
         """
         if not self._listeners:
             return
-        listeners = list(self._listeners.values())
-        loop = asyncio.get_running_loop()
-        tasks = [
-            loop.run_in_executor(
-                self._executor, self._demod_listener, ln, iq_bytes,
-                sample_rate, audio_rate,
-            )
-            for ln in listeners
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
         self._chunk_count += 1
-        for ln, frame in zip(listeners, results):
-            if isinstance(frame, Exception):
-                logger.warning("🔊 Listener %s demod error: %s", ln.id[:8], frame)
-                continue
-            if not frame:
-                continue
-            ln.frames_sent += 1
-            self._bytes_sent += len(frame)
-            self._last_audio_time = time.time()
+        pkt = (iq_bytes, int(sample_rate), int(audio_rate),
+               global_audio, g_mode, g_channel_bw, g_vfo_offset_hz)
+        for ln in list(self._listeners.values()):
             try:
-                ln.queue.put_nowait(frame)
+                ln.iq_queue.put_nowait(pkt)
             except asyncio.QueueFull:
-                # Slow subscriber: drop the oldest frame to make room.
+                ln.iq_drops += 1
+                # Drop the oldest IQ to keep this listener near real time.
                 try:
-                    ln.queue.get_nowait()
+                    ln.iq_queue.get_nowait()
                 except Exception:
                     pass
                 try:
-                    ln.queue.put_nowait(frame)
+                    ln.iq_queue.put_nowait(pkt)
                 except Exception:
+                    # Still full: packet is lost; worker will keep draining.
                     pass
 
-    def _demod_listener(self, listener: Listener, iq_bytes: bytes,
-                        sample_rate: int, audio_rate: int):
-        """Run one listener's demod + batching (called in a worker thread).
+    async def _listener_worker(self, ln: Listener) -> None:
+        """Per-listener background task: drain iq_queue → demod → AUD1 frame.
 
-        Returns a binary AUD1 frame (bytes) ready to send, or None if the
-        batch isn't full yet. Pure CPU work — no asyncio/queue ops here.
+        Runs on the event-loop thread but offloads the CPU-heavy demod step to
+        a worker thread via run_in_executor (numpy/scipy release the GIL).
+        Batching/encoding (cheap) runs inline. Output frames are pushed to the
+        listener's output queue (drained by the /ws/audio endpoint).
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                pkt = await ln.iq_queue.get()
+                (iq_bytes, sample_rate, audio_rate,
+                 global_audio, g_mode, g_channel_bw, g_vfo) = pkt
+
+                # Fast path: this listener listens to the SAME channel as the
+                # global demod → reuse the already-computed audio and skip the
+                # expensive per-listener demodulation.
+                if self._matches_global(
+                    ln, sample_rate, audio_rate,
+                    global_audio, g_mode, g_channel_bw, g_vfo,
+                ):
+                    audio = global_audio
+                else:
+                    try:
+                        audio = await loop.run_in_executor(
+                            self._executor, self._demod_listener_raw,
+                            ln, iq_bytes, sample_rate, audio_rate,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "🔊 Listener %s demod error: %s", ln.id[:8], e
+                        )
+                        continue
+
+                frame = self._batch_listener(ln, audio, audio_rate)
+                if frame:
+                    self._enqueue_frame(ln, frame)
+        except asyncio.CancelledError:
+            # Normal teardown on unsubscribe / disconnect.
+            return
+        except Exception as e:
+            logger.error("🔊 Listener %s worker crashed: %s", ln.id[:8], e,
+                         exc_info=True)
+
+    @staticmethod
+    def _matches_global(ln: Listener, sample_rate: int, audio_rate: int,
+                        global_audio, g_mode, g_channel_bw, g_vfo) -> bool:
+        """True if the listener can reuse the global demod audio."""
+        if global_audio is None or len(global_audio) == 0:
+            return False
+        if g_mode is None or ln.mode != g_mode:
+            return False
+        if ln.sample_rate != sample_rate or ln.audio_rate != audio_rate:
+            return False
+        if ln.channel_bw != g_channel_bw:
+            return False
+        if g_vfo is None or abs(ln.vfo_offset_hz - float(g_vfo)) > 1.0:
+            return False
+        return True
+
+    def _demod_listener_raw(self, listener: Listener, iq_bytes: bytes,
+                            sample_rate: int, audio_rate: int) -> np.ndarray:
+        """Demodulate one IQ chunk for a listener (called in a worker thread).
+
+        Returns a float32 audio ndarray (possibly empty). Pure CPU work — no
+        asyncio/queue ops here. Batching/encoding is done separately on the
+        loop thread because it is cheap and touches listener state.
         """
         # Track global sample-rate changes (admin changed SDR) and clamp the
         # offset into the valid passband so the shift never aliases.
@@ -262,7 +377,16 @@ class AudioBroadcaster:
             iq_bytes, listener.mode, sample_rate, audio_rate,
             channel_bw=listener.channel_bw,
         )
-        if len(audio) == 0:
+        return audio
+
+    def _batch_listener(self, listener: Listener, audio: np.ndarray,
+                        audio_rate: int):
+        """Accumulate audio into ~100ms AUD1 frames. Runs on loop thread.
+
+        Returns a binary AUD1 frame (bytes) ready to send, or None if the
+        batch isn't full yet.
+        """
+        if audio is None or len(audio) == 0:
             return None
 
         listener._batch_buf.append(audio)
@@ -288,12 +412,42 @@ class AudioBroadcaster:
         header = struct.pack("<4sII", b"AUD1", int(listener._batch_sample_rate), len(pcm))
         return header + pcm.tobytes()
 
+    def _enqueue_frame(self, ln: Listener, frame: bytes) -> None:
+        """Push a finished AUD1 frame to the listener's output queue.
+
+        Drop-oldest on overflow so a slow WebSocket subscriber cannot
+        accumulate seconds of stale audio (which would otherwise manifest as
+        ever-growing latency — the "ฟลุด/ต้องกดฟังสดใหม่" symptom).
+        """
+        ln.frames_sent += 1
+        self._bytes_sent += len(frame)
+        self._last_audio_time = time.time()
+        try:
+            ln.queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            ln.queue_drops += 1
+            try:
+                ln.queue.get_nowait()
+            except Exception:
+                pass
+            try:
+                ln.queue.put_nowait(frame)
+            except Exception:
+                ln.queue_drops += 1
+
     def get_stats(self) -> dict:
         """Return broadcaster statistics."""
+        total_iq_drops = 0
+        total_queue_drops = 0
+        for ln in self._listeners.values():
+            total_iq_drops += ln.iq_drops
+            total_queue_drops += ln.queue_drops
         return {
             "listeners": len(self._listeners),
             "chunks_sent": self._chunk_count,
             "bytes_sent": self._bytes_sent,
+            "iq_drops": total_iq_drops,
+            "queue_drops": total_queue_drops,
             "last_audio_ago": (
                 round(time.time() - self._last_audio_time, 2)
                 if self._last_audio_time

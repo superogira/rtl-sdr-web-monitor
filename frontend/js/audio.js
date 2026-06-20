@@ -16,11 +16,18 @@ const LiveAudio = {
     // Buffer scheduling
     _sampleRate: 8000,       // Updated from server frames
     _nextStartTime: 0,       // 0 = not started; set on first frame arrival
-    _targetLatency: 0.25,    // 250ms target buffer ahead (jitter cushion)
+    _targetLatency: 0.45,    // 450ms target buffer ahead (jitter cushion)
+                             // Increased from 250ms: absorbs network/CPU
+                             // jitter better to reduce underrun stutter.
+    _maxLatency: 1.0,        // 1000ms ceiling — if bufferAhead exceeds this,
+                             // we RESYNC (drop the accumulated backlog) so the
+                             // stream never drifts into seconds of latency
+                             // (the "ฟลุด/ต้องกดฟังสดใหม่" symptom).
     _queue: [],              // Queue of decoded Float32Arrays
     _maxQueue: 30,           // Max buffers in queue (prevents memory leak)
     _framesReceived: 0,
     _underruns: 0,
+    _resyncs: 0,             // Count of latency resyncs (for diagnostics)
     _reconnectTimer: null,
     _sourceNodes: [],        // Track active source nodes for cleanup
 
@@ -114,6 +121,7 @@ const LiveAudio = {
         this.isPlaying = true;
         this._framesReceived = 0;
         this._underruns = 0;
+        this._resyncs = 0;
         this._nextStartTime = 0;  // Reset; will be set on first frame arrival
         this._connectWS();
         this._updateUI();
@@ -420,14 +428,37 @@ const LiveAudio = {
 
     /**
      * Schedule an AudioBuffer for seamless playback.
-     * Uses a "next start time" cursor to avoid gaps/overlaps.
+     * Uses a "next start time" cursor to avoid gaps/overlaps, with two
+     * safety mechanisms:
+     *
+     * 1) UNDERRUN recovery — if the cursor has fallen behind `now` (we ran
+     *    out of scheduled audio and there was a gap/silence), reset it to
+     *    now + targetLatency to rebuild the jitter cushion.
+     *
+     * 2) RESYNC-ON-FLOOD — if the cursor has run TOO FAR ahead of `now`
+     *    (bufferAhead > maxLatency), the client is accumulating a growing
+     *    backlog (e.g. CPU couldn't keep up, then caught up and dumped a
+     *    burst). Without intervention this manifests as ever-increasing
+     *    latency — the "ฟลุด/ต้องกดฟังสดใหม่" symptom. We snap the cursor
+     *    back to now + targetLatency so playback stays near real time.
      */
     _scheduleBuffer(audioBuffer) {
         const now = this.ctx.currentTime;
 
-        // First frame or underrun recovery: set start time with target latency.
-        // This builds a ~250ms jitter cushion before audio starts playing,
-        // absorbing network/CPU timing variations that cause stuttering.
+        // --- RESYNC-ON-FLOOD: backlog grew too large, snap back to real time ---
+        const ahead = this._nextStartTime - now;
+        if (this._nextStartTime !== 0 && ahead > this._maxLatency) {
+            this._resyncs++;
+            console.warn(
+                `🔊 [audio] resync #${this._resyncs}: bufferAhead=${ahead.toFixed(3)}s ` +
+                `> max ${this._maxLatency}s → snapping to ${this._targetLatency * 1000}ms`
+            );
+            this._nextStartTime = now + this._targetLatency;
+        }
+
+        // --- UNDERRUN recovery: cursor fell behind real time ---
+        // First frame, or we ran out of scheduled audio (gap/silence).
+        // Reset to now + targetLatency to rebuild the jitter cushion.
         if (this._nextStartTime === 0 || this._nextStartTime < now) {
             if (this._nextStartTime !== 0) {
                 this._underruns++;
@@ -436,7 +467,7 @@ const LiveAudio = {
             this._nextStartTime = now + this._targetLatency;
         }
 
-        // Prevent queue overflow (drop oldest)
+        // Prevent queue overflow (drop oldest scheduled-but-unstarted node)
         if (this._sourceNodes.length > this._maxQueue) {
             const old = this._sourceNodes.shift();
             try { old.stop(); } catch (e) {}
@@ -488,7 +519,7 @@ const LiveAudio = {
     },
 
     /**
-     * Debug overlay — shows framesReceived, underruns, sample rate.
+     * Debug overlay — shows framesReceived, underruns, resyncs, sample rate.
      * Updated every 1 second. Helps diagnose audio pipeline issues.
      */
     _debugTimer: null,
@@ -503,8 +534,8 @@ const LiveAudio = {
             const stats = this.getStats();
             const el = document.getElementById("audio-status");
             if (el) {
-                el.textContent = `${stats.framesReceived}f | ${stats.underruns}u | ${stats.bufferAhead}`;
-                el.title = `frames: ${stats.framesReceived}, underruns: ${stats.underruns}, buffer: ${stats.bufferAhead}, nodes: ${stats.activeNodes}, sr: ${stats.sampleRate}Hz`;
+                el.textContent = `${stats.framesReceived}f | ${stats.underruns}u | ${stats.resyncs}r | ${stats.bufferAhead}`;
+                el.title = `frames: ${stats.framesReceived}, underruns: ${stats.underruns}, resyncs: ${stats.resyncs}, buffer: ${stats.bufferAhead}, nodes: ${stats.activeNodes}, sr: ${stats.sampleRate}Hz`;
             }
         }, 1000);
     },
@@ -519,6 +550,7 @@ const LiveAudio = {
             playing: this.isPlaying,
             framesReceived: this._framesReceived,
             underruns: this._underruns,
+            resyncs: this._resyncs,
             bufferAhead: bufferAhead.toFixed(3) + "s",
             activeNodes: this._sourceNodes.length,
             sampleRate: this._sampleRate,

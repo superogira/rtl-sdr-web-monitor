@@ -44,11 +44,22 @@ DEVICE_TYPES = {
 
 
 def _default_rtl_tcp_config() -> dict:
-    """Return default config for an rtl_tcp device (used by the wizard)."""
+    """Return default config for an rtl_tcp device (used by the wizard).
+
+    `gain` and `freq_correction_ppm` are *recording defaults* — they are used to
+    pre-fill the "เพิ่มการอัดเสียง" editor so admins don't have to retype them
+    every time. They are NOT applied to the live SDR connection.
+    """
     return {
         "host": "127.0.0.1",
         "port": 1234,
         "note": "",
+        "gain": 30,
+        "freq_correction_ppm": 0,
+        # Per-device waterfall dB range used by the live "ฟังสด" view.
+        # These override the global (Display tab) values for this device.
+        "waterfall_db_min": -110,
+        "waterfall_db_max": -55,
     }
 
 

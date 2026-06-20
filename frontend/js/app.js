@@ -199,19 +199,29 @@ const App = {
                 );
             }
         }
-        // Sync gain slider
+        // Sync gain slider + numeric input
         if (data.gain !== undefined) {
             const gs = document.getElementById('gain-slider');
-            const gv = document.getElementById('gain-value');
+            const gi = document.getElementById('gain-input');
             if (gs) gs.value = data.gain;
-            if (gv) gv.textContent = data.gain + ' dB';
+            if (gi) gi.value = data.gain;
         }
-        // Sync squelch slider
+        // Sync squelch slider + numeric input
         if (data.squelch_level !== undefined) {
             const ss = document.getElementById('squelch-slider');
-            const sv = document.getElementById('squelch-value');
+            const si = document.getElementById('squelch-input');
             if (ss) ss.value = data.squelch_level;
-            if (sv) sv.textContent = data.squelch_level + ' dB';
+            if (si) si.value = data.squelch_level;
+        }
+        // Sync PPM (Frequency Correction) slider + numeric input
+        if (data.freq_correction_ppm !== undefined) {
+            const ps = document.getElementById('ppm-slider');
+            const pi = document.getElementById('ppm-input');
+            if (ps) {
+                // Clamp display into slider range; actual value can exceed it via the input field.
+                ps.value = Math.max(-100, Math.min(100, data.freq_correction_ppm));
+            }
+            if (pi) pi.value = data.freq_correction_ppm;
         }
         // Sync GLOBAL VFO offset from backend — but ONLY when NOT listening.
         // When listening, each client owns its own per-listener VFO (set via
@@ -322,7 +332,7 @@ const App = {
         //   hardware settings that affect everyone on the SDR).
         const _user = Auth.getUser();
         if (_user && _user.role !== 'admin') {
-            const adminOnly = ['srate-buttons', 'gain-slider-group', 'btn-center-freq'];
+            const adminOnly = ['srate-buttons', 'gain-slider-group', 'btn-center-freq', 'ppm-slider-group'];
             adminOnly.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
@@ -479,27 +489,104 @@ const App = {
         const freqBox = document.getElementById('freq-display-box');
         if (freqBox) freqBox.addEventListener('click', () => this.showFreqInput());
 
-        // Gain slider
-        const gainSlider = document.getElementById('gain-slider');
-        if (gainSlider) {
-            gainSlider.addEventListener('input', (e) => {
-                document.getElementById('gain-value').textContent = e.target.value + ' dB';
+        // Helper: keep slider ↔ numeric input in sync bidirectionally and
+        // send the value to the backend (with optional debounce).
+        const _bindSliderInputPair = ({ sliderId, inputId, setter, debounceMs = 0, clampToSliderRange = false }) => {
+            const slider = document.getElementById(sliderId);
+            const input = document.getElementById(inputId);
+            if (!slider || !input) return;
+            let syncGuard = false;  // prevent feedback loops slider↔input
+            let timer = null;
+            const send = (val) => {
+                if (timer) clearTimeout(timer);
+                const doSend = () => {
+                    try { setter(val); } catch (err) { console.error('Set failed:', err); }
+                };
+                if (debounceMs > 0) timer = setTimeout(doSend, debounceMs);
+                else doSend();
+            };
+            // Slider → input
+            slider.addEventListener('input', (e) => {
+                if (syncGuard) return;
+                syncGuard = true;
+                input.value = e.target.value;
+                syncGuard = false;
             });
-            gainSlider.addEventListener('change', (e) => {
-                API.sdr.setGain(parseInt(e.target.value)).catch(err => console.error('Gain failed:', err));
+            slider.addEventListener('change', (e) => {
+                send(parseInt(e.target.value));
             });
-        }
+            // Input → slider
+            input.addEventListener('input', (e) => {
+                if (syncGuard) return;
+                syncGuard = true;
+                let v = parseInt(e.target.value);
+                if (!isNaN(v)) {
+                    // Slider only shows a limited range; clamp the displayed
+                    // slider position but keep the actual value in the input.
+                    if (clampToSliderRange) {
+                        slider.value = Math.max(parseInt(slider.min), Math.min(parseInt(slider.max), v));
+                    } else {
+                        slider.value = v;
+                    }
+                }
+                syncGuard = false;
+            });
+            input.addEventListener('change', (e) => {
+                const v = parseInt(e.target.value);
+                if (!isNaN(v)) send(v);
+            });
+        };
 
-        // Squelch slider
-        const squelchSlider = document.getElementById('squelch-slider');
-        if (squelchSlider) {
-            squelchSlider.addEventListener('input', (e) => {
-                document.getElementById('squelch-value').textContent = e.target.value + ' dB';
+        // Gain (slider + numeric input)
+        _bindSliderInputPair({
+            sliderId: 'gain-slider',
+            inputId: 'gain-input',
+            setter: (v) => API.sdr.setGain(v),
+        });
+
+        // Squelch (slider + numeric input)
+        _bindSliderInputPair({
+            sliderId: 'squelch-slider',
+            inputId: 'squelch-input',
+            setter: (v) => API.sdr.setSquelch(parseFloat(v)),
+        });
+
+        // PPM / Frequency Correction (slider + numeric input, debounced)
+        // Numeric input allows values beyond the slider range (-200..200 vs -100..100).
+        _bindSliderInputPair({
+            sliderId: 'ppm-slider',
+            inputId: 'ppm-input',
+            setter: (v) => API.sdr.setFreqCorrection(v),
+            debounceMs: 300,
+            clampToSliderRange: true,
+        });
+
+        // Mini +/- buttons: adjust Gain / SQL / PPM by ±1 (data-target maps
+        // to the input/slider ID prefix, e.g. "gain" → "gain-input").
+        document.querySelectorAll('.step-mini-btn[data-target]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = btn.dataset.target;       // gain | squelch | ppm
+                const delta = parseInt(btn.dataset.delta);  // +1 or -1
+                const input = document.getElementById(target + '-input');
+                const slider = document.getElementById(target + '-slider');
+                if (!input) return;
+                let v = parseInt(input.value) || 0;
+                v += delta;
+                // Clamp to the numeric input's min/max (the authoritative range)
+                const min = parseInt(input.min);
+                const max = parseInt(input.max);
+                if (!isNaN(min)) v = Math.max(min, v);
+                if (!isNaN(max)) v = Math.min(max, v);
+                input.value = v;
+                if (slider) {
+                    const sMin = parseInt(slider.min);
+                    const sMax = parseInt(slider.max);
+                    slider.value = Math.max(sMin, Math.min(sMax, v));
+                }
+                // Dispatch change so the bound pair handler sends it to backend
+                input.dispatchEvent(new Event('change', { bubbles: true }));
             });
-            squelchSlider.addEventListener('change', (e) => {
-                API.sdr.setSquelch(parseFloat(e.target.value)).catch(err => console.error('Squelch failed:', err));
-            });
-        }
+        });
 
         // Record toggle button
         const btnRecord = document.getElementById('btn-record');
@@ -911,6 +998,8 @@ const App = {
                 const rm = document.getElementById('radio-mode');
                 if (rm) rm.textContent = data.mode;
             }
+            // Apply per-device waterfall dB range (overrides global when set)
+            this._applyDeviceWaterfallRange(data);
             // Sync sliders + SRATE button from backend (single source of truth)
             this.syncControlsFromStatus(data);
             // Sync listener count (live audio)
@@ -1141,8 +1230,10 @@ const App = {
     },
 
     _renderWaterfall() {
-        // Read live settings from localStorage (only when NOT in auto mode)
-        if (this._autoMode === 'off') {
+        // Read live settings from localStorage (only when NOT in auto mode
+        // AND no per-device override is active — _applyDeviceWaterfallRange
+        // sets _dbMin/_dbMax directly from the active device config).
+        if (this._autoMode === 'off' && !this._deviceWaterfallActive) {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
         }
@@ -1442,20 +1533,45 @@ const App = {
         localStorage.setItem('waterfall_speed', val);
     },
 
-    // Waterfall dB range
+    // Waterfall dB range (global, from localStorage / Display tab).
+    // NOTE: Per-device values from the active device's config take priority
+    // when "ฟังสด" is active — see _applyDeviceWaterfallRange().
     get waterfallDbMin() {
-        return parseInt(localStorage.getItem('waterfall_db_min') || '-60');
+        return parseInt(localStorage.getItem('waterfall_db_min') || '-110');
     },
     set waterfallDbMin(val) {
         localStorage.setItem('waterfall_db_min', val);
         this._dbMin = val;
     },
     get waterfallDbMax() {
-        return parseInt(localStorage.getItem('waterfall_db_max') || '5');
+        return parseInt(localStorage.getItem('waterfall_db_max') || '-55');
     },
     set waterfallDbMax(val) {
         localStorage.setItem('waterfall_db_max', val);
         this._dbMax = val;
+    },
+
+    // Apply per-device waterfall dB range from SDR status.
+    // Called whenever status is updated. Priority:
+    //   1. Active device config (waterfall_db_min/max from backend)
+    //   2. localStorage (Display tab global setting)
+    //   3. Hardcoded default (-110 / -55)
+    _applyDeviceWaterfallRange(status) {
+        const devMin = status && status.waterfall_db_min != null ? Number(status.waterfall_db_min) : null;
+        const devMax = status && status.waterfall_db_max != null ? Number(status.waterfall_db_max) : null;
+        // Mark whether a per-device override is active. When active,
+        // _renderWaterfall() will NOT overwrite _dbMin/_dbMax from localStorage.
+        this._deviceWaterfallActive = (devMin != null && devMax != null);
+        const newMin = Number.isFinite(devMin) ? devMin : this.waterfallDbMin;
+        const newMax = Number.isFinite(devMax) ? devMax : this.waterfallDbMax;
+        if (newMin !== this._dbMin || newMax !== this._dbMax) {
+            this._dbMin = newMin;
+            this._dbMax = newMax;
+            // Force LUT rebuild on next drawWaterfall() (colorLUTDbMin/Max check)
+            this._colorLUTDbMin = null;
+            this._colorLUTDbMax = null;
+            console.log(`🌊 Applied waterfall dB range: [${newMin}, ${newMax}] (source: ${this._deviceWaterfallActive ? 'device' : 'global'})`);
+        }
     },
 
     drawWaterfall(spectrumData) {

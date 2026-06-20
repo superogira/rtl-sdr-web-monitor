@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=18">
+    <link rel="stylesheet" href="/css/app.css?v=19">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -243,17 +243,45 @@
                 </div>
             </div>
 
-            <!-- Row 2: Gain + Squelch -->
+            <!-- Row 2: Gain + Squelch (with numeric inputs + +/- buttons) -->
             <div class="radio-row radio-sliders">
                 <div class="slider-group" id="gain-slider-group">
                     <span class="slider-label">GAIN</span>
+                    <button class="step-mini-btn" data-target="gain" data-delta="-1" title="ลด Gain ลง 1">−</button>
                     <input type="range" id="gain-slider" min="0" max="50" value="30" step="1">
-                    <span class="slider-value" id="gain-value">30 dB</span>
+                    <button class="step-mini-btn" data-target="gain" data-delta="1" title="เพิ่ม Gain ขึ้น 1">+</button>
+                    <input type="number" id="gain-input" min="0" max="50" value="30" step="1"
+                           style="width:48px; padding:2px 4px; font-size:0.72rem; background:var(--surface-1);
+                                  border:1px solid var(--border); border-radius:3px; color:var(--text-primary);
+                                  font-family:'JetBrains Mono', monospace;" title="กรอกค่า Gain เอง">
+                    <span style="font-size:0.7rem; color:var(--text-secondary);">dB</span>
                 </div>
                 <div class="slider-group">
                     <span class="slider-label">SQL</span>
-                    <input type="range" id="squelch-slider" min="-120" max="-40" value="-70" step="1">
-                    <span class="slider-value" id="squelch-value">-70 dB</span>
+                    <button class="step-mini-btn" data-target="squelch" data-delta="-1" title="ลด SQL ลง 1">−</button>
+                    <input type="range" id="squelch-slider" min="-120" max="-20" value="-70" step="1">
+                    <button class="step-mini-btn" data-target="squelch" data-delta="1" title="เพิ่ม SQL ขึ้น 1">+</button>
+                    <input type="number" id="squelch-input" min="-120" max="-20" value="-70" step="1"
+                           style="width:54px; padding:2px 4px; font-size:0.72rem; background:var(--surface-1);
+                                  border:1px solid var(--border); border-radius:3px; color:var(--text-primary);
+                                  font-family:'JetBrains Mono', monospace;" title="กรอกค่า Squelch เอง">
+                    <span style="font-size:0.7rem; color:var(--text-secondary);">dB</span>
+                </div>
+            </div>
+
+            <!-- Row 3: Frequency Correction (PPM) — Admin Only -->
+            <div class="radio-row radio-sliders" id="ppm-slider-group">
+                <div class="slider-group">
+                    <span class="slider-label">PPM</span>
+                    <button class="step-mini-btn" data-target="ppm" data-delta="-1" title="ลด PPM ลง 1">−</button>
+                    <input type="range" id="ppm-slider" min="-100" max="100" value="0" step="1"
+                           title="ปรับ Frequency Correction (PPM) เพื่อให้ waterfall ตรงกับความถี่จริง">
+                    <button class="step-mini-btn" data-target="ppm" data-delta="1" title="เพิ่ม PPM ขึ้น 1">+</button>
+                    <input type="number" id="ppm-input" min="-200" max="200" value="0" step="1"
+                           style="width:60px; padding:2px 4px; font-size:0.72rem; background:var(--surface-1);
+                                  border:1px solid var(--border); border-radius:3px; color:var(--text-primary);
+                                  font-family:'JetBrains Mono', monospace;" title="กรอกค่า PPM เอง">
+                    <span style="font-size:0.7rem; color:var(--text-secondary);" title="Frequency Correction ในหน่วย Parts Per Million">ppm</span>
                 </div>
             </div>
         </footer>
@@ -263,7 +291,7 @@
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/websocket.js?v=5"></script>
     <script src="/js/audio.js?v=6"></script>
-    <script src="/js/app.js?v=29"></script>
+    <script src="/js/app.js?v=31"></script>
     <script src="/js/dashboard_jobs.js?v=3"></script>
 </body>
 </html>

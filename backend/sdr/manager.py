@@ -127,6 +127,10 @@ class SDRManager:
         # Controls how far from center the VFO can tune (max_offset = sample_rate * ratio).
         self._vfo_margin_ratio: float = 0.40
         self._active_device_id: Optional[str] = None
+        # Per-device waterfall dB range (cached from active device config).
+        # When None, the frontend falls back to its global/localStorage values.
+        self._device_waterfall_db_min: Optional[int] = None
+        self._device_waterfall_db_max: Optional[int] = None
         self._stream_task: Optional[asyncio.Task] = None
         # Stateful streaming demodulator — carries filter state across chunks
         # to eliminate per-chunk boundary clicks (~20 Hz buzz) in live audio
@@ -187,6 +191,9 @@ class SDRManager:
             "listeners": audio_broadcaster.listener_count,
             "max_listeners": audio_broadcaster.max_listeners,
             "device_id": self._active_device_id,
+            # Per-device waterfall dB range (None = use frontend global/localStorage).
+            "waterfall_db_min": self._device_waterfall_db_min,
+            "waterfall_db_max": self._device_waterfall_db_max,
             # Background recording jobs active on any device (for dashboard
             # indicator below the clock).
             "active_job_captures": self._collect_job_captures(),
@@ -334,6 +341,18 @@ class SDRManager:
                 self.client._ppm = int(cfg["freq_correction_ppm"])
             except (TypeError, ValueError):
                 pass
+        # Cache per-device waterfall dB range (frontend applies device-specific
+        # color scale on "ฟังสด"). None/missing → frontend uses global/localStorage.
+        try:
+            _wmin = cfg.get("waterfall_db_min")
+            self._device_waterfall_db_min = int(_wmin) if _wmin is not None else None
+        except (TypeError, ValueError):
+            self._device_waterfall_db_min = None
+        try:
+            _wmax = cfg.get("waterfall_db_max")
+            self._device_waterfall_db_max = int(_wmax) if _wmax is not None else None
+        except (TypeError, ValueError):
+            self._device_waterfall_db_max = None
         # Keep legacy sdr_settings.json in sync (host/port at minimum)
         self._save_persisted_settings()
         logger.info(f"Applied device '{device.name}' ({device.type}) config: "
@@ -882,11 +901,21 @@ class SDRManager:
                         # RAW IQ to every listener, each of which demodulates
                         # its OWN frequency (VFO offset) / mode / bandwidth
                         # independently. One user tuning no longer affects
-                        # anyone else. (Global `audio` above is still used for
-                        # recording + signal level.)
+                        # anyone else. feed_iq() is NON-BLOCKING: it only
+                        # enqueues to each listener's iq_queue; per-listener
+                        # background workers do the demod off the hot path so
+                        # a slow listener can never stall the stream loop.
+                        #
+                        # Pass the already-computed global `audio` so that
+                        # listeners on the SAME channel (mode/bw/vfo) reuse
+                        # it instead of demodulating again (~2x CPU saving).
                         if audio_broadcaster.has_listeners:
-                            await audio_broadcaster.feed_iq(
-                                iq_data, self.client._sample_rate, self.audio_rate
+                            audio_broadcaster.feed_iq(
+                                iq_data, self.client._sample_rate, self.audio_rate,
+                                global_audio=audio if len(audio) > 0 else None,
+                                g_mode=self.mode,
+                                g_channel_bw=self._channel_bw,
+                                g_vfo_offset_hz=self._vfo_offset_hz,
                             )
 
                     _spectrum_counter += 1

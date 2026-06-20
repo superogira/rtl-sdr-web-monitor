@@ -359,16 +359,26 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             }))
         return True
 
+    # Persistent two-task loop: one long-lived task for receiving control
+    # messages, one long-lived task for sending audio frames. Using a pair of
+    # durable tasks (instead of cancelling/recreating receive_text() every
+    # tick) avoids dropping control messages and removes per-tick task churn
+    # from the audio hot path. The two tasks communicate via the listener's
+    # output queue; the send task just drains it. A shared event coordinates
+    # teardown: cancelling the recv task breaks the loop on disconnect.
+    recv_task = asyncio.ensure_future(websocket.receive_text())
     try:
         while True:
-            recv_task = asyncio.ensure_future(websocket.receive_text())
             frame_task = asyncio.ensure_future(listener.queue.get())
             done, pending = await asyncio.wait(
                 {recv_task, frame_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for t in pending:
-                t.cancel()
+            # Only cancel the frame task (short-lived). The recv task is
+            # long-lived: keep it across iterations so we never miss a
+            # control message just because a frame arrived first.
+            if frame_task in pending:
+                frame_task.cancel()
 
             if recv_task in done:
                 try:
@@ -376,6 +386,8 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     cont = await _handle_control(msg)
                     if not cont:
                         break
+                    # Restart the long-lived recv task for the next message.
+                    recv_task = asyncio.ensure_future(websocket.receive_text())
                 except WebSocketDisconnect:
                     break
                 except Exception as e:
@@ -394,6 +406,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger_aud.warning(f"🔊 Audio WS error: {e}")
     finally:
+        recv_task.cancel()
         await audio_broadcaster.unsubscribe(listener)
         logger_aud.info(
             f"🔊 Audio WS disconnected (listeners: {audio_broadcaster.listener_count})"

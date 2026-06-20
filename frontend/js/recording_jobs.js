@@ -30,13 +30,68 @@ const RecordingJobsUI = {
 
     // ---- helpers ----
     _hzToMhz(hz) {
-        const m = (Number(hz) || 0) / 1e6;
-        return m.toFixed(m >= 100 ? 2 : 4);
+        // Always 4 decimals in MHz (= 100 Hz resolution) so values round-trip
+        // correctly through the editor regardless of frequency band.
+        return ((Number(hz) || 0) / 1e6).toFixed(4);
+    },
+
+    _mhzToHz(mhz) {
+        const v = parseFloat(mhz);
+        return Number.isFinite(v) ? Math.round(v * 1e6) : 0;
+    },
+
+    // Get the recording defaults (gain / freq_correction_ppm) stored on a
+    // device's config. Falls back to 30 / 0 when not set (e.g. legacy devices).
+    _getDeviceDefaults(deviceId) {
+        const d = this._devices.find(x => x.id === deviceId);
+        if (!d || !d.config) return { gain: 30, freq_correction_ppm: 0 };
+        const cfg = d.config;
+        const g = (cfg.gain !== undefined && cfg.gain !== null) ? parseInt(cfg.gain) : 30;
+        const p = (cfg.freq_correction_ppm !== undefined && cfg.freq_correction_ppm !== null)
+            ? parseInt(cfg.freq_correction_ppm) : 0;
+        return {
+            gain: Number.isFinite(g) ? g : 30,
+            freq_correction_ppm: Number.isFinite(p) ? p : 0,
+        };
+    },
+
+    // Apply a device's recording defaults to all windows in the editor.
+    // Used when a new job is created or when the user changes the device — so
+    // the admin doesn't have to retype Gain/PPM every time (but can still edit).
+    //
+    // IMPORTANT: We update the internal model AND the DOM inputs directly.
+    // We must NOT call _renderWindows() here because it calls _syncFromDOM()
+    // first, which would read the OLD values from the DOM and overwrite the
+    // defaults we just set.
+    applyDeviceDefaultsToWindows(deviceId) {
+        const def = this._getDeviceDefaults(deviceId);
+        (this._editorWindows || []).forEach(w => {
+            w.gain = def.gain;
+            w.freq_correction_ppm = def.freq_correction_ppm;
+            // Update the DOM inputs directly (they already exist after first render)
+            const gEl = document.getElementById(`w-${w._tempId}-gain`);
+            const pEl = document.getElementById(`w-${w._tempId}-ppm`);
+            if (gEl) gEl.value = def.gain;
+            if (pEl) pEl.value = def.freq_correction_ppm;
+        });
+    },
+
+    // Called when the device <select> changes in the editor.
+    onDeviceChange() {
+        const sel = document.getElementById('rj-device');
+        const deviceId = sel ? sel.value : '';
+        if (deviceId) this.applyDeviceDefaultsToWindows(deviceId);
     },
 
     _escape(s) {
-        const map = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' };
-        return String(s == null ? '' : s).replace(/[&<>"']/g, c => map[c]);
+        // Uses \x escapes in source so entities survive auto-formatting.
+        const A = String.fromCharCode(38);  // &
+        return String(s == null ? '' : s)
+            .replace(/\x26/g, A + 'amp;')
+            .replace(/\x3c/g, A + 'lt;')
+            .replace(/\x3e/g, A + 'gt;')
+            .replace(/\x22/g, A + 'quot;')
+            .replace(/\x27/g, A + '#39;');
     },
 
     async loadServerTimezone() {
@@ -184,7 +239,13 @@ const RecordingJobsUI = {
         const editing = !!job;
         const mode = job ? job.mode : 'always';
         const name = job ? (job.name || '') : '';
-        const deviceId = job ? job.device_id : '';
+        // For a NEW job, auto-select the first free device so its recording
+        // defaults (Gain / PPM) can pre-fill the windows.
+        let deviceId = job ? job.device_id : '';
+        if (!editing) {
+            const firstFree = this._devices.find(d => !this._usedDeviceIds.includes(d.id));
+            if (firstFree) deviceId = firstFree.id;
+        }
         const windows = job ? (job.windows || []) : [this._blankWindow('always')];
 
         // Build modal container
@@ -211,7 +272,8 @@ const RecordingJobsUI = {
             <div class="form-row">
                 <div class="form-group">
                     <label>อุปกรณ์ SDR</label>
-                    <select id="rj-device">${this._availableDeviceOptions(deviceId, deviceId)}</select>
+                    <select id="rj-device" onchange="RecordingJobsUI.onDeviceChange()">${this._availableDeviceOptions(deviceId, deviceId)}</select>
+                    <p id="rj-device-defaults-hint" style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;"></p>
                 </div>
                 <div class="form-group">
                     <label>โหมดการอัด</label>
@@ -235,7 +297,27 @@ const RecordingJobsUI = {
         // Store window data internally and render
         this._editorWindows = windows.map(w => this._cloneWindow(w));
         this._editorMode = mode;
+        // For a NEW job, pre-fill the blank window's Gain/PPM from the device's
+        // recording defaults. (When editing, keep the job's existing values.)
+        if (!editing && deviceId) {
+            const def = this._getDeviceDefaults(deviceId);
+            this._editorWindows.forEach(w => {
+                w.gain = def.gain;
+                w.freq_correction_ppm = def.freq_correction_ppm;
+            });
+        }
+        this._updateDeviceDefaultsHint(deviceId);
         this._renderWindows();
+    },
+
+    // Show a small hint showing the selected device's recording defaults so the
+    // admin understands where the auto-filled Gain/PPM values come from.
+    _updateDeviceDefaultsHint(deviceId) {
+        const el = document.getElementById('rj-device-defaults-hint');
+        if (!el) return;
+        if (!deviceId) { el.textContent = ''; return; }
+        const def = this._getDeviceDefaults(deviceId);
+        el.textContent = `ค่าเริ่มต้นจากอุปกรณ์: Gain ${def.gain} dB · PPM ${def.freq_correction_ppm} (ใช้กรอกอัตโนมัติด้านล่าง แก้ไขเองได้)`;
     },
 
     closeEditor() {
@@ -342,7 +424,7 @@ const RecordingJobsUI = {
             const gp = (id) => { const el = p(id); return el ? el.value : null; };
             w.gain = parseInt(gp(`w-${w._tempId}-gain`)) || 0;
             w.freq_correction_ppm = parseInt(gp(`w-${w._tempId}-ppm`)) || 0;
-            w.start_freq_hz = parseInt(gp(`w-${w._tempId}-start`)) || 0;
+            w.start_freq_hz = this._mhzToHz(gp(`w-${w._tempId}-start`));
             w.sample_rate = parseInt(gp(`w-${w._tempId}-sr`)) || 0;
             if (mode === 'scheduled') {
                 w.start_time = gp(`w-${w._tempId}-st`) || '';
@@ -356,7 +438,7 @@ const RecordingJobsUI = {
                 w.days = days;
             }
             w.frequencies.forEach(f => {
-                f.frequency_hz = parseInt(gp(`f-${f._tempId}-freq`)) || 0;
+                f.frequency_hz = this._mhzToHz(gp(`f-${f._tempId}-freq`));
                 f.squelch_db = parseFloat(gp(`f-${f._tempId}-sq`));
                 f.demod_mode = gp(`f-${f._tempId}-demod`) || 'FM';
                 f.bandwidth_hz = parseInt(gp(`f-${f._tempId}-bw`)) || 12000;
@@ -437,9 +519,9 @@ const RecordingJobsUI = {
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>ความถี่เริ่มต้น (Hz)</label>
-                    <input type="number" id="w-${w._tempId}-start" value="${w.start_freq_hz}" onchange="RecordingJobsUI._renderWindows()">
-                    <div style="font-size:0.72rem; color:var(--text-secondary);">${this._hzToMhz(w.start_freq_hz)} MHz</div>
+                    <label>ความถี่เริ่มต้น (MHz)</label>
+                    <input type="number" id="w-${w._tempId}-start" value="${this._hzToMhz(w.start_freq_hz)}" step="0.0001" onchange="RecordingJobsUI._renderWindows()">
+                    <div style="font-size:0.72rem; color:var(--text-secondary);">${w.start_freq_hz.toLocaleString()} Hz</div>
                 </div>
                 <div class="form-group">
                     <label>Sample Rate (Hz)</label>
@@ -458,8 +540,8 @@ const RecordingJobsUI = {
         <div style="background:var(--surface-1); border:1px solid var(--border); border-radius:4px; padding:8px; margin-top:6px;">
             <div class="form-row" style="grid-template-columns: 1fr 1fr 1fr 1fr;">
                 <div class="form-group" style="margin-bottom:4px;">
-                    <label style="font-size:0.72rem;">ความถี่ (Hz)</label>
-                    <input type="number" id="f-${f._tempId}-freq" value="${f.frequency_hz}" onchange="RecordingJobsUI._renderWindows()" style="font-size:0.78rem;">
+                    <label style="font-size:0.72rem;">ความถี่ (MHz)</label>
+                    <input type="number" id="f-${f._tempId}-freq" value="${this._hzToMhz(f.frequency_hz)}" step="0.0001" onchange="RecordingJobsUI._renderWindows()" style="font-size:0.78rem;">
                 </div>
                 <div class="form-group" style="margin-bottom:4px;">
                     <label style="font-size:0.72rem;">Squelch (dB)</label>
