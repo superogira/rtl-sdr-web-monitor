@@ -50,9 +50,20 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from backend.audio.demod import DemodMode, StreamingDemodulator
+from backend.audio.demod import (
+    DemodMode, StreamingDemodulator, compute_channel_power, iq_to_complex,
+)
 
 logger = logging.getLogger(__name__)
+
+# EMA smoothing factor for the per-listener signal level. A small value keeps
+# the squelch decision stable so brief noise spikes don't "flutter" the gate.
+# 0.2 ≈ average over ~5 chunks (~250ms at the default 50ms IQ cadence).
+_SQUELCH_EMA = 0.2
+# Hysteresis in dB: once the gate is open, the signal must drop this far BELOW
+# the squelch threshold before it closes again. Prevents rapid open/close
+# "chatter" when the signal hovers right at the threshold (classic squelch tail).
+_SQUELCH_HYSTERESIS_DB = 4.0
 
 # Target batch duration in seconds. Each listener accumulates its demodulated
 # audio until this much audio time is collected, then packs it into a single
@@ -141,6 +152,19 @@ class Listener:
         self.is_recording = False
         self.record_buffer: list = []  # list of Float32Array demod audio chunks
         self.record_start_time = None  # time.monotonic() when recording started
+        # Per-listener SQUELCH (mute when signal below threshold).
+        # Initialized from the global squelch value passed at subscribe time.
+        # -120 dBFS is the "disabled" sentinel (pass everything, including
+        # the noise floor / เสียงซ่า) so existing listeners are unaffected
+        # unless a squelch value is explicitly set.
+        self.squelch_db = -120.0
+        # Last measured channel power (dB) for THIS listener's VFO/channel.
+        # Updated by _demod_listener_raw and consumed by _apply_squelch.
+        self.last_signal_db = -120.0
+        # EMA-smoothed signal level (dB), for a stable squelch decision.
+        self._sig_smoothed = -120.0
+        # Hysteresis gate: True while audio is currently passing (open).
+        self._sq_open = False
         # stats
         self.frames_sent = 0
         self.created_at = time.time()
@@ -162,6 +186,17 @@ class Listener:
 
     def set_bandwidth(self, bw_hz: int) -> None:
         self.channel_bw = int(bw_hz)
+
+    def set_squelch(self, level_db: float) -> None:
+        """Set this listener's squelch threshold (dB).
+
+        Values <= -120 dBFS are treated as "squelch disabled" (pass all audio,
+        including noise). Otherwise audio whose smoothed channel power is below
+        this threshold is muted to silence.
+        """
+        self.squelch_db = max(-200.0, min(0.0, float(level_db)))
+        # Force a re-evaluation on the next chunk by leaving _sq_open as-is;
+        # the hysteresis logic in _apply_squelch will settle correctly.
 
 
 class AudioBroadcaster:
@@ -279,7 +314,8 @@ class AudioBroadcaster:
                 global_audio: Optional[np.ndarray] = None,
                 g_mode: Optional[DemodMode] = None,
                 g_channel_bw: Optional[int] = None,
-                g_vfo_offset_hz: Optional[float] = None) -> None:
+                g_vfo_offset_hz: Optional[float] = None,
+                g_signal_level: Optional[float] = None) -> None:
         """Enqueue one IQ chunk to every listener's worker (NON-BLOCKING).
 
         Synchronous on purpose: it only does put_nowait() on each listener's
@@ -297,12 +333,17 @@ class AudioBroadcaster:
         g_channel_bw, vfo=g_vfo_offset_hz). Listeners whose params match the
         global channel reuse this audio and skip their own demodulation,
         halving CPU in the common case.
+
+        `g_signal_level` (optional) is the channel power (dB) already
+        computed by SDRManager for the global channel, so listeners reusing
+        the global audio can update their squelch state without recomputing.
         """
         if not self._listeners:
             return
         self._chunk_count += 1
         pkt = (iq_bytes, int(sample_rate), int(audio_rate),
-               global_audio, g_mode, g_channel_bw, g_vfo_offset_hz)
+               global_audio, g_mode, g_channel_bw, g_vfo_offset_hz,
+               g_signal_level)
         for ln in list(self._listeners.values()):
             try:
                 ln.iq_queue.put_nowait(pkt)
@@ -332,7 +373,8 @@ class AudioBroadcaster:
             while True:
                 pkt = await ln.iq_queue.get()
                 (iq_bytes, sample_rate, audio_rate,
-                 global_audio, g_mode, g_channel_bw, g_vfo) = pkt
+                 global_audio, g_mode, g_channel_bw, g_vfo,
+                 g_signal_level) = pkt
 
                 # Fast path: this listener listens to the SAME channel as the
                 # global demod → reuse the already-computed audio and skip the
@@ -342,6 +384,14 @@ class AudioBroadcaster:
                     global_audio, g_mode, g_channel_bw, g_vfo,
                 ):
                     audio = global_audio
+                    # Update the squelch signal level from the global value so
+                    # squelch works even on the CPU-saving reuse path.
+                    if g_signal_level is not None:
+                        ln.last_signal_db = float(g_signal_level)
+                        ln._sig_smoothed = (
+                            _SQUELCH_EMA * float(g_signal_level)
+                            + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
+                        )
                 else:
                     try:
                         audio = await loop.run_in_executor(
@@ -354,6 +404,11 @@ class AudioBroadcaster:
                         )
                         continue
 
+                # Apply per-listener squelch: mute to silence when the signal
+                # is below the threshold (so live listening hears nothing but
+                # static-free quiet, like a real radio). Done on the loop
+                # thread (cheap: just a zero-comparison + optional zeros_like).
+                audio = self._apply_squelch(ln, audio)
                 frame = self._batch_listener(ln, audio, audio_rate)
                 if frame:
                     self._enqueue_frame(ln, frame)
@@ -387,6 +442,11 @@ class AudioBroadcaster:
         Returns a float32 audio ndarray (possibly empty). Pure CPU work — no
         asyncio/queue ops here. Batching/encoding is done separately on the
         loop thread because it is cheap and touches listener state.
+
+        Also computes the per-listener channel power (dB) so that squelch can
+        gate the audio on the loop thread. We reuse the same IQ the demodulator
+        consumes; compute_channel_power() applies its own VFO shift internally,
+        matching what the demodulator decodes.
         """
         # Track global sample-rate changes (admin changed SDR) and clamp the
         # offset into the valid passband so the shift never aliases.
@@ -398,11 +458,64 @@ class AudioBroadcaster:
                 listener.vfo_offset_hz = max(-max_off, min(max_off, listener.vfo_offset_hz))
 
         listener.demod.set_vfo_offset(listener.vfo_offset_hz)
+
+        # Measure the channel power at this listener's VFO (dB). Done in the
+        # worker thread (CPU) and stored on the listener for the squelch gate.
+        # Cheap relative to the demod filters (one FFT of ≤4096 points).
+        try:
+            iq = iq_to_complex(iq_bytes)
+            level = compute_channel_power(
+                iq, sample_rate, listener.mode,
+                channel_bw=listener.channel_bw,
+                vfo_offset_hz=listener.vfo_offset_hz,
+            )
+            listener.last_signal_db = level
+            # EMA smoothing for a stable squelch decision.
+            listener._sig_smoothed = (
+                _SQUELCH_EMA * level + (1.0 - _SQUELCH_EMA) * listener._sig_smoothed
+            )
+        except Exception:
+            # Non-fatal: leave the previous level. Audio still flows.
+            pass
+
         audio = listener.demod.process(
             iq_bytes, listener.mode, sample_rate, audio_rate,
             channel_bw=listener.channel_bw,
         )
         return audio
+
+    @staticmethod
+    def _apply_squelch(listener: Listener, audio: np.ndarray) -> np.ndarray:
+        """Gate audio through this listener's squelch (in-place decision).
+
+        Returns the original audio if the gate is open, or a zero array of the
+        same shape (silence) if closed. Sending silence (rather than dropping
+        the frame) keeps the client's playback clock continuous so there are
+        no underrun clicks at the open/close transitions.
+
+        Hysteresis: the gate opens when the smoothed level exceeds the
+        threshold, and only closes once it falls threshold - hysteresis_db
+        below. This prevents rapid chatter when the signal sits near the
+        threshold.
+        """
+        # Squelch disabled (sentinel) → always pass audio.
+        if listener.squelch_db <= -120.0:
+            return audio
+
+        level = listener._sig_smoothed
+        if not listener._sq_open:
+            # Gate closed: open when signal rises above the threshold.
+            if level >= listener.squelch_db:
+                listener._sq_open = True
+        else:
+            # Gate open: close only when signal drops below threshold - hyst.
+            if level < listener.squelch_db - _SQUELCH_HYSTERESIS_DB:
+                listener._sq_open = False
+
+        if listener._sq_open:
+            return audio
+        # Mute to silence (preserve length so the client clock stays aligned).
+        return np.zeros_like(audio)
 
     def _batch_listener(self, listener: Listener, audio: np.ndarray,
                         audio_rate: int):

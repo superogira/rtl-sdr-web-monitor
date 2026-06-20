@@ -583,10 +583,23 @@ const App = {
         });
 
         // Squelch (slider + numeric input)
+        // - Updates the GLOBAL squelch (used for auto-recording gating).
+        // - ALSO pushes the value to the per-listener audio WS so that the
+        //   LIVE audio is muted to silence when the signal is below the
+        //   threshold (like a real radio — no static/noise comes through).
+        //   Values <= -120 disable squelch (pass everything, including noise).
         _bindSliderInputPair({
             sliderId: 'squelch-slider',
             inputId: 'squelch-input',
-            setter: (v) => API.sdr.setSquelch(parseFloat(v)),
+            setter: (v) => {
+                const level = parseFloat(v);
+                // Per-listener live squelch (immediate, no round-trip)
+                if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying) {
+                    LiveAudio.setSquelch(level);
+                }
+                // Global squelch (for auto-recording gating + persistence)
+                API.sdr.setSquelch(level);
+            },
         });
 
         // PPM / Frequency Correction (slider + numeric input, debounced)

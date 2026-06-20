@@ -319,6 +319,20 @@ const LiveAudio = {
     },
 
     /**
+     * Set THIS client's squelch threshold (dB) via the audio WS.
+     *
+     * When the demodulated channel power is below this level, the SERVER mutes
+     * the live audio to digital silence — so the user hears a quiet "dead"
+     * carrier instead of white-noise/static, exactly like a real radio.
+     * Values <= -120 dB disable squelch (pass everything, including static).
+     *
+     * Returns true if sent over WS, false if WS not open.
+     */
+    setSquelch(levelDb) {
+        return this.sendControl({ type: "squelch", level: Number(levelDb) });
+    },
+
+    /**
      * Start manual recording for THIS listener (per-user).
      * Server responds with a record_ack message.
      */

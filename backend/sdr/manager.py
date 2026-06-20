@@ -967,6 +967,7 @@ class SDRManager:
                                 g_mode=self.mode,
                                 g_channel_bw=self._channel_bw,
                                 g_vfo_offset_hz=self._vfo_offset_hz,
+                                g_signal_level=self._signal_level,
                             )
 
                     _spectrum_counter += 1

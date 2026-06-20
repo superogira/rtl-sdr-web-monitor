@@ -259,6 +259,11 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             user_id=ws_user_id,
             user_role=ws_user_role,
         )
+        # Initialize the listener's squelch from the global squelch value so a
+        # newly-connected user immediately hears the same squelch behavior as
+        # the global setting (mute to silence when the signal is below the
+        # threshold, like a real radio).
+        listener.set_squelch(float(sdr_manager._squelch_level))
     except RuntimeError as e:
         # Listener cap reached
         await websocket.close(code=1013, reason=str(e))
@@ -327,6 +332,23 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 listener.set_bandwidth(int(msg["bandwidth"]))
             except Exception as e:
                 logger_aud.warning(f"🔊 Bad bandwidth control: {e}")
+        elif mtype == "squelch":
+            # Per-listener squelch control: mute the live audio to silence
+            # when the channel power drops below the given threshold (dB),
+            # like a real radio. Values <= -120 disable squelch (pass all
+            # audio including noise floor).
+            try:
+                listener.set_squelch(float(msg["level"]))
+                await websocket.send_text(json.dumps({
+                    "type": "squelch_ack",
+                    "level": listener.squelch_db,
+                }))
+                logger_aud.info(
+                    f"🔊 Listener {listener.id[:8]} squelch → "
+                    f"{listener.squelch_db:.1f} dB"
+                )
+            except Exception as e:
+                logger_aud.warning(f"🔊 Bad squelch control: {e}")
         elif mtype == "record_start":
             # Per-user manual recording: check if the system allows it.
             # Admins can always record; regular users are subject to the
