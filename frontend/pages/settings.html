@@ -757,7 +757,9 @@
                 document.getElementById('user-display').textContent = `👤 ${user.display_name || user.username}`;
             }
             this.loadTimezoneSetting();
-            this.loadSDRSettings();
+            // NOTE: refreshStatus() below already loads SDR settings via
+            // loadSDRSettings(status), so we don't call it separately here
+            // (was causing a duplicate /api/sdr/status request on page load).
             this.loadDisplaySettings();
             if (isAdmin) this.loadSTTSettings();
             this.loadRecordingSettings();
@@ -775,9 +777,12 @@
 
         // === SDR Settings === Host/port/freq etc. come from active device config.
         // Here we only load system policy values (VFO margin + max listeners).
-        async loadSDRSettings() {
+        // If `status` is passed in, reuse it instead of fetching /api/sdr/status
+        // again. This lets refreshStatus() (which already fetches status) feed
+        // the result here so we don't issue the same request twice on load.
+        async loadSDRSettings(status = null) {
             try {
-                const status = await API.sdr.status();
+                if (!status) status = await API.sdr.status();
                 // VFO margin ratio (admin-configurable passband limit)
                 if (status.vfo_margin_ratio !== undefined) {
                     const el = document.getElementById('sdr-vfo-margin');
@@ -829,6 +834,9 @@
             try {
                 const status = await API.sdr.status();
                 this._lastStatus = status;  // cache for list-view badges
+                // Reuse this status for the system policy fields (VFO margin /
+                // max listeners) so we don't fire a second /api/sdr/status.
+                this.loadSDRSettings(status);
                 const el = document.getElementById('sdr-status');
                 if (el) {
                     const connBadge = status.connected

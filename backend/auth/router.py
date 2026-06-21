@@ -8,7 +8,7 @@ import bcrypt
 from backend.database import get_db
 from backend.models.user import User, UserRole
 from backend.auth.jwt import create_access_token, create_refresh_token, decode_token
-from backend.auth.dependencies import get_current_user, require_admin
+from backend.auth.dependencies import get_current_user, require_admin, invalidate_user_cache
 
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -213,6 +213,7 @@ async def change_password(
 
     current_user.hashed_password = get_password_hash(request.new_password)
     await db.commit()
+    invalidate_user_cache(current_user.id)
 
     return {"message": "Password changed successfully"}
 
@@ -240,6 +241,7 @@ async def update_timezone(
     
     current_user.timezone = request.timezone
     await db.commit()
+    invalidate_user_cache(current_user.id)
     
     return {"message": "Timezone updated successfully", "timezone": request.timezone}
 
@@ -275,6 +277,7 @@ async def toggle_user_active(
 
     user.is_active = not user.is_active
     await db.commit()
+    invalidate_user_cache(user.id)
 
     return {"message": f"User {'enabled' if user.is_active else 'disabled'}", "is_active": user.is_active}
 
@@ -297,5 +300,6 @@ async def delete_user(
 
     await db.delete(user)
     await db.commit()
+    invalidate_user_cache(user.id)
 
     return {"message": "User deleted"}

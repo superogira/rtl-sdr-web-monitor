@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "RTL-SDR Monitor"
     APP_ENV: str = "development"
-    DEBUG: bool = True
+    # Default to False to avoid SQL echo overhead in normal use. The SQL echo
+    # log is extremely verbose and, on busy pages (Recordings/Settings), the
+    # logging I/O dominates response time. Set DEBUG=true only for debugging.
+    DEBUG: bool = False
     SECRET_KEY: str = "change-this-to-a-very-long-random-secret-key"
     SERVER_HOST: str = "0.0.0.0"
     SERVER_PORT: int = 8000

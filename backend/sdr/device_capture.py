@@ -223,14 +223,45 @@ class DeviceCapture:
             raise RuntimeError(
                 f"DeviceCapture: failed to connect {self._host}:{self._port}"
             )
+        # CRITICAL FIX: explicitly apply tuner settings to the HARDWARE.
+        # preconfigure() only writes Python mirrors on the shared RtlTcpClient;
+        # it does NOT send commands to the dongle. And _ensure_connected()
+        # short-circuits (returns True) when the connection is ALREADY up
+        # (e.g. the LIVE autostart consumer connected first), so the tuner
+        # stays on whatever the LIVE consumer last set. We must claim
+        # controller + apply our own freq/sample_rate/gain/ppm explicitly so
+        # the recorded frequency is correct. This was the root cause of
+        # "เสียงซ่าๆ": the JOB demodulated at the LIVE center frequency.
+        await self._reclaim_tuner()
+        # Log the ACTUAL tuner state on the shared device so we can verify
+        # the hardware is tuned to our target.
+        shared = self._shared_client
+        if shared is not None:
+            logger.info(
+                f"📼 DeviceCapture started: job={self.job_id} device={self.device_id} "
+                f"WANTED center={self.center_hz/1e6:.4f} MHz sr={self.sample_rate} "
+                f"gain={self.gain} ppm={self.ppm} | "
+                f"ACTUAL tuner freq={shared._frequency/1e6:.4f} MHz "
+                f"sr={shared._sample_rate} gain={shared._gain} ppm={shared._ppm} | "
+                f"{len(self.channels)} freq(s)"
+            )
+            for ch in self.channels:
+                off = ch.frequency_hz - shared._frequency
+                pct = abs(off) / (shared._sample_rate / 2.0) * 100.0 if shared._sample_rate else 0
+                logger.info(
+                    f"   📻 {ch.frequency_hz/1e6:.4f} MHz ({ch.label}) "
+                    f"offset={off/1e3:+.2f} kHz ({pct:.0f}% of half-band) "
+                    f"{ch.demod_mode.value} bw={ch.bandwidth_hz} squelch={ch.squelch_db}dB"
+                )
+        else:
+            logger.info(
+                f"📼 DeviceCapture started: job={self.job_id} device={self.device_id} "
+                f"center={self.center_hz/1e6:.4f} MHz sr={self.sample_rate} "
+                f"{len(self.channels)} freq(s) (no shared client for logging)"
+            )
         self._running = True
         self._state = STATE_RUNNING
         self._task = asyncio.create_task(self._stream_loop())
-        logger.info(
-            f"📼 DeviceCapture started: job={self.job_id} device={self.device_id} "
-            f"center={self.center_hz/1e6:.4f} MHz sr={self.sample_rate} "
-            f"{len(self.channels)} freq(s)"
-        )
 
     async def stop(self) -> None:
         """Stop capture loop, finish recordings, release pool consumer."""
@@ -344,17 +375,30 @@ class DeviceCapture:
         was listening elsewhere. This guarantees the recorded frequency
         is correct and uses the JOB's ppm, NOT the value the user set
         while listening live.
+
+        NOTE: We intentionally do NOT bail out when we are not yet the
+        controller. The first set_* call below triggers _claim_if_needed
+        on the SharedDeviceConnection, which promotes us to controller if
+        our priority (PRIORITY_JOB=5) outranks the current controller
+        (e.g. an idle LIVE consumer at PRIORITY_IDLE=1). Without claiming
+        here, a freshly started JOB would never take the tuner away from
+        the boot-time autostart LIVE consumer, and would demodulate at
+        the LIVE center frequency → "เสียงซ่าๆ".
         """
-        if not self.client or not self._is_controller():
+        if not self.client:
             return
+        was_controller = self._is_controller()
         logger.info(
             f"🎛️ [job={self.job_id}] Reclaim tuner → "
             f"center={self.center_hz/1e6:.4f} MHz sr={self.sample_rate} "
-            f"gain={self.gain} ppm={self.ppm}"
+            f"gain={self.gain} ppm={self.ppm} "
+            f"(was_controller={was_controller})"
         )
-        # Order matters little here; we own the tuner now. set_freq_correction
-        # re-applies set_frequency internally, so do ppm first then freq/sr/gain
-        # to be explicit and avoid relying on internal side effects.
+        # These calls trigger _claim_if_needed on the SharedDeviceConnection,
+        # which promotes us to controller if our priority outranks the
+        # current controller (e.g. boot-time autostart LIVE @ PRIORITY_IDLE).
+        # set_freq_correction re-applies set_frequency internally, so do ppm
+        # first then freq/sr/gain to be explicit.
         await self.client.set_freq_correction(self.ppm)
         await self.client.set_frequency(self.center_hz)
         await self.client.set_sample_rate(self.sample_rate)
@@ -370,6 +414,10 @@ class DeviceCapture:
         for ch in self.channels:
             ch.demod.reset()
             ch.demod.set_vfo_offset(ch.offset_hz)
+        if not was_controller and self._is_controller():
+            logger.info(
+                f"🎛️ [job={self.job_id}] Claimed tuner (was not controller before)"
+            )
 
     @property
     def is_running(self) -> bool:

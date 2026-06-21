@@ -17,7 +17,7 @@ from backend.audio.convert import (
     VALID_FORMATS, prepare_for_stt, cleanup_temp, mime_type_for_format,
 )
 from backend.config import settings
-from backend.services.app_settings import get_setting
+from backend.services.app_settings import get_settings_dict
 
 logger = logging.getLogger(__name__)
 
@@ -40,27 +40,39 @@ def _validate_audio_format(value: str) -> str:
 
 
 async def _get_stt_config() -> dict:
-    """Load STT config from DB (global app settings), falling back to env."""
-    provider = await get_setting("stt_provider", settings.STT_PROVIDER or "speechmatics")
-    api_key = await get_setting("stt_speechmatics_api_key", settings.SPEECHMATICS_API_KEY or "")
-    language = await get_setting("stt_language", settings.SPEECHMATICS_LANGUAGE or "th")
-    auto = await get_setting("stt_auto_transcribe", "false")
-    operating_point = await get_setting("stt_operating_point", "standard")
-    diarization = await get_setting("stt_diarization", "none")
-    enable_entities_raw = await get_setting("stt_enable_entities", "false")
+    """Load STT config from DB (global app settings), falling back to env.
+
+    Performance: fetches ALL stt_* settings in a single DB query instead of
+    issuing one query per key (previously ~19 round-trips per call).
+    """
+    # Single round-trip: read every stt_* key into a dict.
+    raw = await get_settings_dict("stt_")
+
+    def _g(key, default):
+        """Get value from the prefetched dict, falling back to default."""
+        v = raw.get(key)
+        return v if v is not None else default
+
+    provider = _g("stt_provider", settings.STT_PROVIDER or "speechmatics")
+    api_key = _g("stt_speechmatics_api_key", settings.SPEECHMATICS_API_KEY or "")
+    language = _g("stt_language", settings.SPEECHMATICS_LANGUAGE or "th")
+    auto = _g("stt_auto_transcribe", "false")
+    operating_point = _g("stt_operating_point", "standard")
+    diarization = _g("stt_diarization", "none")
+    enable_entities_raw = _g("stt_enable_entities", "false")
     # Azure-specific settings
-    azure_key = await get_setting("stt_azure_key", settings.AZURE_SPEECH_KEY or "")
-    azure_region = await get_setting("stt_azure_region", settings.AZURE_SPEECH_REGION or "southeastasia")
+    azure_key = _g("stt_azure_key", settings.AZURE_SPEECH_KEY or "")
+    azure_region = _g("stt_azure_region", settings.AZURE_SPEECH_REGION or "southeastasia")
     # Whisper Local (faster-whisper-server / Gradio API) settings
-    whisper_local_host = await get_setting("stt_whisper_local_host", settings.WHISPER_LOCAL_HOST or "")
-    whisper_local_port = await get_setting("stt_whisper_local_port", str(settings.WHISPER_LOCAL_PORT or 8100))
-    whisper_local_model = await get_setting("stt_whisper_local_model", settings.WHISPER_LOCAL_MODEL or "Systran/faster-whisper-small")
-    whisper_local_task = await get_setting("stt_whisper_local_task", settings.WHISPER_LOCAL_TASK or "transcribe")
-    whisper_local_temperature = await get_setting("stt_whisper_local_temperature", str(settings.WHISPER_LOCAL_TEMPERATURE if settings.WHISPER_LOCAL_TEMPERATURE is not None else 0.0))
+    whisper_local_host = _g("stt_whisper_local_host", settings.WHISPER_LOCAL_HOST or "")
+    whisper_local_port = _g("stt_whisper_local_port", str(settings.WHISPER_LOCAL_PORT or 8100))
+    whisper_local_model = _g("stt_whisper_local_model", settings.WHISPER_LOCAL_MODEL or "Systran/faster-whisper-small")
+    whisper_local_task = _g("stt_whisper_local_task", settings.WHISPER_LOCAL_TASK or "transcribe")
+    whisper_local_temperature = _g("stt_whisper_local_temperature", str(settings.WHISPER_LOCAL_TEMPERATURE if settings.WHISPER_LOCAL_TEMPERATURE is not None else 0.0))
     # Per-provider audio format preprocessing (off|wav|flac|mp3).
-    speechmatics_audio_format = await get_setting("stt_speechmatics_audio_format", "off")
-    whisper_local_audio_format = await get_setting("stt_whisper_local_audio_format", "off")
-    azure_audio_format = await get_setting("stt_azure_audio_format", "off")
+    speechmatics_audio_format = _g("stt_speechmatics_audio_format", "off")
+    whisper_local_audio_format = _g("stt_whisper_local_audio_format", "off")
+    azure_audio_format = _g("stt_azure_audio_format", "off")
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",

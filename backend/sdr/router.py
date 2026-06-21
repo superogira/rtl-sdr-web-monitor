@@ -400,6 +400,41 @@ async def stop_recording(current_user: User = Depends(get_current_user)):
 FREQ_TOLERANCE_KHZ = 5.0  # tolerance สำหรับ frequency filter (±5 kHz)
 
 
+def _apply_recording_filters(stmt, source, search, frequency_mhz, device_id):
+    """Apply the shared filter set (source/device/frequency/search) to a query.
+
+    Centralizes filter logic so the list/count/sum queries stay in sync and
+    we avoid running 3 separate filtered queries (was list + count + sum).
+    """
+    if source:
+        stmt = stmt.where(Recording.source == source)
+    if device_id:
+        stmt = stmt.where(Recording.device_id == device_id)
+    if frequency_mhz is not None:
+        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
+        center_hz = frequency_mhz * 1e6
+        stmt = stmt.where(
+            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
+        )
+    if search:
+        s = f"%{search}%"
+        # frequency search by kHz (e.g. "145" matches 145500000 Hz)
+        freq_search = None
+        try:
+            freq_search = float(search) * 1e6
+        except (ValueError, TypeError):
+            pass
+        clauses = [
+            Recording.transcript.ilike(s),
+            Recording.audio_file_name.ilike(s),
+            Recording.mode.ilike(s),
+        ]
+        if freq_search is not None:
+            clauses.append(Recording.frequency == freq_search)
+        stmt = stmt.where(or_(*clauses))
+    return stmt
+
+
 @recordings_router.get("")
 async def list_recordings(
     limit: int = 50,
@@ -419,101 +454,25 @@ async def list_recordings(
     - frequency_mhz: filter by center frequency with ±5 kHz tolerance (e.g. 145.5 matches 145.4975–145.5025 MHz)
     - device_id: filter by SDR device ID
     """
-    query = select(Recording).order_by(Recording.recorded_at.desc())
-    if source:
-        query = query.where(Recording.source == source)
-    if device_id:
-        query = query.where(Recording.device_id == device_id)
-    if frequency_mhz is not None:
-        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
-        center_hz = frequency_mhz * 1e6
-        query = query.where(
-            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
-        )
-    if search:
-        s = f"%{search}%"
-        # frequency search by kHz (e.g. "145" matches 145500000 Hz)
-        freq_search = None
-        try:
-            freq_search = float(search) * 1e6
-        except (ValueError, TypeError):
-            pass
-        clauses = [
-            Recording.transcript.ilike(s),
-            Recording.audio_file_name.ilike(s),
-            Recording.mode.ilike(s),
-        ]
-        if freq_search is not None:
-            clauses.append(Recording.frequency == freq_search)
-        query = query.where(or_(*clauses))
-    query = query.limit(limit).offset(offset)
-    result = await db.execute(query)
-    recordings = result.scalars().all()
+    # --- Page of rows ---
+    rows_q = _apply_recording_filters(
+        select(Recording).order_by(Recording.recorded_at.desc()),
+        source, search, frequency_mhz, device_id,
+    ).limit(limit).offset(offset)
+    recordings = (await db.execute(rows_q)).scalars().all()
 
-    # Count total (must apply same filters)
-    count_q = select(func.count(Recording.id))
-    if source:
-        count_q = count_q.where(Recording.source == source)
-    if device_id:
-        count_q = count_q.where(Recording.device_id == device_id)
-    if frequency_mhz is not None:
-        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
-        center_hz = frequency_mhz * 1e6
-        count_q = count_q.where(
-            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
-        )
-    if search:
-        s = f"%{search}%"
-        freq_search = None
-        try:
-            freq_search = float(search) * 1e6
-        except (ValueError, TypeError):
-            pass
-        clauses = [
-            Recording.transcript.ilike(s),
-            Recording.audio_file_name.ilike(s),
-            Recording.mode.ilike(s),
-        ]
-        if freq_search is not None:
-            clauses.append(Recording.frequency == freq_search)
-        count_q = count_q.where(or_(*clauses))
-    total_result = await db.execute(count_q)
-    total = total_result.scalar()
-
-    # Sum of duration (same filters) — ใช้สำหรับแสดงเวลารวมในหน้ารายการ
-    dur_q = select(func.coalesce(func.sum(Recording.duration), 0.0))
-    if source:
-        dur_q = dur_q.where(Recording.source == source)
-    if device_id:
-        dur_q = dur_q.where(Recording.device_id == device_id)
-    if frequency_mhz is not None:
-        tol_hz = FREQ_TOLERANCE_KHZ * 1e3
-        center_hz = frequency_mhz * 1e6
-        dur_q = dur_q.where(
-            Recording.frequency.between(center_hz - tol_hz, center_hz + tol_hz)
-        )
-    if search:
-        s = f"%{search}%"
-        freq_search = None
-        try:
-            freq_search = float(search) * 1e6
-        except (ValueError, TypeError):
-            pass
-        clauses = [
-            Recording.transcript.ilike(s),
-            Recording.audio_file_name.ilike(s),
-            Recording.mode.ilike(s),
-        ]
-        if freq_search is not None:
-            clauses.append(Recording.frequency == freq_search)
-        dur_q = dur_q.where(or_(*clauses))
-    dur_result = await db.execute(dur_q)
-    total_duration = dur_result.scalar() or 0.0
+    # --- Total + total_duration in ONE aggregated query ---
+    # (Previously this ran two separate queries with duplicated filter code.)
+    agg_q = _apply_recording_filters(
+        select(func.count(Recording.id), func.coalesce(func.sum(Recording.duration), 0.0)),
+        source, search, frequency_mhz, device_id,
+    )
+    total, total_duration = (await db.execute(agg_q)).one()
 
     return {
         "items": [r.to_dict() for r in recordings],
         "total": total,
-        "total_duration": round(total_duration, 1),
+        "total_duration": round(total_duration or 0.0, 1),
         "limit": limit,
         "offset": offset,
     }
