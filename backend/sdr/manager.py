@@ -15,7 +15,9 @@ import soundfile as sf
 
 from backend.config import settings
 from backend.sdr.rtl_tcp import RtlTcpClient
-from backend.sdr.connection_pool import pool as connection_pool, PRIORITY_LIVE
+from backend.sdr.connection_pool import (
+    pool as connection_pool, PRIORITY_LIVE, PRIORITY_IDLE,
+)
 from backend.audio.demod import (
     DemodMode, demodulate, compute_signal_level, StreamingDemodulator,
 )
@@ -140,6 +142,15 @@ class SDRManager:
         # changes and resets its filter state internally, so no extra tracking
         # fields are needed here.
         self._demod = StreamingDemodulator()
+        # Track the listener count so we can demote/promote our LIVE pool
+        # consumer's priority. When there are NO listeners we demote to
+        # PRIORITY_IDLE (1) so background recording jobs (PRIORITY_JOB=5) can
+        # take over the tuner. When a listener connects we promote back to
+        # PRIORITY_LIVE (10) so the user retunes instantly.
+        self._last_listener_count: int = 0
+        audio_broadcaster.on_listener_count_change(
+            self._on_listener_count_changed
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -477,11 +488,25 @@ class SDRManager:
         host = self.client.host
         port = self.client.port
 
-        # Acquire a shared consumer for live listening
+        # Acquire a shared consumer for live listening. Use PRIORITY_IDLE when
+        # there are no listeners so background recording jobs (PRIORITY_JOB=5)
+        # can take over the tuner immediately. The listener-count callback
+        # (_on_listener_count_changed) will promote us back to PRIORITY_LIVE as
+        # soon as a user connects to /ws/audio. This is what allows scheduled
+        # jobs to run even while the 24/7 autostart stream is up.
+        initial_prio = (
+            PRIORITY_LIVE if audio_broadcaster.listener_count > 0
+            else PRIORITY_IDLE
+        )
         consumer = await connection_pool.acquire(
             device_id, host, port,
-            consumer_id="live", priority=PRIORITY_LIVE,
+            consumer_id="live", priority=initial_prio,
         )
+        if initial_prio == PRIORITY_IDLE:
+            logger.info(
+                "🎛️ LIVE consumer acquired with PRIORITY_IDLE "
+                "(no listeners — jobs may take the tuner)"
+            )
         # Preconfigure tuner values before connecting so the RTL-TCP
         # handshake sends correct freq/sr/gain/ppm.
         consumer.preconfigure(
@@ -855,6 +880,50 @@ class SDRManager:
 
     def on_spectrum(self, callback):
         self._spectrum_callbacks.append(callback)
+
+    def _on_listener_count_changed(self, count: int) -> None:
+        """Broadcaster callback: promote/demote our LIVE pool consumer.
+
+        Called synchronously from AudioBroadcaster.subscribe/unsubscribe
+        (on the event-loop thread) whenever the listener count changes.
+
+        - count > 0 : promote consumer "live" to PRIORITY_LIVE (10) so the
+          user can retune instantly and the tuner follows the user. The
+          promotion triggers preemption, which pauses any background job
+          (which then demodulates at an offset or waits).
+        - count == 0 : demote consumer "live" to PRIORITY_IDLE (1) so any
+          background recording job (PRIORITY_JOB=5) outranks it and can
+          reclaim the tuner + re-apply its own freq/gain/ppm.
+
+        This is scheduled as a task because set_priority() is async and we
+        are invoked from a sync broadcaster path.
+        """
+        self._last_listener_count = count
+        target = PRIORITY_LIVE if count > 0 else PRIORITY_IDLE
+        # Only act if we currently own a pool consumer (connected) and the
+        # consumer exposes set_priority (SharedConnectionConsumer).
+        if not self._consumer_id or not self._pool_device_id:
+            return
+        consumer = self.client
+        set_prio = getattr(consumer, "set_priority", None)
+        if not callable(set_prio):
+            return
+
+        async def _do():
+            try:
+                await set_prio(target)
+                logger.info(
+                    f"🎛️ LIVE consumer priority → {target} "
+                    f"(listeners={count})"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to adjust LIVE priority: {e}")
+
+        try:
+            asyncio.create_task(_do())
+        except RuntimeError:
+            # No running loop (shouldn't happen here): best-effort no-op.
+            pass
 
     def _device_has_active_jobs(self) -> bool:
         """Check if the active device has any running background recording job."""

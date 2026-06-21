@@ -28,8 +28,10 @@ from backend.sdr.rtl_tcp import RtlTcpClient
 logger = logging.getLogger(__name__)
 
 # Priority levels (higher wins arbitration)
-PRIORITY_LIVE = 10   # SDRManager (interactive listening)
-PRIORITY_JOB = 5     # DeviceCapture (background recording)
+PRIORITY_LIVE = 10   # SDRManager (interactive listening WITH listeners)
+PRIORITY_JOB = 5     # DeviceCapture (background recording jobs)
+PRIORITY_IDLE = 1    # SDRManager holding the tuner with NO listeners
+                     # (idle live stream — yields to background jobs)
 
 
 class SharedConnectionConsumer:
@@ -115,6 +117,17 @@ class SharedConnectionConsumer:
     async def set_freq_correction(self, ppm: int) -> None:
         await self._conn.set_freq_correction(self._id, ppm)
         self._ppm = self._conn.client._ppm
+
+    async def set_priority(self, priority: int) -> None:
+        """Dynamically change this consumer's priority and re-arbitrate.
+
+        Used by SDRManager to demote its LIVE consumer to IDLE when there are
+        no listeners (so background jobs can take over), and promote it back
+        to LIVE when a listener connects. Triggers preemption callbacks if the
+        controller should change.
+        """
+        self._priority = int(priority)
+        await self._conn.set_consumer_priority(self._id, self._priority)
 
     def set_connection(self, host: str, port: int) -> None:
         """Update target host/port (applied on next connect)."""
@@ -293,6 +306,65 @@ class SharedDeviceConnection:
             self._fire_preempt(consumer_id, priority, old_id, old_prio)
             return True
         return False
+
+    async def set_consumer_priority(self, consumer_id: str, priority: int) -> None:
+        """Dynamically change a consumer's priority and re-arbitrate control.
+
+        Two cases:
+          1. The changed consumer IS the controller and was demoted (e.g. LIVE
+             → IDLE): find the highest-priority remaining consumer and, if it
+             now outranks the demoted one, hand control to it and fire preempt
+             so the new controller can reclaim its tuner settings.
+          2. The changed consumer is NOT the controller but its new priority
+             now outranks the current controller (e.g. IDLE → LIVE): hand
+             control to it and fire preempt so the old controller pauses.
+        """
+        async with self._lock:
+            c = self._consumers.get(consumer_id)
+            if not c:
+                return
+            old_prio = c._priority
+            c._priority = int(priority)
+            logger.info(
+                f"🎛️ SharedConnection {self.device_id}: priority "
+                f"{consumer_id} {old_prio} → {priority}"
+            )
+
+            if self._controller_id == consumer_id:
+                # Controller's priority changed: if someone now outranks it,
+                # promote that consumer.
+                best_id, best = max(
+                    self._consumers.items(), key=lambda kv: kv[1]._priority
+                )
+                if best_id != consumer_id and best._priority > c._priority:
+                    old_id = self._controller_id
+                    old_prio_ctrl = self._controller_priority
+                    self._controller_id = best_id
+                    self._controller_priority = best._priority
+                    logger.info(
+                        f"🎛️ SharedConnection {self.device_id}: control "
+                        f"{old_id} → {best_id} (re-arbitrate after demotion, "
+                        f"priority {best._priority})"
+                    )
+                    self._fire_preempt(
+                        best_id, best._priority, old_id, old_prio_ctrl
+                    )
+            else:
+                # Non-controller's priority changed: if it now outranks the
+                # current controller, promote it.
+                if c._priority > self._controller_priority:
+                    old_id = self._controller_id
+                    old_prio_ctrl = self._controller_priority
+                    self._controller_id = consumer_id
+                    self._controller_priority = c._priority
+                    logger.info(
+                        f"🎛️ SharedConnection {self.device_id}: control "
+                        f"{old_id} → {consumer_id} (re-arbitrate after "
+                        f"promotion, priority {c._priority})"
+                    )
+                    self._fire_preempt(
+                        consumer_id, c._priority, old_id, old_prio_ctrl
+                    )
 
     # ---- tuner setters (only controller or higher-priority may call) ----
     async def set_frequency(self, consumer_id: str, freq_hz: int) -> None:

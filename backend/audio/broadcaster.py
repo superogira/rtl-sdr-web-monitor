@@ -46,7 +46,7 @@ import logging
 import struct
 import time
 import uuid
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -228,6 +228,28 @@ class AudioBroadcaster:
         self._chunk_count = 0
         self._bytes_sent = 0
         self._last_audio_time = 0.0
+        # Listener-count change callbacks. Fired (on the event-loop thread)
+        # whenever a listener is added or removed so external components
+        # (SDRManager) can react — e.g. promote/demote their pool consumer
+        # priority. Callback signature: cb(listener_count: int).
+        self._listener_count_callbacks: List[Callable[[int], None]] = []
+
+    def on_listener_count_change(self, callback: Callable[[int], None]) -> None:
+        """Register a callback fired when the listener count changes.
+
+        Used by SDRManager to promote its pool consumer to PRIORITY_LIVE when
+        a listener connects, and demote it to PRIORITY_IDLE (yielding the
+        tuner to background jobs) when the last listener leaves.
+        """
+        self._listener_count_callbacks.append(callback)
+
+    def _fire_listener_count_change(self, count: int) -> None:
+        """Fire all registered listener-count-change callbacks (best-effort)."""
+        for cb in self._listener_count_callbacks:
+            try:
+                cb(count)
+            except Exception as e:
+                logger.warning("🔊 Listener-count callback error: %s", e)
 
     def set_max_listeners(self, n: int) -> int:
         """Set the configurable listener cap.
@@ -281,6 +303,8 @@ class AudioBroadcaster:
                 name=f"demod-{listener.id[:8]}",
             )
         logger.info("🔊 Audio listener added (total: %d)", len(self._listeners))
+        # Notify SDRManager so it can promote its pool consumer to LIVE.
+        self._fire_listener_count_change(len(self._listeners))
         return listener
 
     async def unsubscribe(self, listener: Listener) -> None:
@@ -298,6 +322,9 @@ class AudioBroadcaster:
             except (asyncio.CancelledError, Exception):
                 pass
         logger.info("🔊 Audio listener removed (total: %d)", len(self._listeners))
+        # Notify SDRManager so it can demote its pool consumer to IDLE (which
+        # yields the tuner to background jobs when the last listener leaves).
+        self._fire_listener_count_change(len(self._listeners))
 
     def reset_all_vfo(self) -> None:
         """Reset every listener's VFO offset to 0 (center frequency).
