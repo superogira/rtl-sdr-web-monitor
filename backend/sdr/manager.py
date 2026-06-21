@@ -985,23 +985,24 @@ class SDRManager:
                                 logger.info(f"Manual recording hit max duration ({self._max_recording_duration}s), finishing")
                                 await self._finish_manual_recording()
 
-                    # === Idle streaming timeout (release device for jobs) ===
-                    if audio_broadcaster.has_listeners:
-                        self._idle_since = None
-                    else:
-                        if self._idle_since is None:
-                            self._idle_since = time.time()
-                        elapsed_idle = time.time() - self._idle_since
-                        if elapsed_idle > self._IDLE_STREAMING_TIMEOUT \
-                                and self._device_has_active_jobs():
-                            logger.info(
-                                f"⏱️ No listeners for {elapsed_idle:.0f}s and device has "
-                                f"active jobs → stopping live streaming to free device"
-                            )
-                            if self._auto_recording:
-                                await self._finish_auto_recording()
-                            await self.stop_streaming()
-                            break
+                    # NOTE: The previous "idle streaming timeout" block was
+                    # removed. It stopped live streaming after 60s with no
+                    # listeners whenever the active device had background
+                    # recording jobs — but this harmed rather than helped:
+                    #   1. It did NOT free the RTL-TCP connection (only
+                    #      disconnect()/_release_pool_consumer() does), so
+                    #      jobs gained nothing.
+                    #   2. The connection pool already shares ONE RTL-TCP
+                    #      connection via IQ fan-out between live (SDRManager)
+                    #      and jobs (DeviceCapture), with priority-based
+                    #      pause/resume, so live + jobs coexist fine.
+                    #   3. Stopping the stream flipped the UI back to
+                    #      "รับสัญญาณ" ("📡 Streaming was stopped by the
+                    #      backend.") and blocked manual recording, which
+                    #      requires an active stream — forcing users to press
+                    #      "ฟังสด" first as a workaround.
+                    # Now live streaming stays up until the user stops it or
+                    # the RTL-TCP connection is genuinely lost.
 
                     # === TRACK 2: Auto recording (gated by active listeners) ===
                     # Auto-record from live listening requires active listeners,

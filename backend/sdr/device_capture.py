@@ -1,10 +1,23 @@
 """
 DeviceCapture — background IQ capture + per-frequency recording for one SDR device.
 
-Each DeviceCapture owns a dedicated RtlTcpClient (independent from the live
-SDRManager used for interactive listening). It connects to the device's
-rtl_tcp endpoint, tunes to the window's center frequency
-((start_freq + sample_rate) / 2), then continuously reads IQ samples.
+IMPORTANT (shared tuner): Each DeviceCapture acquires a SHARED consumer from
+the DeviceConnectionPool. There is exactly ONE RtlTcpClient (and therefore
+ONE tuner: center freq / sample rate / gain / ppm) per physical device,
+shared between interactive listening (SDRManager, PRIORITY_LIVE) and this
+background recording (PRIORITY_JOB).
+
+Because the tuner is shared:
+  * When a LIVE listener claims the tuner (retunes/changes ppm), this JOB
+    is preempted via on_preempt() and pauses. Any in-progress recording is
+    finished so the saved audio is not spliced across frequencies.
+  * When the LIVE listener releases the tuner, this JOB reclaims it and
+    RE-APPLIES its own center freq / sample rate / gain / ppm, so the
+    recorded frequency is correct and uses the JOB's ppm — not whatever the
+    user happened to set while listening live.
+
+It tunes the shared device to the window's center frequency
+((start_freq + sample_rate) / 2), then continuously reads fanned-out IQ.
 
 For each target frequency (which must lie within [start_freq, start_freq +
 sample_rate]) it:
@@ -15,7 +28,7 @@ sample_rate]) it:
     (or hits `max_recording_duration`).
 
 This module is used by JobScheduler (backend/sdr/job_scheduler.py) to run
-recording jobs in the background without interfering with interactive use.
+recording jobs in the background. See connection_pool.py for arbitration.
 """
 import asyncio
 import logging
@@ -30,7 +43,9 @@ import soundfile as sf
 
 from backend.config import settings
 from backend.sdr.rtl_tcp import RtlTcpClient
-from backend.sdr.connection_pool import pool as connection_pool, PRIORITY_JOB
+from backend.sdr.connection_pool import (
+    pool as connection_pool, PRIORITY_JOB, PRIORITY_LIVE,
+)
 from backend.audio.demod import DemodMode, StreamingDemodulator, compute_signal_level
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
@@ -153,6 +168,27 @@ class DeviceCapture:
             self._host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
             self._port = int(cfg.get("port") or settings.RTL_TCP_PORT)
 
+    @property
+    def _shared_client(self) -> Optional[RtlTcpClient]:
+        """The single underlying RtlTcpClient shared by all consumers.
+
+        The connection pool fans out IQ to each consumer, but the tuner
+        (freq/sample_rate/gain/ppm) lives on THIS shared client. We must read
+        the ACTUAL tuner state from here (not from our consumer's mirror,
+        which goes stale the moment a LIVE consumer retunes the device).
+        """
+        try:
+            return self.client._conn.client if self.client else None
+        except Exception:
+            return None
+
+    def _is_controller(self) -> bool:
+        """True if this JOB consumer currently owns the shared tuner."""
+        try:
+            return self.client._conn._controller_id == self._consumer_id
+        except Exception:
+            return False
+
     async def start(self) -> None:
         """Connect via the shared pool and start the background capture loop."""
         if self._running:
@@ -163,6 +199,16 @@ class DeviceCapture:
             self.device_id, self._host, self._port,
             consumer_id=self._consumer_id, priority=PRIORITY_JOB,
         )
+        # Register the preemption callback so we get paused when a LIVE
+        # consumer claims the tuner, and can reclaim it when LIVE leaves.
+        # Without this, on_preempt() was never wired up (dead code) and JOB
+        # kept demodulating at stale offsets while the user listened elsewhere.
+        try:
+            self.client._conn.on_preempt(self._on_preempt)
+        except Exception as e:
+            logger.warning(
+                f"DeviceCapture: failed to register preempt callback: {e}"
+            )
         # Preconfigure tuner values before connecting
         self.client.preconfigure(self.center_hz, self.sample_rate, self.gain, self.ppm)
         ok = await self.client.connect()
@@ -228,6 +274,102 @@ class DeviceCapture:
         if self._state == STATE_PAUSED:
             self._state = STATE_RUNNING
             logger.info(f"▶️ DeviceCapture resumed: job={self.job_id}")
+
+    # ------------------------------------------------------------------
+    # Preemption handling (single shared tuner)
+    # ------------------------------------------------------------------
+    def _on_preempt(self, new_id: Optional[str], new_prio: int,
+                    old_id: Optional[str], old_prio: int) -> None:
+        """Called by SharedDeviceConnection when the controller changes.
+
+        - LIVE (interactive listening) claims the tuner → we PAUSE.
+          We must finish any in-progress recording, because the tuner is
+          now on a different center frequency and continuing to buffer
+          would splice audio from the wrong frequency.
+        - LIVE releases the tuner and we become controller again → we
+          RESUME and RE-APPLY our tuner (freq/sample_rate/gain/ppm),
+          because LIVE may have retuned/changed ppm. Without this the
+          recorded frequency would be off and ppm would be the user's.
+        """
+        if not self._running:
+            return
+        # We are being preempted by a higher-priority consumer (LIVE).
+        if new_id != self._consumer_id and new_prio >= PRIORITY_LIVE:
+            logger.info(
+                f"⏸️ [job={self.job_id}] Preempted by {new_id} (prio {new_prio})"
+            )
+            self.pause()
+            # Finish in-progress recordings on a best-effort basis (the tuner
+            # just moved, so any further buffering would be the wrong freq).
+            asyncio.ensure_future(self._finish_all_in_progress())
+            return
+        # Control has come back to us (LIVE left).
+        if new_id == self._consumer_id and old_id != self._consumer_id:
+            logger.info(
+                f"▶️ [job={self.job_id}] Reclaimed tuner from {old_id}"
+            )
+            asyncio.ensure_future(self._reclaim_and_resume())
+
+    async def _finish_all_in_progress(self) -> None:
+        """Finish every in-progress channel recording (used on preempt)."""
+        for ch in self.channels:
+            try:
+                if ch.is_recording and ch.buffer:
+                    await self._finish_recording(ch)
+            except Exception as e:
+                logger.warning(f"Preempt finish error freq={ch.frequency_hz}: {e}")
+
+    async def _reclaim_and_resume(self) -> None:
+        """Re-apply our tuner settings, then resume processing IQ."""
+        try:
+            await self._reclaim_tuner()
+        except Exception as e:
+            logger.warning(f"Reclaim tuner failed for job {self.job_id}: {e}")
+        # Only resume if we actually are the controller now (could have been
+        # re-preempted in the meantime).
+        if self._is_controller():
+            self.resume()
+        else:
+            logger.info(
+                f"⏸️ [job={self.job_id}] Still not controller after reclaim; "
+                f"staying paused"
+            )
+
+    async def _reclaim_tuner(self) -> None:
+        """Re-apply this job's full tuner state to the shared device.
+
+        Called whenever we (re)gain control of the tuner. Restores the
+        center frequency, sample rate, gain and PPM configured for this
+        job window — which a LIVE consumer may have overwritten while it
+        was listening elsewhere. This guarantees the recorded frequency
+        is correct and uses the JOB's ppm, NOT the value the user set
+        while listening live.
+        """
+        if not self.client or not self._is_controller():
+            return
+        logger.info(
+            f"🎛️ [job={self.job_id}] Reclaim tuner → "
+            f"center={self.center_hz/1e6:.4f} MHz sr={self.sample_rate} "
+            f"gain={self.gain} ppm={self.ppm}"
+        )
+        # Order matters little here; we own the tuner now. set_freq_correction
+        # re-applies set_frequency internally, so do ppm first then freq/sr/gain
+        # to be explicit and avoid relying on internal side effects.
+        await self.client.set_freq_correction(self.ppm)
+        await self.client.set_frequency(self.center_hz)
+        await self.client.set_sample_rate(self.sample_rate)
+        await self.client.set_gain(self.gain)
+        # Drop any stale IQ that was captured while LIVE owned the tuner so we
+        # don't demodulate audio from the user's frequency on resume.
+        try:
+            self.client.flush()
+        except Exception:
+            pass
+        # Reset per-channel demodulator state so filter transients from the
+        # foreign center frequency don't bleed into the new recording.
+        for ch in self.channels:
+            ch.demod.reset()
+            ch.demod.set_vfo_offset(ch.offset_hz)
 
     @property
     def is_running(self) -> bool:
@@ -303,10 +445,23 @@ class DeviceCapture:
         (and any in-progress recording is finished to avoid splicing audio
         from a different frequency).
         """
-        # Determine the ACTUAL center frequency currently set on the device
-        # (may differ from our intended center if a LIVE consumer retuned).
-        actual_center = getattr(self.client, '_frequency', None) or self.center_hz
-        actual_sr = getattr(self.client, '_sample_rate', None) or self.sample_rate
+        # Determine the ACTUAL tuner state of the SHARED device. We must read
+        # from the underlying RtlTcpClient (self._shared_client), NOT from our
+        # consumer's mirror (self.client._frequency) which goes stale the
+        # moment a LIVE consumer retunes the shared device. Reading the stale
+        # mirror was the root cause of "เสียงซ่าๆ": we demodulated at the
+        # wrong offset because we thought the center was still ours.
+        shared = self._shared_client
+        if shared is not None:
+            actual_center = int(getattr(shared, '_frequency', 0) or self.center_hz)
+            actual_sr = int(getattr(shared, '_sample_rate', 0) or self.sample_rate)
+        else:
+            actual_center = self.center_hz
+            actual_sr = self.sample_rate
+        # Safety: if the actual center/sample_rate changed from what our
+        # demodulator was built for, the dynamic offset handling below will
+        # recompute per-channel offsets; if a channel is unreachable we skip
+        # it. This prevents recording audio at the wrong frequency.
 
         for ch in self.channels:
             try:

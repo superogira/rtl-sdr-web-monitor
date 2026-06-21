@@ -226,13 +226,35 @@ class SharedDeviceConnection:
             c = self._consumers.pop(consumer_id, None)
             if c:
                 self._refcount -= 1
+            old_id = self._controller_id
+            old_prio = self._controller_priority
+            new_id: Optional[str] = None
+            new_prio: int = 0
             if self._controller_id == consumer_id:
-                self._controller_id = None
-                self._controller_priority = 0
+                # Controller left: promote the highest-priority remaining
+                # consumer (if any) so it can reclaim the tuner. Without this,
+                # a JOB consumer never learned that LIVE had gone and stayed
+                # paused forever (or kept demodulating at a stale offset).
+                if self._consumers:
+                    best_id, best = max(
+                        self._consumers.items(), key=lambda kv: kv[1]._priority
+                    )
+                    new_id = best_id
+                    new_prio = best._priority
+                    self._controller_id = new_id
+                    self._controller_priority = new_prio
+                else:
+                    self._controller_id = None
+                    self._controller_priority = 0
             logger.info(
                 f"🔌 SharedConnection {self.device_id}: -consumer "
                 f"{consumer_id} total={self._refcount}"
             )
+            # Fire preemption so the newly-promoted consumer can reclaim its
+            # tuner settings (callback runs inside the lock-held context but
+            # the callbacks only schedule async work; they do not await).
+            if new_id is not None and new_id != old_id:
+                self._fire_preempt(new_id, new_prio, old_id, old_prio)
             # If no consumers left, tear down after a grace period
             if self._refcount <= 0:
                 await self._teardown()

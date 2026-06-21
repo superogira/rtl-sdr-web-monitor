@@ -11,16 +11,24 @@ Responsibilities:
   - Auto-retry on capture crashes.
   - Expose runtime status for the dashboard API.
 
-Concurrency model:
+Concurrency model (SHARED TUNER — one physical device = one tuner):
   - Each enabled job owns exactly ONE device (enforced at job-create time).
   - Each active job has exactly one DeviceCapture.
-  - DeviceCapture connects to its OWN rtl_tcp instance (separate from the
-    interactive SDRManager). This means:
-      * background recording never retunes the device the user is listening to.
-      * if the SAME physical rtl_tcp endpoint is shared (same host:port), the
-        last tuner command wins — so in practice background jobs should use
-        DEDICATED rtl_tcp instances (e.g. separate rtl_tcp processes or
-        separate physical SDR dongles). The UI enforces one-job-per-device.
+  - DeviceCapture acquires a SHARED consumer from DeviceConnectionPool.
+    Interactive listening (SDRManager) and background jobs share the SAME
+    single RtlTcpClient / tuner for a given device. Arbitration is by
+    priority: LIVE (interactive) > JOB (background).
+      * When a LIVE listener claims the tuner (retunes / changes ppm), the
+        active JOB is preempted via the on_preempt() callback registered in
+        DeviceCapture.start(): it pauses and finishes any in-progress
+        recording so audio is not spliced across frequencies.
+      * When the LIVE listener releases the tuner, the JOB reclaims it and
+        RE-APPLIES its own center freq / sample rate / gain / ppm, so the
+        recorded frequency is correct and uses the JOB's ppm (NOT the user's).
+  - To record CONTINUOUSLY while a user is listening live on a DIFFERENT
+    frequency, a DEDICATED device/dongle must be assigned to the job (a
+    separate SdrDevice row + rtl_tcp endpoint). The UI enforces
+    one-job-per-device.
 """
 import asyncio
 import logging
@@ -154,10 +162,10 @@ class JobScheduler:
                 )
                 await cap.start()
                 self._captures[job.id] = cap
-                # NOTE: No preemption callback needed — DeviceCapture now
-                # dynamically recomputes per-frequency offsets from the
-                # actual center frequency and keeps recording as long as
-                # the target is within the current passband.
+                # DeviceCapture.start() registers its own on_preempt() callback
+                # on the shared connection, so the scheduler does not need to
+                # wire anything extra here: preemption + tuner reclaim are
+                # handled inside DeviceCapture (see its _on_preempt/_reclaim).
             except Exception as e:
                 logger.error(f"Failed to start DeviceCapture for job {job.id}: {e}")
 
