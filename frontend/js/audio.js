@@ -214,8 +214,15 @@ const LiveAudio = {
                         console.log(`🔊 [audio] frame #${this._framesReceived}: ${event.data.byteLength} bytes`);
                     }
                 } else {
-                    // Text message: diagnostic "ready", "pong", or control ack
-                    event.data.text().then(txt => {
+                    // Text message: diagnostic "ready", "pong", or control ack.
+                    //
+                    // NOTE: because we set binaryType="arraybuffer" above, text
+                    // frames arrive as plain JS STRINGS — not Blobs. Calling
+                    // event.data.text() only works for Blobs, which caused the
+                    // "event.data.text is not a function" crash in Edge (and
+                    // silently swallowed every record_ack / vfo_ack / squelch_ack).
+                    // Handle both shapes for safety.
+                    const handleText = (txt) => {
                         try {
                             const obj = JSON.parse(txt);
                             if (obj.type === "ready") {
@@ -247,7 +254,16 @@ const LiveAudio = {
                                 console.log("🔊 [audio] server text:", txt);
                             }
                         }
-                    });
+                    };
+
+                    if (typeof event.data === "string") {
+                        handleText(event.data);
+                    } else if (event.data && typeof event.data.text === "function") {
+                        // Fallback: if a future change delivers Blobs, still work.
+                        event.data.text().then(handleText);
+                    } else {
+                        console.warn("🔊 [audio] unknown text message type:", typeof event.data);
+                    }
                 }
             };
 

@@ -2,7 +2,10 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2024.06.14-v9',  // Waterfall zoom & pan (wheel/pinch + drag)
+    VERSION: '2026.06.21-v1',  // Fix audio.js "event.data.text is not a function"
+                                // (Edge) — text WS frames arrive as strings, not
+                                // Blobs, when binaryType="arraybuffer". Restores
+                                // record_ack / vfo_ack / squelch_ack handling.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
