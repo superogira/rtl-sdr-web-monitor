@@ -769,15 +769,13 @@
             // loadSDRSettings(status), so we don't call it separately here
             // (was causing a duplicate /api/sdr/status request on page load).
             this.loadDisplaySettings();
-            if (isAdmin) this.loadSTTSettings();
-            this.loadRecordingSettings();
-            this.loadRecordingEnabled();
             this.renderKeywords();
             this.refreshStatus();
-            if (isAdmin) {
-                this.loadUsers();
-                this.loadDevices();
-            }
+            // Other tabs load their data lazily in showTab() when first
+            // opened, so opening /settings only fires requests for the
+            // default "general" tab. This dramatically speeds up initial
+            // load (previously ~8 API calls fired at once regardless of
+            // which tab was visible).
 
             // Set default active tab to General (first tab, general settings)
             this.showTab('general');
@@ -826,13 +824,29 @@
                 const onclick = btn.getAttribute('onclick') || '';
                 if (onclick.includes(`'${tabId}'`)) btn.classList.add('active');
             });
-            // Load STT usage charts when the STT tab is opened (lazy load on demand).
-            if (tabId === 'stt') {
-                this.loadSTTStats();
-            }
-            // Refresh recording jobs when the recording tab is opened.
-            if (tabId === 'recording' && window.RecordingJobsUI) {
-                RecordingJobsUI.refresh();
+            // Lazy-load each tab's data on first open. Each loader sets
+            // this._loaded[tabId] = true when done so switching back to an
+            // already-loaded tab does NOT refetch (avoids redundant requests
+            // and avoids clobbering unsaved form edits in that tab).
+            this._loaded = this._loaded || {};
+            if (!this._loaded[tabId]) {
+                this._loaded[tabId] = true;  // mark immediately to prevent
+                                             // duplicate concurrent loads.
+                if (tabId === 'recording') {
+                    this.loadRecordingSettings();
+                    this.loadRecordingEnabled();
+                    if (window.RecordingJobsUI) RecordingJobsUI.refresh();
+                } else if (tabId === 'stt') {
+                    this.loadSTTSettings();
+                    this.loadSTTStats();
+                } else if (tabId === 'users') {
+                    this.loadUsers();
+                } else if (tabId === 'devices') {
+                    this.loadDevices();
+                }
+                // general / display / telegram / keywords: no backend fetch
+                // needed on open (general already loaded in init; telegram
+                // & keywords use local state).
             }
         },
 
