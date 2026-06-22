@@ -38,3 +38,15 @@ def mask_value(val: str) -> str:
     if not val or len(val) <= 8:
         return "***"
     return f"{val[:4]}...{val[-4:]}"
+
+
+def is_masked_value(val: str) -> bool:
+    """Return True if `val` looks like a masked secret (should NOT be persisted).
+
+    Recognizes both forms produced by ``mask_value()``:
+      - "***"        (short secret / full mask)
+      - "abcd...wxyz" (long secret, partial mask)
+    """
+    if not val:
+        return False
+    return val.strip() == "***" or "..." in val

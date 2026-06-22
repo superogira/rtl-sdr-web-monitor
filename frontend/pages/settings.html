@@ -1451,14 +1451,23 @@
             const enable_entities = document.getElementById('stt-enable-entities').value === 'true';
 
             const payload = { provider, language, auto_transcribe, operating_point, diarization, enable_entities };
-            // Only send api_key if user typed something new
-            if (apiKeyInput && apiKeyInput.trim() && !apiKeyInput.includes('...')) {
+
+            // Helper: detect masked placeholders so we never overwrite a real
+            // secret with a display mask. Matches both "***" (short secret) and
+            // "abcd...wxyz" (long secret) forms returned by the backend.
+            const isMasked = (v) => !v || v.trim() === '***' || v.includes('...');
+
+            // Only send a provider's API key when that provider is the one being
+            // configured. This prevents a stale/hidden field value from one
+            // provider's section from clobbering another provider's saved key
+            // (root cause of Speechmatics key becoming "***" when saving Whisper/Azure).
+            if (provider === 'speechmatics' && apiKeyInput && apiKeyInput.trim() && !isMasked(apiKeyInput)) {
                 payload.api_key = apiKeyInput.trim();
             }
             // Azure-specific
             const azKeyInput = document.getElementById('stt-azure-key');
             const azRegionInput = document.getElementById('stt-azure-region');
-            if (azKeyInput && azKeyInput.value.trim() && !azKeyInput.value.includes('...')) {
+            if (provider === 'azure' && azKeyInput && azKeyInput.value.trim() && !isMasked(azKeyInput.value)) {
                 payload.azure_key = azKeyInput.value.trim();
             }
             if (azRegionInput && azRegionInput.value.trim()) {

@@ -17,7 +17,7 @@ from backend.models.recording import Recording, RecordingStatus
 from backend.config import settings
 from backend.services.stt import transcribe, _get_stt_config
 from backend.services.app_settings import get_setting, set_setting
-from backend.models.app_setting import mask_value
+from backend.models.app_setting import mask_value, is_masked_value
 from backend.models.sdr_device import SdrDevice, DEVICE_TYPES, default_config_for_type
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -976,8 +976,11 @@ async def update_stt_settings(
             raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', or 'whisper_local'")
         await set_setting("stt_provider", req.provider)
 
-    # Only update API key if a real (non-empty, non-masked) value is provided
-    if req.api_key is not None and req.api_key.strip() and "..." not in req.api_key:
+    # Only update API key if a real (non-empty, non-masked) value is provided.
+    # `is_masked_value()` also catches the "***" form returned by mask_value()
+    # for short secrets — previously only "..." was rejected, so "***" would
+    # overwrite the real key (root cause of Speechmatics key corruption).
+    if req.api_key is not None and req.api_key.strip() and not is_masked_value(req.api_key):
         await set_setting("stt_speechmatics_api_key", req.api_key.strip())
 
     if req.language is not None:
@@ -1003,7 +1006,7 @@ async def update_stt_settings(
         await set_setting("stt_enable_entities", "true" if req.enable_entities else "false")
 
     # Azure-specific options
-    if req.azure_key is not None and req.azure_key.strip() and "..." not in req.azure_key:
+    if req.azure_key is not None and req.azure_key.strip() and not is_masked_value(req.azure_key):
         await set_setting("stt_azure_key", req.azure_key.strip())
 
     if req.azure_region is not None and req.azure_region.strip():
