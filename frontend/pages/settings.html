@@ -1496,9 +1496,23 @@
 
             try {
                 const result = await API.settings.updateSTT(payload);
-                const msg = result.api_key_set
-                    ? `✅ บันทึก STT settings สำเร็จ!\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? 'เปิด' : 'ปิด'}\nAPI Key: ${result.api_key}`
-                    : '✅ บันทึก STT settings สำเร็จ! (แต่ยังไม่มี API Key)';
+                // สร้างข้อความตาม provider ที่เลือก — ก่อนหน้านี้ alert แสดง API Key
+                // ของ Speechmatics เสมอ (เพราะใช้ result.api_key_set ที่ backend ส่ง
+                // กลับมาเป็นคีย์ของ Speechmatics) แม้ตอนนั้นจะเลือก Whisper/Azure
+                // ทำให้ผู้ใช้เห็นคีย์ที่ไม่เกี่ยวข้องในแจ้งเตือน
+                let keyLine = '';
+                if (result.provider === 'speechmatics') {
+                    keyLine = result.api_key_set
+                        ? `API Key (Speechmatics): ${result.api_key}`
+                        : '⚠️ ยังไม่มี API Key ของ Speechmatics';
+                } else if (result.provider === 'azure') {
+                    keyLine = result.azure_key_set
+                        ? `Azure Key: ${result.azure_key}`
+                        : '⚠️ ยังไม่มี Azure Key';
+                } else if (result.provider === 'whisper_local') {
+                    keyLine = `Host: ${result.whisper_local_host || '-'}:${result.whisper_local_port || '-'}\nModel: ${result.whisper_local_model || '-'}`;
+                }
+                const msg = `✅ บันทึก STT settings สำเร็จ!\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? 'เปิด' : 'ปิด'}\n${keyLine}`;
                 alert(msg);
                 // Reload to update hint
                 this.loadSTTSettings();
