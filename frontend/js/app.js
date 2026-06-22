@@ -2,10 +2,11 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.21-v1',  // Fix audio.js "event.data.text is not a function"
-                                // (Edge) — text WS frames arrive as strings, not
-                                // Blobs, when binaryType="arraybuffer". Restores
-                                // record_ack / vfo_ack / squelch_ack handling.
+    VERSION: '2026.06.22-v2',  // Auto Squelch (real-time, per-channel): adaptive
+                                // noise-floor tracking via rolling p25 percentile
+                                // with freeze-on-active + warmup-squelch-closed.
+                                // New per-frequency "auto_squelch" option in
+                                // recording jobs; dashboard shows floor/eff dB.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -133,6 +134,14 @@ const App = {
             this.currentFreq = status.frequency || 145500000;
             this.currentMode = status.mode || 'FM';
             this.currentSignal = status.signal_level_db || -120;
+            // Apply per-device waterfall dB range BEFORE syncing controls and
+            // BEFORE WS.connect() (this is awaited in init()). This guarantees
+            // _dbMin/_dbMax (and the _deviceWaterfallActive flag + color LUT
+            // invalidation) are correct before the FIRST spectrum frame is
+            // rendered — otherwise early frames use the hardcoded defaults
+            // (-110/-55) and appear green before "snapping" to blue once the
+            // first WS status broadcast arrives.
+            this._applyDeviceWaterfallRange(status);
             // Sync sliders + SRATE button active state from backend reality
             this.syncControlsFromStatus(status);
             this.updateUI();

@@ -25,6 +25,9 @@ recording_jobs_router = APIRouter(prefix="/api/recording-jobs", tags=["Recording
 class FrequencyPayload(BaseModel):
     frequency_hz: int
     squelch_db: float = -70.0
+    # When True the capture worker ignores `squelch_db` and computes an
+    # adaptive squelch threshold in real-time from the rolling noise floor.
+    auto_squelch: bool = False
     demod_mode: str = "FM"
     bandwidth_hz: int = 12000
     label: Optional[str] = None

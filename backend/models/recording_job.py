@@ -159,6 +159,11 @@ class RecordingJobFrequency(Base):
                        nullable=False)
     frequency_hz = Column(Integer, nullable=False)
     squelch_db = Column(Float, nullable=False, default=-70.0)
+    # When True, squelch_db is ignored and the capture worker computes an
+    # adaptive threshold in real-time from the rolling noise floor of this
+    # channel (see AutoSquelchEstimator in device_capture.py).
+    auto_squelch = Column(Boolean, nullable=False, default=False,
+                          server_default="0")
     demod_mode = Column(String(10), nullable=False, default="FM")
     bandwidth_hz = Column(Integer, nullable=False, default=12000)
     label = Column(String(100), nullable=True)
@@ -171,6 +176,7 @@ class RecordingJobFrequency(Base):
             "window_id": self.window_id,
             "frequency_hz": self.frequency_hz,
             "squelch_db": self.squelch_db,
+            "auto_squelch": bool(self.auto_squelch),
             "demod_mode": self.demod_mode,
             "bandwidth_hz": self.bandwidth_hz,
             "label": self.label,

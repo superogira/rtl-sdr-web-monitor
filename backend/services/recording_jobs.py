@@ -144,6 +144,8 @@ def _parse_frequency_payload(fp: dict, start_freq: int, sample_rate: int) -> dic
     except (TypeError, ValueError):
         raise JobValidationError("squelch_db ต้องเป็นตัวเลข")
 
+    auto_squelch = bool(fp.get("auto_squelch", False))
+
     demod = str(fp.get("demod_mode", "FM")).upper()
     if demod not in _DEMOD_MODES:
         raise JobValidationError(f"demod_mode ต้องเป็นหนึ่งใน {sorted(_DEMOD_MODES)}")
@@ -164,6 +166,7 @@ def _parse_frequency_payload(fp: dict, start_freq: int, sample_rate: int) -> dic
     return {
         "frequency_hz": freq,
         "squelch_db": squelch,
+        "auto_squelch": auto_squelch,
         "demod_mode": demod,
         "bandwidth_hz": bw,
         "label": label,

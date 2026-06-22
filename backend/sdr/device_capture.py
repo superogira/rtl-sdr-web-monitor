@@ -62,13 +62,119 @@ STATE_PAUSED = "PAUSED"
 STATE_STOPPING = "STOPPING"
 
 
+def _percentile(values: list, pct: float) -> float:
+    """Linear-interpolated percentile of a list of floats."""
+    if not values:
+        return -115.0
+    s = sorted(values)
+    k = (len(s) - 1) * (pct / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    frac = k - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+class AutoSquelchEstimator:
+    """Adaptive squelch threshold from a rolling per-channel noise floor.
+
+    Why a low percentile (not a mean):
+      Voice comms are silent ~50% of the time, so the *mean* level gets
+      pulled up by the signal itself. The p25 (lower quartile) tracks the
+      quiet/noise baseline even while the channel is intermittently active,
+      which is exactly what a squelch threshold must sit just above.
+
+    Freeze-on-active:
+      While a recording is in progress (signal presumed above threshold),
+      the floor estimate is FROZEN. Otherwise a long transmission would drag
+      the threshold upward and clip the tail of that same transmission.
+
+    Inputs are channel signal levels in dB produced by compute_signal_level()
+    (one call per ~50 ms IQ chunk). The effective threshold returned is:
+        clamp(noise_floor + margin_db, min_db, max_db)
+    """
+
+    def __init__(
+        self,
+        window_seconds: float = 8.0,
+        chunk_seconds: float = 0.05,
+        percentile: float = 25.0,
+        margin_db: float = 6.0,
+        min_db: float = -115.0,
+        max_db: float = -20.0,
+    ):
+        self._n = max(8, int(window_seconds / max(chunk_seconds, 1e-3)))
+        self._buf: List[float] = [0.0] * self._n
+        self._idx = 0
+        self._filled = False
+        self._pct = float(percentile)
+        self._margin = float(margin_db)
+        self._min = float(min_db)
+        self._max = float(max_db)
+        # Start CLOSED (max_db) during warmup so no recording opens before we
+        # have enough samples to estimate a real noise floor. If we started
+        # wide-open, the first signal chunk would exceed threshold, start a
+        # recording, and FREEZE the estimator (see freeze-on-active) before it
+        # ever learned the floor → everything would be recorded constantly.
+        self._floor = self._min
+        self._effective = self._max
+        self._last_compute = 0.0
+        self._min_samples_to_compute = 4
+
+    def update(self, level_db: float, frozen: bool = False,
+               now: Optional[float] = None) -> float:
+        """Feed one level sample and return the effective squelch (dB)."""
+        now = now if now is not None else time.time()
+        if not frozen:
+            self._buf[self._idx] = level_db
+            self._idx = (self._idx + 1) % self._n
+            if self._idx == 0:
+                self._filled = True
+            # Recompute at most ~2 Hz; the percentile over a few hundred
+            # floats is cheap but there's no reason to redo it every chunk.
+            if now - self._last_compute >= 0.5:
+                samples = self._samples()
+                if len(samples) >= self._min_samples_to_compute:
+                    self._last_compute = now
+                    self._floor = _percentile(samples, self._pct)
+                    eff = self._floor + self._margin
+                    self._effective = max(self._min, min(self._max, eff))
+        return self._effective
+
+    def _samples(self) -> List[float]:
+        return self._buf if self._filled else self._buf[:self._idx]
+
+    @property
+    def noise_floor_db(self) -> float:
+        return self._floor
+
+    @property
+    def effective_squelch_db(self) -> float:
+        return self._effective
+
+    def reset(self) -> None:
+        self._buf = [0.0] * self._n
+        self._idx = 0
+        self._filled = False
+        self._floor = self._min
+        # Match __init__: start CLOSED during warmup.
+        self._effective = self._max
+        self._last_compute = 0.0
+
+
 class _FrequencyChannel:
     """Per-target-frequency state inside a DeviceCapture."""
 
     def __init__(self, freq: RecordingJobFrequency, center_hz: int, audio_rate: int):
         self.frequency_hz = freq.frequency_hz
         self.offset_hz = float(freq.frequency_hz - center_hz)
+        # Manual (configured) squelch; used directly when auto_squelch is off,
+        # and reported for display even when auto is on.
         self.squelch_db = float(freq.squelch_db)
+        self.auto_squelch = bool(getattr(freq, "auto_squelch", False))
+        # Adaptive estimator; None when manual squelch is used.
+        self.auto_estimator: Optional[AutoSquelchEstimator] = (
+            AutoSquelchEstimator() if self.auto_squelch else None
+        )
         self.demod_mode = DemodMode(freq.demod_mode.upper())
         self.bandwidth_hz = int(freq.bandwidth_hz)
         self.label = freq.label
@@ -85,6 +191,19 @@ class _FrequencyChannel:
         # Track whether this channel is currently reachable given the
         # actual (possibly LIVE-controlled) center frequency.
         self.in_passband: bool = True
+
+    @property
+    def effective_squelch_db(self) -> float:
+        """The threshold actually used for open/close decisions this tick."""
+        if self.auto_estimator is not None:
+            return self.auto_estimator.effective_squelch_db
+        return self.squelch_db
+
+    @property
+    def noise_floor_db(self) -> Optional[float]:
+        if self.auto_estimator is not None:
+            return self.auto_estimator.noise_floor_db
+        return None
 
     def update_offset(self, actual_center_hz: int, sample_rate: int) -> bool:
         """Recompute offset from the ACTUAL center frequency.
@@ -478,6 +597,10 @@ class DeviceCapture:
                     "demod_mode": ch.demod_mode.value,
                     "bandwidth_hz": ch.bandwidth_hz,
                     "squelch_db": ch.squelch_db,
+                    "auto_squelch": ch.auto_squelch,
+                    "noise_floor_db": (round(ch.noise_floor_db, 1)
+                                       if ch.noise_floor_db is not None else None),
+                    "effective_squelch_db": round(ch.effective_squelch_db, 1),
                     "label": ch.label,
                     "is_recording": ch.is_recording,
                     "signal_level_db": round(ch.signal_level, 1),
@@ -596,6 +719,11 @@ class DeviceCapture:
                     vfo_offset_hz=ch.offset_hz,
                 )
                 ch.signal_level = level
+                # Adaptive squelch: feed the new level to the per-channel
+                # estimator (frozen while a recording is active so a long
+                # transmission can't pull the threshold up and clip itself).
+                if ch.auto_estimator is not None:
+                    ch.auto_estimator.update(level, frozen=ch.is_recording, now=now)
                 # === DIAGNOSTIC (SDR_JOB_DEBUG): per-channel level vs squelch,
                 # including a center-probe (offset=0) to isolate "no signal at
                 # target" from a broken demod/signal-level function. ===
@@ -641,7 +769,7 @@ class DeviceCapture:
                         flush=True,
                     )
 
-                above = level > ch.squelch_db
+                above = level > ch.effective_squelch_db
 
                 if above and not ch.is_recording:
                     ch.is_recording = True

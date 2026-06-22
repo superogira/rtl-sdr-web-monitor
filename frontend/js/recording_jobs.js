@@ -164,7 +164,7 @@ const RecordingJobsUI = {
                 ? w.days.map(d => this.DAY_LABELS[d]).join(',')
                 : 'ทุกวัน';
             const freqs = (w.frequencies || []).map(f =>
-                `${this._hzToMhz(f.frequency_hz)} MHz (${f.demod_mode}, BW ${(f.bandwidth_hz/1000)}kHz, SQ ${f.squelch_db}dB)`
+                `${this._hzToMhz(f.frequency_hz)} MHz (${f.demod_mode}, BW ${(f.bandwidth_hz/1000)}kHz, ${f.auto_squelch ? 'SQ AUTO' : 'SQ ' + f.squelch_db + 'dB'})`
             ).join('; ');
             return `<div style="font-size:0.74rem; color:var(--text-secondary); margin-top:4px;">
                 <b>${timeStr}</b> [${days}] · ช่วง ${this._hzToMhz(lo)}–${this._hzToMhz(hi)} MHz · center ${this._hzToMhz(w.center_freq_hz)} MHz<br>
@@ -346,6 +346,7 @@ const RecordingJobsUI = {
             _tempId: 'f' + Math.random().toString(36).slice(2, 8),
             frequency_hz: freq || 0,
             squelch_db: -70,
+            auto_squelch: false,
             demod_mode: 'FM',
             bandwidth_hz: 12000,
             label: '',
@@ -362,6 +363,18 @@ const RecordingJobsUI = {
                 _tempId: f._tempId || 'f' + Math.random().toString(36).slice(2, 8),
             })),
         }));
+    },
+
+    onAutoSquelchChange(freqTempId) {
+        const cb = document.getElementById(`f-${freqTempId}-autosq`);
+        const sq = document.getElementById(`f-${freqTempId}-sq`);
+        if (!cb || !sq) return;
+        sq.disabled = cb.checked;
+        if (cb.checked) {
+            sq.style.opacity = '0.5';
+        } else {
+            sq.style.opacity = '';
+        }
     },
 
     onModeChange() {
@@ -440,6 +453,7 @@ const RecordingJobsUI = {
             w.frequencies.forEach(f => {
                 f.frequency_hz = this._mhzToHz(gp(`f-${f._tempId}-freq`));
                 f.squelch_db = parseFloat(gp(`f-${f._tempId}-sq`));
+                f.auto_squelch = !!(document.getElementById(`f-${f._tempId}-autosq`) || {}).checked;
                 f.demod_mode = gp(`f-${f._tempId}-demod`) || 'FM';
                 f.bandwidth_hz = parseInt(gp(`f-${f._tempId}-bw`)) || 12000;
                 f.label = gp(`f-${f._tempId}-label`) || '';
@@ -545,7 +559,11 @@ const RecordingJobsUI = {
                 </div>
                 <div class="form-group" style="margin-bottom:4px;">
                     <label style="font-size:0.72rem;">Squelch (dB)</label>
-                    <input type="number" id="f-${f._tempId}-sq" value="${f.squelch_db}" step="1" style="font-size:0.78rem;">
+                    <input type="number" id="f-${f._tempId}-sq" value="${f.squelch_db}" step="1" style="font-size:0.78rem;" ${f.auto_squelch ? 'disabled' : ''}>
+                    <label style="font-size:0.72rem; display:flex; align-items:center; gap:4px; margin-top:4px; cursor:pointer;">
+                        <input type="checkbox" id="f-${f._tempId}-autosq" ${f.auto_squelch ? 'checked' : ''} onchange="RecordingJobsUI.onAutoSquelchChange('${f._tempId}')" style="margin:0;">
+                        Auto Squelch
+                    </label>
                 </div>
                 <div class="form-group" style="margin-bottom:4px;">
                     <label style="font-size:0.72rem;">Demod</label>
@@ -599,6 +617,7 @@ const RecordingJobsUI = {
                 frequencies: (w.frequencies || []).map(f => ({
                     frequency_hz: f.frequency_hz,
                     squelch_db: f.squelch_db,
+                    auto_squelch: !!f.auto_squelch,
                     demod_mode: f.demod_mode,
                     bandwidth_hz: f.bandwidth_hz,
                     label: f.label || null,

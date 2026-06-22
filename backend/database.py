@@ -86,6 +86,17 @@ def _run_migrations(conn):
             )
             print(f"[migration] Added '{col_name}' column to recordings table")
 
+    # === recording_job_frequencies: add auto_squelch column ===
+    result = conn.execute(text("PRAGMA table_info(recording_job_frequencies)"))
+    freq_columns = [row[1] for row in result]
+    if "auto_squelch" not in freq_columns:
+        conn.execute(text(
+            "ALTER TABLE recording_job_frequencies "
+            "ADD COLUMN auto_squelch BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        print("[migration] Added 'auto_squelch' column to "
+              "recording_job_frequencies table")
+
     # === Data migration: convert legacy string quality_rating → integer scale ===
     # Previous schema used "good"|"fair"|"bad". New schema uses 1-6 integers.
     # SQLite dynamic typing allows storing ints in a VARCHAR column, so we just

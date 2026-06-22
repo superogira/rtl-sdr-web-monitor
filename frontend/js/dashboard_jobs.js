@@ -174,7 +174,15 @@
             const freqMHz = (f.frequency_hz / 1e6).toFixed(4);
             const bwkHz = (f.bandwidth_hz / 1e3).toFixed(0);
             const sigDb = (f.signal_level_db != null) ? f.signal_level_db.toFixed(1) : '--';
+            const isAuto = !!f.auto_squelch;
+            const effDb = (f.effective_squelch_db != null) ? f.effective_squelch_db.toFixed(0) : null;
             const sqlDb = (f.squelch_db != null) ? f.squelch_db.toFixed(0) : '--';
+            // Auto Squelch: show "AUTO floor/eff" so the admin sees what the
+            // estimator is doing. Manual: show the configured threshold.
+            const sqLabel = isAuto
+                ? `AUTO${effDb != null ? ' eff ' + effDb : ''}`
+                  + ((f.noise_floor_db != null) ? ` (floor ${f.noise_floor_db.toFixed(0)})` : '')
+                : 'sq ' + sqlDb;
             const isRec = !!f.is_recording;
             const stateText = capture.state || '';
             // Badge: show actual recording status from runtime
@@ -198,7 +206,7 @@
                             ${this._esc(f.demod_mode)} · ${bwkHz} kHz
                         </span>
                         <span style="opacity:0.5;margin-left:4px;font-size:0.68rem;">
-                            ${sigDb} dB / sq ${sqlDb}
+                            ${sigDb} dB / ${sqLabel}
                         </span>
                     </span>
                     ${badge}
