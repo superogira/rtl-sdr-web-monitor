@@ -6,7 +6,7 @@
     <title>Recordings - RTL-SDR Monitor</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=19">
+    <link rel="stylesheet" href="/css/app.css?v=20">
     <script>
         (function () {
             try {
@@ -265,6 +265,7 @@
                 <span class="spacer"></span>
                 <span id="rec-count" style="font-size:0.85rem; color:var(--text-muted);">--</span>
                 <span id="rec-total-duration" style="font-size:0.85rem; color:var(--text-muted);"></span>
+                <span id="rec-total-size" style="font-size:0.85rem; color:var(--text-muted);"></span>
                 <button id="rec-autoplay-btn" class="rec-autoplay-toggle" onclick="RecAudioQueue.toggleAutoplay()" title="เปิด/ปิดการเล่นรายการล่าสุดอัตโนมัติ">
                     <span id="rec-autoplay-icon">🔇</span>
                     <span id="rec-autoplay-label">เล่นอัตโนมัติ</span>
@@ -316,6 +317,7 @@
         let _pageSize = 50;       // จำนวนรายการต่อหน้า
         let _total = 0;           // จำนวนรายการทั้งหมดที่ตรง filter/search
         let _totalDuration = 0;   // ระยะเวลารวม (วินาที) ของรายการทั้งหมดที่ตรง filter/search
+        let _totalFileSize = 0;   // ขนาดไฟล์รวม (bytes) ของรายการทั้งหมดที่ตรง filter/search
         let _allItems = [];       // รายการในหน้าปัจจุบัน
         let _recCache = new Map(); // id -> rec (สำหรับ diff reconciliation)
         let _refreshTimer = null;
@@ -332,6 +334,16 @@
             if (h > 0) return `${h}ชม ${m}น ${s}วิ`;
             if (m > 0) return `${m}น ${s}วิ`;
             return `${s}วิ`;
+        }
+
+        // === Utility: format file size (bytes → human readable) ===
+        function formatFileSize(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+            const val = bytes / Math.pow(1024, i);
+            // B ไม่มีทศนิยม; หน่วยใหญ่ขึ้นแสดง 1 ตำแหน่ง
+            return `${i === 0 ? val : val.toFixed(1)} ${units[i]}`;
         }
 
         // === Utility: toast notification (top-center, auto-dismiss) ===
@@ -687,6 +699,7 @@
                 const items = data.items || [];
                 _total = data.total || 0;
                 _totalDuration = data.total_duration || 0;
+                _totalFileSize = data.total_file_size || 0;
                 const container = document.getElementById('recordings-list');
 
                 if (!items.length) {
@@ -726,6 +739,8 @@
                 `${_allItems.length} / ${_total} รายการ`;
             document.getElementById('rec-total-duration').textContent =
                 _totalDuration > 0 ? `⏱ ${formatDuration(_totalDuration)}` : '';
+            document.getElementById('rec-total-size').textContent =
+                _totalFileSize > 0 ? `💾 ${formatFileSize(_totalFileSize)}` : '';
             const totalPages = Math.max(1, Math.ceil(_total / _pageSize));
             const pag = document.getElementById('pagination');
             if (_total === 0) {

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, Integer, Text, DateTime, Enum, ForeignKey, Boolean
+from sqlalchemy import Column, String, Float, Integer, BigInteger, Text, DateTime, Enum, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from backend.database import Base
 import enum
@@ -50,6 +50,7 @@ class Recording(Base):
     signal_strength = Column(Float, nullable=True, comment="Signal strength in dBm")
     audio_file_path = Column(String(500), nullable=True)
     audio_file_name = Column(String(255), nullable=True)
+    file_size = Column(BigInteger, nullable=True, comment="Audio file size in bytes")
     duration = Column(Float, nullable=True, comment="Duration in seconds")
     transcript = Column(Text, nullable=True)
     transcript_language = Column(String(10), nullable=True, default="th")
@@ -100,6 +101,7 @@ class Recording(Base):
             "signal_strength": self.signal_strength,
             "audio_file_path": self.audio_file_path,
             "audio_file_name": self.audio_file_name,
+            "file_size": self.file_size,
             "audio_deleted": audio_deleted,
             "has_audio": has_audio,
             "duration": self.duration,

@@ -461,18 +461,23 @@ async def list_recordings(
     ).limit(limit).offset(offset)
     recordings = (await db.execute(rows_q)).scalars().all()
 
-    # --- Total + total_duration in ONE aggregated query ---
+    # --- Total + total_duration + total_file_size in ONE aggregated query ---
     # (Previously this ran two separate queries with duplicated filter code.)
     agg_q = _apply_recording_filters(
-        select(func.count(Recording.id), func.coalesce(func.sum(Recording.duration), 0.0)),
+        select(
+            func.count(Recording.id),
+            func.coalesce(func.sum(Recording.duration), 0.0),
+            func.coalesce(func.sum(Recording.file_size), 0),
+        ),
         source, search, frequency_mhz, device_id,
     )
-    total, total_duration = (await db.execute(agg_q)).one()
+    total, total_duration, total_file_size = (await db.execute(agg_q)).one()
 
     return {
         "items": [r.to_dict() for r in recordings],
         "total": total,
         "total_duration": round(total_duration or 0.0, 1),
+        "total_file_size": int(total_file_size or 0),
         "limit": limit,
         "offset": offset,
     }

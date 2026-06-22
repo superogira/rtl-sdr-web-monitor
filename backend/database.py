@@ -77,6 +77,7 @@ def _run_migrations(conn):
         ("quality_rated_at", "DATETIME"),
         ("device_id", "VARCHAR(36)"),
         ("recording_job_id", "VARCHAR(36)"),
+        ("file_size", "BIGINT"),
     ]
 
     for col_name, col_type in migrations:
@@ -85,6 +86,29 @@ def _run_migrations(conn):
                 text(f"ALTER TABLE recordings ADD COLUMN {col_name} {col_type}")
             )
             print(f"[migration] Added '{col_name}' column to recordings table")
+
+    # === Backfill file_size for existing recordings (one-time) ===
+    # For rows where file_size IS NULL and an audio file still exists on disk,
+    # stat() the file and store its size. Runs at most once per NULL row.
+    import os
+    rows = conn.execute(text(
+        "SELECT id, audio_file_path FROM recordings "
+        "WHERE file_size IS NULL AND audio_file_path IS NOT NULL"
+    )).fetchall()
+    backfilled = 0
+    for rec_id, audio_file_path in rows:
+        try:
+            if audio_file_path and os.path.exists(audio_file_path):
+                size = os.path.getsize(audio_file_path)
+                conn.execute(text(
+                    "UPDATE recordings SET file_size = :size WHERE id = :rid"
+                ), {"size": size, "rid": rec_id})
+                backfilled += 1
+        except Exception:
+            # Best-effort: skip files that can't be stat'd (missing/permission)
+            continue
+    if backfilled > 0:
+        print(f"[migration] Backfilled file_size for {backfilled} recordings")
 
     # === recording_job_frequencies: add auto_squelch column ===
     result = conn.execute(text("PRAGMA table_info(recording_job_frequencies)"))

@@ -1327,6 +1327,12 @@ class SDRManager:
 
         sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
 
+        # Capture file size on disk for storage usage aggregation.
+        try:
+            file_size = filepath.stat().st_size
+        except Exception:
+            file_size = None
+
         rec_id = str(uuid.uuid4())
         freq_mhz = freq_hz / 1e6
         now = datetime.now(timezone.utc)
@@ -1342,6 +1348,7 @@ class SDRManager:
                     signal_strength=round(self._signal_level, 1),
                     audio_file_path=str(filepath),
                     audio_file_name=filename,
+                    file_size=file_size,
                     duration=round(duration, 2),
                     transcript=None,
                     status=RecordingStatus.COMPLETED,
@@ -1496,6 +1503,12 @@ class SDRManager:
         audio_f32 = np.asarray(audio_data, dtype=np.float32)
         sf.write(str(filepath), audio_f32, int(sample_rate), subtype="PCM_16")
 
+        # Capture file size on disk for storage usage aggregation.
+        try:
+            file_size = filepath.stat().st_size
+        except Exception:
+            file_size = None
+
         rec_id = str(uuid.uuid4())
         freq_mhz = freq_hz / 1e6
         now = datetime.now(timezone.utc)
@@ -1513,6 +1526,7 @@ class SDRManager:
                     mode=mode,
                     audio_file_path=str(filepath),
                     audio_file_name=filename,
+                    file_size=file_size,
                     duration=round(duration, 2),
                     status=RecordingStatus.COMPLETED,
                     source="manual",
