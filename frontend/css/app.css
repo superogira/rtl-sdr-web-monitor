@@ -40,6 +40,16 @@
     --radius-lg: 12px;
 
     --transition: all 0.2s ease;
+
+    /* === Aliases (used by settings.html and modal overlays) ===
+       These names are referenced across the UI but were never declared,
+       so any element using them (e.g. .settings-section, modal boxes)
+       rendered with a transparent/empty background and was hard to read.
+       Map them to the canonical variables above so they always resolve. */
+    --surface-1: var(--bg-input);
+    --surface-2: var(--bg-card);
+    --border: var(--border-color);
+    --accent-cyan: var(--accent-blue);
 }
 
 /* === Reset & Base === */

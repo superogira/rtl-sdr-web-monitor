@@ -253,12 +253,12 @@ const RecordingJobsUI = {
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'rj-editor-modal';
-            modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; display:flex; align-items:flex-start; justify-content:center; padding:24px; overflow:auto;';
+            modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); z-index:9999; display:flex; align-items:flex-start; justify-content:center; padding:24px; overflow:auto;';
             document.body.appendChild(modal);
         }
 
         modal.innerHTML = `
-        <div style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; width:100%; max-width:760px; padding:16px;">
+        <div style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; width:100%; max-width:760px; padding:16px; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <h2 style="margin:0; font-size:1.1rem; color:var(--accent-cyan);">${editing ? '✏️ แก้ไขการอัดเสียง' : '➕ เพิ่มการอัดเสียง'}</h2>
                 <button class="btn btn-sm" onclick="RecordingJobsUI.closeEditor()">✖ ปิด</button>
