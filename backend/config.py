@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     RTL_TCP_GAIN: int = 30
     RTL_TCP_FREQ_CORRECTION_PPM: int = 0  # Parts per million frequency correction
 
+    # Debug: emit periodic diagnostic logs from DeviceCapture (JOB path) showing
+    # actual tuner state, controller ownership, and per-channel signal/squelch.
+    SDR_JOB_DEBUG: bool = False
+
     # Audio Settings
     # Audio output sample rate.
     # 32000 Hz chosen to support WBFM broadcast audio (up to 15 kHz music)

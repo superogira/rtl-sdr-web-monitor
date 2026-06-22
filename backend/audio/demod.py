@@ -456,7 +456,15 @@ class StreamingDemodulator:
 
         Called at construction and whenever mode / sample_rate / channel_bw
         changes (config transitions must restart the filters cleanly).
+
+        NOTE: VFO offset (_vfo_offset_hz) and phase (_vfo_phase) are PRESERVED
+        across reset — they are listener CONFIG (which slice of the passband
+        to decode), not filter state. See _preserve_vfo_state docstring.
         """
+        # Snapshot VFO config BEFORE wiping attributes (attrs may not exist
+        # yet on the very first reset() call from __init__).
+        vfo_off = getattr(self, "_vfo_offset_hz", 0.0)
+        vfo_phase = getattr(self, "_vfo_phase", 0.0)
         # FM: phase continuity across chunks
         self._last_phase: Optional[float] = None
         # deemphasis lfilter state
@@ -503,6 +511,9 @@ class StreamingDemodulator:
         self._sample_rate: Optional[float] = None
         self._audio_rate: Optional[float] = None
         self._wbfm: Optional[bool] = None
+        # Restore VFO config (preserved across reset — see method docstring).
+        self._vfo_offset_hz = vfo_off
+        self._vfo_phase = vfo_phase
 
     # ------------------------------------------------------------------
     # Internal helpers

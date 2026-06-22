@@ -526,6 +526,27 @@ const App = {
             wfAutoBtn.addEventListener('touchend', (e) => { e.preventDefault(); endHold(); }, { passive: false });
         }
 
+        // Signal Tag toggle — show/hide frequency annotations on strong signals
+        const sigtagBtn = document.getElementById('sigtag-btn');
+        if (sigtagBtn) {
+            const syncSigtagBtn = () => {
+                const on = this.signalTagEnabled;
+                sigtagBtn.classList.toggle('active', on);
+                sigtagBtn.textContent = on ? '📡 TAG' : '📡 OFF';
+            };
+            syncSigtagBtn();
+            sigtagBtn.addEventListener('click', () => {
+                this.signalTagEnabled = !this.signalTagEnabled;
+                syncSigtagBtn();
+                if (!this.signalTagEnabled) {
+                    this._signalAnnotations = [];
+                    this._sigTagLastShown = {};
+                    this._waterfallDirty = true;
+                }
+                console.log(`📡 Signal Tag ${this.signalTagEnabled ? 'ON' : 'OFF'}`);
+            });
+        }
+
         // Direct frequency input (click on freq display)
         const freqBox = document.getElementById('freq-display-box');
         if (freqBox) freqBox.addEventListener('click', () => this.showFreqInput());
@@ -808,8 +829,15 @@ const App = {
             const parts = mhzVfo.toFixed(4).split('.');
             const intPart = parts[0].split('').join(' ');
             const decPart = parts[1];
+            // Warn when the VFO is outside the usable passband (the backend
+            // should already have reset/clamped it, but if it ever slips we
+            // want the user to see WHY the audio is noise).
+            const offscreen = !this._isVfoInPassband();
+            const warn = offscreen
+                ? ` <span style="color:#ff5050;font-size:0.5em;vertical-align:middle">⚠ นอกช่วงรับสัญญาณ</span>`
+                : '';
             // Show all 4 decimal digits
-            freqDisplay.innerHTML = `${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>`;
+            freqDisplay.innerHTML = `${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>${warn}`;
         }
 
         // === Waterfall overlay: show CENTER frequency + band edges ===
@@ -1156,6 +1184,11 @@ const App = {
     _waterfallDirty: false,         // need to composite to main canvas
     _waterfallBins: 0,              // native FFT bin count (= back buffer width)
     _waterfallZoomMax: 20,          // max zoom factor
+
+    // === Signal Tag (frequency annotations on strong signals) ===
+    _signalAnnotations: [],         // active annotation objects {freq, rightFreq, y, ...}
+    _sigTagLastShown: {},           // freqKey → timestamp of last shown annotation
+    _sigTagColorIdx: 0,             // color cycle counter for annotations
 
     // === Zoom & Pan state ===
     // _wfZoom: 1 = full passband visible; >1 = zoomed in.
@@ -1671,6 +1704,7 @@ const App = {
             this._drawFreqGrid(ctx, w, h);
             this._drawChannelBwOverlay(ctx, w, h);
             this._drawVFOCursor(ctx, w, h);
+            this._drawSignalAnnotations(ctx, w, h);
             this._waterfallDirty = false;
         }
     },
@@ -1753,17 +1787,34 @@ const App = {
     /**
      * Draw VFO cursor — dashed red vertical line + ▼ wings marker at the
      * listening frequency. Drawn on every dirty frame so it tracks clicks.
+     *
+     * If the listening frequency is outside the current passband
+     * (|vfoOffsetHz| > 0.95 × sampleRate/2) — which can happen transiently
+     * when a background job retunes the shared tuner — the cursor is
+     * CLAMPED to the near edge of the canvas and drawn dimmed with an
+     * "off-screen" label, so it is never invisible.
      */
     _drawVFOCursor(ctx, w, h) {
-        // VFO position within the current zoom view
-        const cx = this._wfFreqToX(this.currentFreq + (this._vfoOffsetHz || 0), w);
+        const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
+        const offscreen = !this._isVfoInPassband();
+        // Raw (un-clamped) position; may be < 0 or > w when off-screen.
+        const rawCx = this._wfFreqToX(vfoHz, w);
+        // Clamp into [0, w] so the marker always stays visible.
+        const cx = Math.max(0, Math.min(w, rawCx));
 
         ctx.save();
 
-        // Dashed vertical line (full height) at VFO position
-        ctx.strokeStyle = 'rgba(255, 80, 80, 0.7)';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([10, 5]);
+        if (offscreen) {
+            // Dimmed + dotted to signal that the VFO is outside the passband.
+            ctx.strokeStyle = 'rgba(255, 80, 80, 0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([3, 4]);
+        } else {
+            // Dashed vertical line (full height) at VFO position
+            ctx.strokeStyle = 'rgba(255, 80, 80, 0.7)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([10, 5]);
+        }
         ctx.beginPath();
         ctx.moveTo(Math.round(cx) + 0.5, 0);
         ctx.lineTo(Math.round(cx) + 0.5, h);
@@ -1771,7 +1822,7 @@ const App = {
 
         // ▼ wings marker at top
         ctx.setLineDash([]);
-        ctx.strokeStyle = 'rgba(255, 80, 80, 0.95)';
+        ctx.strokeStyle = offscreen ? 'rgba(255, 80, 80, 0.5)' : 'rgba(255, 80, 80, 0.95)';
         ctx.lineWidth = 2;
         const armW = 8;
         ctx.beginPath();
@@ -1779,6 +1830,114 @@ const App = {
         ctx.lineTo(cx, 7);
         ctx.lineTo(cx + armW, 0);
         ctx.stroke();
+
+        // "◀ off-screen" / "off-screen ▶" label when the VFO is outside band.
+        if (offscreen) {
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(255, 80, 80, 0.85)';
+            ctx.font = '11px monospace';
+            ctx.textBaseline = 'top';
+            const label = rawCx < 0 ? '◀ VFO off-screen' : 'VFO off-screen ▶';
+            const tx = rawCx < 0 ? 4 : Math.max(4, w - 110);
+            ctx.fillText(label, tx, 12);
+        }
+
+        ctx.restore();
+    },
+
+    /**
+     * Whether the current VFO offset places the listening frequency inside
+     * the usable passband (|offset| ≤ 0.95 × sampleRate/2). Used to flag an
+     * off-screen cursor and to warn in the big frequency display.
+     */
+    _isVfoInPassband() {
+        const sr = this._sampleRate || 0;
+        if (sr <= 0) return true;
+        const maxOff = sr * 0.5 * 0.95;
+        return Math.abs(this._vfoOffsetHz || 0) <= maxOff;
+    },
+
+    /**
+     * Draw signal frequency annotations — vertical "sticks" with the frequency
+     * number, positioned to the right of strong signals (above SQL threshold).
+     * Each annotation scrolls down with its signal (y tracks waterfall scroll).
+     *
+     * Display rules:
+     *   - A frequency can only be annotated again 10s after its last annotation
+     *   - Nearby simultaneous signals are staggered by 5s
+     */
+    _drawSignalAnnotations(ctx, w, h) {
+        if (!this.signalTagEnabled) return;
+
+        const colors = ['#22d3ee', '#c084fc', '#f472b6', '#fb923c', '#4ade80', '#facc15'];
+
+        ctx.save();
+        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+
+        for (const ann of this._signalAnnotations) {
+            if (!ann.visible) continue;
+            if (ann.y < -30 || ann.y > h + 30) continue;
+
+            const color = colors[ann.colorIdx % colors.length];
+            const signalX = this._wfFreqToX(ann.freq, w);
+            const rightX = this._wfFreqToX(ann.rightFreq, w);
+            // Skip if signal peak is outside the visible window
+            if (signalX < -20 || signalX > w + 20) continue;
+
+            // Position stick to the RIGHT of the signal with padding (flip left if no room)
+            const padding = 12;
+            let stickX, connectorStart;
+            if (rightX + padding <= w - 4) {
+                stickX = rightX + padding;
+                connectorStart = rightX;
+            } else if (signalX - padding >= 4) {
+                stickX = signalX - padding;
+                connectorStart = signalX;
+            } else {
+                stickX = Math.max(4, Math.min(w - 4, rightX));
+                connectorStart = signalX;
+            }
+            const y = ann.y;
+
+            // Horizontal connector from signal edge to stick
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
+            ctx.moveTo(connectorStart, y);
+            ctx.lineTo(stickX, y);
+            ctx.stroke();
+
+            // Small dot at signal peak
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(signalX, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Vertical stick
+            ctx.globalAlpha = 0.9;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(stickX, y - 18);
+            ctx.lineTo(stickX, y + 18);
+            ctx.stroke();
+
+            // Frequency text rotated (reading bottom-to-top)
+            ctx.save();
+            ctx.translate(stickX, y);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = color;
+            const label = (ann.freq / 1e6).toFixed(4);
+            ctx.shadowColor = 'rgba(0,0,0,0.95)';
+            ctx.shadowBlur = 4;
+            ctx.fillText(label, 0, 0);
+            ctx.restore();
+        }
 
         ctx.restore();
     },
@@ -1869,6 +2028,14 @@ const App = {
     },
     set waterfallSpeed(val) {
         localStorage.setItem('waterfall_speed', val);
+    },
+
+    // Signal Tag enabled (persisted in localStorage, default ON)
+    get signalTagEnabled() {
+        return localStorage.getItem('signal_tag_enabled') !== 'false';
+    },
+    set signalTagEnabled(val) {
+        localStorage.setItem('signal_tag_enabled', String(val));
     },
 
     // Waterfall dB range (global, from localStorage / Display tab).
@@ -1996,11 +2163,142 @@ const App = {
         if (this._waterfallPendingLines.length > maxPending) {
             this._waterfallPendingLines.splice(0, this._waterfallPendingLines.length - maxPending);
         }
+
+        // Signal Tag: detect strong signals and update annotations
+        this._updateSignalAnnotations(line);
     },
 
     spectrumToColor(db) {
         // Not used anymore - colors computed inline in _renderWaterfall
         return '#000';
+    },
+
+    // === Signal Tag: detect signals above squelch ===
+    // Returns array of { freq, rightFreq } for each signal region.
+    // freq       = peak frequency of the signal (Hz)
+    // rightFreq  = right edge frequency (Hz), used for stick X position
+    _detectSignals(spectrum) {
+        const squelchInput = document.getElementById('squelch-input');
+        const squelchLevel = squelchInput ? parseFloat(squelchInput.value) : -70;
+        if (!isFinite(squelchLevel)) return [];
+
+        const numBins = spectrum.length;
+        if (numBins <= 0) return [];
+        const sr = this._sampleRate || 2048000;
+        const binHz = sr / numBins;
+        const lowHz = this.currentFreq - sr / 2;
+
+        // Minimum width to filter out noise spikes (~0.3% of bins)
+        const minWidth = Math.max(2, Math.round(numBins * 0.003));
+
+        const signals = [];
+        let regionStart = -1;
+        let regionPeak = -1;
+        let regionPeakVal = -Infinity;
+
+        for (let i = 0; i <= numBins; i++) {
+            const val = (i < numBins) ? spectrum[i] : -Infinity;
+            if (val > squelchLevel) {
+                if (regionStart < 0) {
+                    regionStart = i;
+                    regionPeakVal = val;
+                    regionPeak = i;
+                } else if (val > regionPeakVal) {
+                    regionPeakVal = val;
+                    regionPeak = i;
+                }
+            } else if (regionStart >= 0) {
+                const width = i - regionStart;
+                if (width >= minWidth) {
+                    signals.push({
+                        freq: Math.round(lowHz + regionPeak * binHz),
+                        rightFreq: Math.round(lowHz + i * binHz),
+                    });
+                }
+                regionStart = -1;
+                regionPeakVal = -Infinity;
+            }
+        }
+        return signals;
+    },
+
+    // === Signal Tag: track annotations and enforce display rules ===
+    // Called once per spectrum frame from drawWaterfall().
+    //   - Advances existing annotation y positions (scroll with waterfall)
+    //   - Removes off-screen annotations
+    //   - Detects new signals and creates annotations subject to:
+    //       10s cooldown per frequency bucket (25 kHz)
+    //       5s stagger for nearby simultaneous signals
+    _updateSignalAnnotations(spectrum) {
+        if (!this.signalTagEnabled) {
+            if (this._signalAnnotations.length > 0) {
+                this._signalAnnotations = [];
+            }
+            return;
+        }
+
+        const h = this._waterfallCanvasH || 300;
+        const speed = this.waterfallSpeed;
+        const now = Date.now();
+
+        // Advance existing annotations downward (scroll with waterfall)
+        for (const ann of this._signalAnnotations) {
+            ann.y += speed;
+            // Activate staggered annotations when their delay expires
+            if (!ann.visible && now >= ann.showAtTime) {
+                ann.visible = true;
+                ann.shownTime = now;
+                this._sigTagLastShown[ann.freqKey] = now;
+                this._waterfallDirty = true;
+            }
+        }
+        // Remove annotations that have scrolled off-screen
+        const before = this._signalAnnotations.length;
+        this._signalAnnotations = this._signalAnnotations.filter(a => a.y < h + 60);
+        if (this._signalAnnotations.length !== before) this._waterfallDirty = true;
+
+        // Detect signals above squelch threshold
+        const signals = this._detectSignals(spectrum);
+        if (signals.length === 0) return;
+
+        const COOLDOWN_MS = 10000;      // 10s per-frequency cooldown
+        const STAGGER_MS = 5000;        // 5s delay for nearby simultaneous signals
+        const FREQ_BUCKET_HZ = 25000;   // frequency grouping for cooldown (~25 kHz)
+
+        for (const sig of signals) {
+            const freqKey = Math.round(sig.freq / FREQ_BUCKET_HZ) * FREQ_BUCKET_HZ;
+
+            // Cooldown: same freq bucket can't show again within 10s
+            const lastShown = this._sigTagLastShown[freqKey] || 0;
+            if (now - lastShown < COOLDOWN_MS) continue;
+
+            // Skip if there's already an annotation (visible or pending) for this freq
+            if (this._signalAnnotations.some(a => a.freqKey === freqKey)) continue;
+
+            // Stagger: if a nearby annotation was shown recently, delay this one
+            const nearbyRecent = this._signalAnnotations.find(a =>
+                a.visible && a.shownTime &&
+                Math.abs(a.freq - sig.freq) < FREQ_BUCKET_HZ * 3 &&
+                (now - a.shownTime) < STAGGER_MS
+            );
+            const showAt = nearbyRecent ? (now + STAGGER_MS) : now;
+
+            this._signalAnnotations.push({
+                freqKey: freqKey,
+                freq: sig.freq,
+                rightFreq: sig.rightFreq,
+                y: 0,
+                showAtTime: showAt,
+                visible: (showAt === now),
+                shownTime: (showAt === now) ? now : 0,
+                colorIdx: this._sigTagColorIdx++,
+            });
+
+            if (showAt === now) {
+                this._sigTagLastShown[freqKey] = now;
+            }
+            this._waterfallDirty = true;
+        }
     },
 
     // Shift waterfall back buffer horizontally when frequency changes.

@@ -46,6 +46,8 @@ from backend.sdr.rtl_tcp import RtlTcpClient
 from backend.sdr.connection_pool import (
     pool as connection_pool, PRIORITY_JOB, PRIORITY_LIVE,
 )
+# notify_live_tuner_changed is imported lazily inside _reclaim_tuner to avoid
+# a circular import (manager.py imports from this package's connection_pool).
 from backend.audio.demod import DemodMode, StreamingDemodulator, compute_signal_level
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
@@ -313,10 +315,13 @@ class DeviceCapture:
                     old_id: Optional[str], old_prio: int) -> None:
         """Called by SharedDeviceConnection when the controller changes.
 
-        - LIVE (interactive listening) claims the tuner → we PAUSE.
-          We must finish any in-progress recording, because the tuner is
-          now on a different center frequency and continuing to buffer
-          would splice audio from the wrong frequency.
+        - LIVE (interactive listening) claims the tuner → we PAUSE *unless*
+          the tuner is already on OUR center frequency / sample rate. When a
+          LIVE listener tunes via VFO offset (OpenWebRX-style) without
+          retuning the hardware, our target channels are still reachable at
+          the same offsets, so pausing would only silence the recording for
+          no reason. We must finish in-progress recordings ONLY when the
+          tuner actually moved to a different center frequency.
         - LIVE releases the tuner and we become controller again → we
           RESUME and RE-APPLY our tuner (freq/sample_rate/gain/ppm),
           because LIVE may have retuned/changed ppm. Without this the
@@ -326,6 +331,25 @@ class DeviceCapture:
             return
         # We are being preempted by a higher-priority consumer (LIVE).
         if new_id != self._consumer_id and new_prio >= PRIORITY_LIVE:
+            # Check whether the shared tuner is actually moving away from
+            # our center/sample_rate. If a LIVE listener is decoding via a
+            # VFO offset on the SAME center, our channels are still valid
+            # and we can keep recording.
+            shared = self._shared_client
+            same_tuner = (
+                shared is not None
+                and int(getattr(shared, '_frequency', 0) or 0) == self.center_hz
+                and int(getattr(shared, '_sample_rate', 0) or 0) == self.sample_rate
+            )
+            if same_tuner:
+                logger.info(
+                    f"🎧 [job={self.job_id}] LIVE listener on same center "
+                    f"({self.center_hz/1e6:.4f} MHz) — keep recording (no pause)"
+                )
+                # Stay RUNNING but remember LIVE owns the tuner now; the
+                # stream loop will still process IQ for our channels as
+                # long as they remain in the (unchanged) passband.
+                return
             logger.info(
                 f"⏸️ [job={self.job_id}] Preempted by {new_id} (prio {new_prio})"
             )
@@ -418,6 +442,19 @@ class DeviceCapture:
             logger.info(
                 f"🎛️ [job={self.job_id}] Claimed tuner (was not controller before)"
             )
+        # Notify the LIVE side that we just retuned the SHARED tuner out from
+        # under it. Without this, the LIVE consumer's mirror (freq/sr/ppm)
+        # stays STALE and its VFO offset — relative to the OLD center — now
+        # points outside the new passband. Symptom: dashboard shows a
+        # "listening" frequency like 169.263 MHz while the real passband is
+        # 168.000–169.024 MHz (off-screen cursor + pure-noise audio).
+        try:
+            from backend.sdr.manager import notify_live_tuner_changed
+            await notify_live_tuner_changed(self.device_id)
+        except Exception as e:
+            logger.warning(
+                f"[job={self.job_id}] notify_live_tuner_changed failed: {e}"
+            )
 
     @property
     def is_running(self) -> bool:
@@ -506,6 +543,28 @@ class DeviceCapture:
         else:
             actual_center = self.center_hz
             actual_sr = self.sample_rate
+
+        # === DIAGNOSTIC: log actual tuner state + per-channel signal level
+        # every ~5s so we can compare JOB-alone vs JOB+LIVE behavior.
+        # Controlled by SDR_JOB_DEBUG env var (off by default). ===
+        now = time.time()
+        _debug = bool(getattr(settings, "SDR_JOB_DEBUG", False))
+        if _debug and (not hasattr(self, "_diag_last") or now - self._diag_last > 5.0):
+            self._diag_last = now
+            iq_len = len(iq_data)
+            ctrl = "?"
+            try:
+                if self.client and self.client._conn:
+                    ctrl = str(self.client._conn._controller_id)
+            except Exception:
+                pass
+            logger.info(
+                f"🔎 [diag job={self.job_id}] state={self._state} "
+                f"ctrl={ctrl} am_controller={self._is_controller()} "
+                f"actual_center={actual_center/1e6:.4f}MHz want_center={self.center_hz/1e6:.4f}MHz "
+                f"actual_sr={actual_sr} want_sr={self.sample_rate} "
+                f"iq_bytes={iq_len} ppm(shared)={getattr(shared, '_ppm', '?')}"
+            )
         # Safety: if the actual center/sample_rate changed from what our
         # demodulator was built for, the dynamic offset handling below will
         # recompute per-channel offsets; if a channel is unreachable we skip
@@ -537,11 +596,50 @@ class DeviceCapture:
                     vfo_offset_hz=ch.offset_hz,
                 )
                 ch.signal_level = level
+                # === DIAGNOSTIC (SDR_JOB_DEBUG): per-channel level vs squelch,
+                # including a center-probe (offset=0) to isolate "no signal at
+                # target" from a broken demod/signal-level function. ===
+                if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:
+                    try:
+                        level_center = compute_signal_level(
+                            iq_data,
+                            sample_rate=actual_sr,
+                            mode=ch.demod_mode,
+                            channel_bw=ch.bandwidth_hz,
+                            vfo_offset_hz=0.0,
+                        )
+                    except Exception:
+                        level_center = -999.0
+                    print(
+                        f"🔎 [probe] {ch.frequency_hz/1e6:.4f}MHz "
+                        f"off={ch.offset_hz/1000:+.1f}kHz "
+                        f"target={level:.1f}dB | CENTER(off=0)={level_center:.1f}dB | "
+                        f"sql={ch.squelch_db:.1f}dB above={level > ch.squelch_db} "
+                        f"rec={ch.is_recording} {ch.demod_mode.value} bw={ch.bandwidth_hz}",
+                        flush=True,
+                    )
 
                 audio = ch.demod.process(
                     iq_data, ch.demod_mode, actual_sr, self.audio_rate,
                     channel_bw=ch.bandwidth_hz,
                 )
+
+                # === DIAG: audio RMS to confirm demod output quality ===
+                if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:
+                    import numpy as _np
+                    if len(audio) > 0:
+                        audio_rms = float(_np.sqrt(_np.mean(audio.astype(_np.float64) ** 2)))
+                        audio_max = float(_np.max(_np.abs(audio)))
+                    else:
+                        audio_rms = -1.0
+                        audio_max = -1.0
+                    print(
+                        f"🔎 [audio] {ch.frequency_hz/1e6:.4f}MHz "
+                        f"demod_offset_inside={ch.demod._vfo_offset_hz/1000:+.1f}kHz "
+                        f"audio_rms={audio_rms:.4f} audio_max={audio_max:.4f} "
+                        f"samples={len(audio)}",
+                        flush=True,
+                    )
 
                 above = level > ch.squelch_db
 

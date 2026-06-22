@@ -509,12 +509,39 @@ class SDRManager:
             )
         # Preconfigure tuner values before connecting so the RTL-TCP
         # handshake sends correct freq/sr/gain/ppm.
-        consumer.preconfigure(
-            self.client._frequency,
-            self.client._sample_rate,
-            self.client._gain,
-            self.client._ppm,
+        #
+        # CRITICAL: if a background JOB is already the controller on the
+        # shared connection, we must adopt ITS tuner values — NOT our own
+        # persisted ones. Otherwise the RTL-TCP handshake (client.connect())
+        # sends set_frequency/set_sample_rate straight to the dongle,
+        # bypassing the priority arbitration, and silently overwrites the
+        # JOB's tuner settings. Symptom: at boot the autostart LIVE consumer
+        # connects after the JOB has already reclaimed the tuner, the
+        # handshake re-tunes to the stale persisted center (e.g. 168.024 MHz
+        # vs the JOB's 168.512 MHz), and the JOB then demodulates at the
+        # wrong center → "เสียงซ่าๆ".
+        shared_client = getattr(consumer._conn, "client", None)
+        has_controller = (
+            shared_client is not None
+            and getattr(consumer._conn, "_controller_id", None) is not None
         )
+        if has_controller and shared_client.connected:
+            # Adopt the controller's actual tuner state so we do NOT disturb it.
+            pre_freq = shared_client._frequency
+            pre_sr = shared_client._sample_rate
+            pre_gain = shared_client._gain
+            pre_ppm = shared_client._ppm
+            logger.info(
+                f"🎛️ LIVE connect adopting controller tuner "
+                f"(center={pre_freq/1e6:.4f} MHz sr={pre_sr}) — "
+                f"will NOT overwrite the active JOB"
+            )
+        else:
+            pre_freq = self.client._frequency
+            pre_sr = self.client._sample_rate
+            pre_gain = self.client._gain
+            pre_ppm = self.client._ppm
+        consumer.preconfigure(pre_freq, pre_sr, pre_gain, pre_ppm)
         ok = await consumer.connect()
         if ok:
             self.client = consumer
@@ -571,14 +598,7 @@ class SDRManager:
         offset was relative to the old center and would point elsewhere).
         """
         await self.client.set_frequency(freq_hz)
-        # Reset VFO offset — it was relative to the old center frequency.
-        if abs(self._vfo_offset_hz) > 0.5:
-            self._vfo_offset_hz = 0.0
-            self._vfo_phase = 0.0
-            self._demod.set_vfo_offset(0.0)
-        # Reset EVERY listener's per-user VFO offset, since their offsets were
-        # relative to the old center frequency too.
-        audio_broadcaster.reset_all_vfo()
+        await self._on_shared_tuner_changed()
         if self.mode == DemodMode.FM:
             if self._is_wbfm_band(freq_hz) and self._channel_bw != self.WBFM_CHANNEL_BW:
                 self._channel_bw = self.WBFM_CHANNEL_BW
@@ -605,6 +625,64 @@ class SDRManager:
         await self.client.set_freq_correction(ppm)
         self._save_persisted_settings()
         await self.sync_active_device_config()
+
+    def _clamp_vfo_offset(self) -> bool:
+        """Clamp our VFO offset into the current passband (defensive guard).
+
+        Returns True if the offset was changed (clamped or reset). Called
+        whenever the shared tuner's center/sample_rate may have changed
+        out from under us. If the offset still fits in the new passband
+        we keep it (preserve the user's listening position); otherwise we
+        reset to 0 (center).
+        """
+        sr = self.client._sample_rate or 0
+        if sr <= 0:
+            return False
+        max_offset = sr * self._vfo_margin_ratio
+        off = self._vfo_offset_hz
+        if abs(off) > max_offset + 0.5:
+            # No longer fits → reset to center.
+            self._vfo_offset_hz = 0.0
+            self._vfo_phase = 0.0
+            self._demod.set_vfo_offset(0.0)
+            return True
+        return False
+
+    async def _on_shared_tuner_changed(self) -> None:
+        """React to a center frequency / sample rate change on the shared tuner.
+
+        Called from two places:
+          1. Our own set_frequency() (LIVE path).
+          2. DeviceCapture._reclaim_tuner() via notify_live_tuner_changed()
+             (JOB path) — when a background recording job retunes the SHARED
+             device, our consumer mirror goes stale and our VFO offset
+             (relative to the OLD center) now points elsewhere. We must sync
+             the mirror from the shared client, reset / clamp our own demod
+             offset, and reset every listener's offset, otherwise the
+             dashboard shows a "listening" frequency OUTSIDE the new passband
+             (e.g. 168.512 MHz center + a stale +751 kHz offset = 169.263 MHz
+             → off-screen cursor + pure-noise audio).
+        """
+        shared = getattr(self.client, "_conn", None)
+        shared_client = getattr(shared, "client", None) if shared is not None else None
+        if shared_client is not None:
+            # Sync our consumer-side mirror to the ACTUAL shared tuner state,
+            # because the retune may have been issued by a different consumer
+            # (the JOB) and our mirror (self.client._frequency) is now stale.
+            self.client._frequency = shared_client._frequency
+            self.client._sample_rate = shared_client._sample_rate
+            self.client._gain = shared_client._gain
+            self.client._ppm = shared_client._ppm
+        # Defensive clamp: if the existing offset still fits in the new
+        # passband, keep it; otherwise reset to 0.
+        self._clamp_vfo_offset()
+        # Reset EVERY listener's per-user VFO offset, since their offsets
+        # were relative to the old center frequency too.
+        audio_broadcaster.reset_all_vfo()
+        # Persist the (now-current) shared tuner state so a restart does not
+        # boot back to a stale center/sample_rate that the JOB had moved away
+        # from.
+        self._save_persisted_settings()
 
     def set_channel_bw(self, bw_hz: int):
         if not (1000 <= bw_hz <= 500000):
@@ -1702,3 +1780,31 @@ class SDRManager:
 
 # Global SDR manager instance
 sdr_manager = SDRManager()
+
+
+async def notify_live_tuner_changed(device_id: Optional[str] = None) -> None:
+    """Tell the LIVE side that the shared tuner was retuned by a background job.
+
+    A DeviceCapture (JOB) retunes the SHARED RtlTcpClient via its own
+    consumer — bypassing SDRManager.set_frequency(). That leaves the LIVE
+    consumer's mirror (freq/sample_rate/ppm) STALE and its VFO offset
+    (relative to the OLD center) pointing outside the new passband. The
+    symptom is the dashboard showing a listening frequency like 169.263 MHz
+    while the real passband is 168.000–169.024 MHz → off-screen cursor and
+    pure-noise audio.
+
+    This function lets DeviceCapture notify the LIVE side so it can sync its
+    mirror, reset/clamp its VFO offset, and reset every listener's offset.
+    It is a best-effort, fire-and-forget call (all failures are logged, not
+    raised) so a JOB's reclaim path can never be broken by the LIVE side.
+    """
+    try:
+        mgr = sdr_manager
+        # If a specific device_id is given and it does not match the active
+        # LIVE device, there's nothing to sync.
+        if device_id is not None and getattr(mgr, "_active_device_id", None) \
+                and mgr._active_device_id != device_id:
+            return
+        await mgr._on_shared_tuner_changed()
+    except Exception as e:
+        logger.warning(f"notify_live_tuner_changed failed: {e}", exc_info=True)
