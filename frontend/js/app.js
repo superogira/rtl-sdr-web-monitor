@@ -370,7 +370,7 @@ const App = {
     },
 
     // === Radio Controls ===
-    _stepSize: 25000,  // Default step: 25 kHz
+    _stepSize: 1000,  // Default step: 1 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
     _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
     _vfoOffsetHz: 0,    // VFO offset from center (Hz). 0 = listen at center.
