@@ -1,3 +1,4 @@
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from backend.config import settings
@@ -11,6 +12,48 @@ if "sqlite" not in settings.DATABASE_URL:
     engine_kwargs["max_overflow"] = 10
 
 engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# SQLite performance pragmas.
+#
+# Default SQLite (journal_mode=delete, synchronous=FULL) fsyncs the WHOLE
+# database file on every commit. Measured on this server: ~75-95 ms per
+# COMMIT, which blocks the single asyncio event loop that also runs live audio
+# streaming → audio underruns/re-buffering whenever anyone logs in or saves a
+# setting.
+#
+# WAL mode (write-ahead logging) writes append-only to a small -wal file and
+# only fsyncs that, allowing readers and the writer to run concurrently.
+# Combined with synchronous=NORMAL (the SQLite-recommended pairing for WAL),
+# COMMIT drops to <5 ms. WAL is durable across app crashes; the only thing at
+# risk under NORMAL is the very last transaction on a HARD OS crash / power
+# loss (acceptable trade-off for a monitoring app, and the standard guidance).
+#
+# These PRAGMAs are applied per-connection via the SQLAlchemy "connect" event
+# on the underlying sync_engine (aiosqlite wraps sqlite3, so this fires for
+# every real connection). Only attached when the URL is SQLite so a future
+# Postgres/etc. deployment is unaffected.
+# ---------------------------------------------------------------------------
+if "sqlite" in settings.DATABASE_URL:
+    _SQLITE_PRAGMAS = (
+        ("journal_mode", "WAL"),
+        ("synchronous", "NORMAL"),
+        ("mmap_size", "268435456"),   # 256 MB memory-mapped I/O
+        ("cache_size", "-65536"),      # ~64 MB page cache (negative = KB)
+        ("temp_store", "MEMORY"),      # temp tables/indices in RAM
+        ("busy_timeout", "5000"),      # ms to wait on lock contention
+        ("foreign_keys", "ON"),
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+        cur = dbapi_conn.cursor()
+        try:
+            for key, value in _SQLITE_PRAGMAS:
+                cur.execute(f"PRAGMA {key}={value}")
+        finally:
+            cur.close()
 
 # Session factory
 async_session = async_sessionmaker(
