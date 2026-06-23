@@ -500,7 +500,31 @@ const LiveAudio = {
 
         // Create AudioBuffer
         const audioBuffer = this.ctx.createBuffer(1, numSamples, sampleRate);
-        audioBuffer.copyToChannel(float32, 0);
+
+        // === Anti-click: apply short fade-in / fade-out ramps at the chunk
+        // edges so that consecutive AudioBufferSourceNodes splice smoothly.
+        // Each chunk is played as its own BufferSource back-to-back; without
+        // edge ramps, ANY tiny discontinuity (sub-sample timing, resampler
+        // phase, encoder rounding) at the boundary produces a periodic click
+        // (one per chunk = a rhythmic "tick tick tick"). ~2 ms ramps are
+        // inaudible to speech but eliminate the click. ===
+        const rampN = Math.min(Math.floor(sampleRate * 0.002), numSamples >> 2);
+        if (rampN > 1) {
+            const ch0 = audioBuffer.getChannelData(0);
+            // Linear fade-in on the first rampN samples
+            for (let i = 0; i < rampN; i++) {
+                ch0[i] = float32[i] * (i / rampN);
+            }
+            // Linear fade-out on the last rampN samples
+            for (let i = 0; i < rampN; i++) {
+                const j = numSamples - rampN + i;
+                ch0[j] = float32[j] * ((rampN - i) / rampN);
+            }
+            // Copy the untouched middle as-is
+            ch0.set(float32.subarray(rampN, numSamples - rampN), rampN);
+        } else {
+            audioBuffer.copyToChannel(float32, 0);
+        }
 
         // Schedule playback
         this._scheduleBuffer(audioBuffer);
