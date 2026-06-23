@@ -221,9 +221,9 @@ async def set_max_listeners(
 @router.post("/sample-rate")
 async def set_sample_rate(
     req: SampleRateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set sample rate."""
+    """Set sample rate (admin only)."""
     if not sdr_manager.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
     await sdr_manager.set_sample_rate(req.sample_rate)
@@ -233,9 +233,9 @@ async def set_sample_rate(
 @router.post("/gain")
 async def set_gain(
     req: GainRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set gain."""
+    """Set gain (admin only)."""
     if not sdr_manager.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
     await sdr_manager.set_gain(req.gain)
@@ -294,9 +294,9 @@ async def set_bandwidth(
 @router.post("/freq-correction")
 async def set_freq_correction(
     req: FreqCorrectionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set frequency correction in PPM (parts per million)."""
+    """Set frequency correction in PPM (admin only)."""
     await sdr_manager.set_freq_correction(req.ppm)
     return {"ppm": req.ppm}
 
