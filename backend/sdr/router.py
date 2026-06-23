@@ -16,7 +16,7 @@ from backend.database import get_db
 from backend.models.recording import Recording, RecordingStatus
 from backend.config import settings
 from backend.services.stt import transcribe, _get_stt_config
-from backend.services.app_settings import get_setting, set_setting
+from backend.services.app_settings import get_setting, set_setting, set_settings_batch
 from backend.models.app_setting import mask_value, is_masked_value
 from backend.models.sdr_device import SdrDevice, DEVICE_TYPES, default_config_for_type
 from sqlalchemy import select, func, or_
@@ -975,64 +975,71 @@ async def update_stt_settings(
 
     Note: if `api_key`/`azure_key` is empty or a masked placeholder, the
     existing key is kept.
+
+    Validation runs first; all accepted values are collected into one dict and
+    written in a SINGLE transaction via set_settings_batch(). Previously this
+    called set_setting() ~15 times, each opening its own session and committing
+    (~15 × the per-commit fsync cost on the event loop).
     """
+    updates: dict[str, str] = {}
+
     if req.provider is not None:
         if req.provider not in ("speechmatics", "azure", "whisper_local"):
             raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', or 'whisper_local'")
-        await set_setting("stt_provider", req.provider)
+        updates["stt_provider"] = req.provider
 
     # Only update API key if a real (non-empty, non-masked) value is provided.
     # `is_masked_value()` also catches the "***" form returned by mask_value()
     # for short secrets — previously only "..." was rejected, so "***" would
     # overwrite the real key (root cause of Speechmatics key corruption).
     if req.api_key is not None and req.api_key.strip() and not is_masked_value(req.api_key):
-        await set_setting("stt_speechmatics_api_key", req.api_key.strip())
+        updates["stt_speechmatics_api_key"] = req.api_key.strip()
 
     if req.language is not None:
         if req.language not in ("th", "en", "auto"):
             raise HTTPException(status_code=400, detail="Language must be 'th', 'en', or 'auto'")
-        await set_setting("stt_language", req.language)
+        updates["stt_language"] = req.language
 
     if req.auto_transcribe is not None:
-        await set_setting("stt_auto_transcribe", "true" if req.auto_transcribe else "false")
+        updates["stt_auto_transcribe"] = "true" if req.auto_transcribe else "false"
 
     # Speechmatics-specific options
     if req.operating_point is not None:
         if req.operating_point not in ("standard", "enhanced"):
             raise HTTPException(status_code=400, detail="operating_point must be 'standard' or 'enhanced'")
-        await set_setting("stt_operating_point", req.operating_point)
+        updates["stt_operating_point"] = req.operating_point
 
     if req.diarization is not None:
         if req.diarization not in ("none", "speaker", "channel"):
             raise HTTPException(status_code=400, detail="diarization must be 'none', 'speaker', or 'channel'")
-        await set_setting("stt_diarization", req.diarization)
+        updates["stt_diarization"] = req.diarization
 
     if req.enable_entities is not None:
-        await set_setting("stt_enable_entities", "true" if req.enable_entities else "false")
+        updates["stt_enable_entities"] = "true" if req.enable_entities else "false"
 
     # Azure-specific options
     if req.azure_key is not None and req.azure_key.strip() and not is_masked_value(req.azure_key):
-        await set_setting("stt_azure_key", req.azure_key.strip())
+        updates["stt_azure_key"] = req.azure_key.strip()
 
     if req.azure_region is not None and req.azure_region.strip():
-        await set_setting("stt_azure_region", req.azure_region.strip())
+        updates["stt_azure_region"] = req.azure_region.strip()
 
     # Whisper Local-specific options
     if req.whisper_local_host is not None:
-        await set_setting("stt_whisper_local_host", req.whisper_local_host.strip())
+        updates["stt_whisper_local_host"] = req.whisper_local_host.strip()
     if req.whisper_local_port is not None:
-        await set_setting("stt_whisper_local_port", str(int(req.whisper_local_port)))
+        updates["stt_whisper_local_port"] = str(int(req.whisper_local_port))
     if req.whisper_local_model is not None and req.whisper_local_model.strip():
-        await set_setting("stt_whisper_local_model", req.whisper_local_model.strip())
+        updates["stt_whisper_local_model"] = req.whisper_local_model.strip()
     if req.whisper_local_task is not None:
         if req.whisper_local_task not in ("transcribe", "translate"):
             raise HTTPException(status_code=400, detail="whisper_local_task must be 'transcribe' or 'translate'")
-        await set_setting("stt_whisper_local_task", req.whisper_local_task)
+        updates["stt_whisper_local_task"] = req.whisper_local_task
     if req.whisper_local_temperature is not None:
         t = float(req.whisper_local_temperature)
         if t < 0.0 or t > 1.0:
             raise HTTPException(status_code=400, detail="whisper_local_temperature must be between 0.0 and 1.0")
-        await set_setting("stt_whisper_local_temperature", str(t))
+        updates["stt_whisper_local_temperature"] = str(t)
 
     # Per-provider audio preprocessing format
     _VALID_AUDIO_FMT = ("off", "wav", "flac", "mp3")
@@ -1040,12 +1047,12 @@ async def update_stt_settings(
         v = req.speechmatics_audio_format.lower()
         if v not in _VALID_AUDIO_FMT:
             raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
-        await set_setting("stt_speechmatics_audio_format", v)
+        updates["stt_speechmatics_audio_format"] = v
     if req.whisper_local_audio_format is not None:
         v = req.whisper_local_audio_format.lower()
         if v not in _VALID_AUDIO_FMT:
             raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
-        await set_setting("stt_whisper_local_audio_format", v)
+        updates["stt_whisper_local_audio_format"] = v
     if req.azure_audio_format is not None:
         v = req.azure_audio_format.lower()
         # Azure Speech SDK only supports WAV; clamp mp3/flac -> wav automatically.
@@ -1053,7 +1060,10 @@ async def update_stt_settings(
             v = "wav"
         if v not in _VALID_AUDIO_FMT:
             raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
-        await set_setting("stt_azure_audio_format", v)
+        updates["stt_azure_audio_format"] = v
+
+    # Write all accepted values in ONE transaction (single commit).
+    await set_settings_batch(updates)
 
     # Return updated config
     cfg = await _get_stt_config()
