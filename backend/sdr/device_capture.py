@@ -774,6 +774,24 @@ class DeviceCapture:
                         )
                     except Exception:
                         level_center = -999.0
+                    # Spectrum sweep around the target offset to visualize
+                    # adjacent-channel leakage (offsets relative to TARGET).
+                    target_off = ch.offset_hz
+                    sweep_parts = []
+                    for rel_khz in (-25, -12.5, 0, 12.5, 25):
+                        try:
+                            sv = compute_signal_level(
+                                iq_data,
+                                sample_rate=actual_sr,
+                                mode=ch.demod_mode,
+                                channel_bw=ch.bandwidth_hz,
+                                vfo_offset_hz=target_off + rel_khz * 1000.0,
+                            )
+                            mark = "*" if rel_khz == 0 else ""
+                            sweep_parts.append(f"{rel_khz:+.1f}k={sv:.0f}{mark}")
+                        except Exception:
+                            pass
+                    sweep_str = " ".join(sweep_parts)
                     # Auto-squelch state (if enabled)
                     is_auto = ch.auto_estimator is not None
                     if is_auto:
@@ -787,10 +805,9 @@ class DeviceCapture:
                         sq_str = f"MANUAL sql={ch.squelch_db:.1f}"
                     print(
                         f"🔎 [probe] {ch.frequency_hz/1e6:.4f}MHz "
-                        f"off={ch.offset_hz/1000:+.1f}kHz "
                         f"level={level:.1f}dB | center0={level_center:.1f}dB | "
                         f"{sq_str} | rec={ch.is_recording} "
-                        f"{ch.demod_mode.value} bw={ch.bandwidth_hz}",
+                        f"| SWEEP(rel) {sweep_str}",
                         flush=True,
                     )
 

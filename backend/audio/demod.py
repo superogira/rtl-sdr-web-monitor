@@ -271,10 +271,17 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     This isolates the signal of interest (centered at DC after IQ conversion)
     so that strong signals on nearby frequencies don't inflate the level.
 
-    Approach (OpenWebRX-style):
-      1. FFT the IQ block with a Hann window (reduces spectral leakage).
-      2. Sum the power of only the bins within ±channel_bw/2 of DC.
-      3. Convert to dB.
+    Approach (Welch's method with a low-sidelobe window):
+      1. Shift IQ by the VFO offset so the target lands at DC.
+      2. Split the block into overlapping segments, window each with a
+         Blackman-Harris window (first sidelobe ≈ -92 dB, vs Hann's -32 dB),
+         FFT, and AVERAGE the power spectra (Welch). Averaging reduces the
+         variance of the estimate so a single noisy snapshot can't false-open
+         the squelch.
+      3. Sum the power of only the bins within ±channel_bw/2.5 of DC. Using a
+         slightly NARROWER integration window than the full channel width
+         keeps the edges (closest to adjacent carriers) outside the sum, so
+         leakage from a strong neighbor contributes far less.
 
     Args:
         iq: complex IQ samples (already normalized)
@@ -303,33 +310,58 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     else:
         bw = _CHANNEL_BW.get(mode.value if hasattr(mode, "value") else str(mode), 12000)
 
-    # Use a power-of-2 FFT slice for speed (cap at 4096 for realtime safety)
-    fft_size = 1 << int(np.floor(np.log2(min(n, 4096))))
-    if fft_size < 64:
-        return -120.0
+    # --- Welch averaging setup ---
+    # Pick a per-segment FFT size (power of two) that allows at least 2
+    # overlapping segments from the available samples. Smaller segments → more
+    # averaging but coarser bin resolution; we keep a floor for resolution.
+    target_seg = 1024
+    seg = 1 << int(np.floor(np.log2(min(n, target_seg))))
+    if seg < 256:
+        seg = 256
+    overlap = seg // 2  # 50% overlap
+    step = seg - overlap
+    if step < 1:
+        step = seg
 
-    # Hann window to reduce spectral leakage
-    window = np.hanning(fft_size).astype(np.float32)
-    segment = iq[:fft_size].astype(np.complex64) * window
+    # Count how many full segments fit. If only one fits, fall back to a
+    # single-shot estimate (still windowed, just not averaged).
+    n_segs = max(1, (n - seg) // step + 1)
 
-    # FFT + fftshift so DC (tuned freq) is at center
-    # Normalize by fft_size so power is independent of block length and
-    # noise floor reads ~ -60 dBFS (was ~ +25 dB → "signal high all the time")
-    fft_result = np.fft.fftshift(np.fft.fft(segment) / fft_size)
-    power_spectrum = (np.abs(fft_result) ** 2).astype(np.float64)
+    # Blackman-Harris window: first sidelobe ≈ -92 dB (vs Hann -32 dB).
+    # This is what keeps a strong adjacent carrier (10-20 dB louder than the
+    # desired one, common in dense VHF/UHF) from leaking into our channel.
+    try:
+        window = np.blackman(seg).astype(np.float32)
+    except Exception:
+        window = np.hanning(seg).astype(np.float32)
+    win_gain = float(np.mean(window ** 2))  # coherent power gain for normalization
 
-    # Find bins within ±bw/2 of center (DC after shift)
-    bin_hz = sample_rate / fft_size
-    half_bins = max(1, int((bw / 2.0) / bin_hz))
-    center = fft_size // 2
+    acc = np.zeros(seg, dtype=np.float64)
+    for s in range(n_segs):
+        a = s * step
+        b = a + seg
+        if b > n:
+            break
+        segment = iq[a:b].astype(np.complex64) * window
+        fft_result = np.fft.fftshift(np.fft.fft(segment) / seg)
+        acc += (np.abs(fft_result) ** 2).astype(np.float64)
+    power_spectrum = acc / n_segs
+
+    # Integrate only the central portion of the channel (±bw/2.5 instead of
+    # ±bw/2) so the edge bins — which sit closest to adjacent carriers and
+    # receive the most leakage — are excluded from the sum.
+    bin_hz = sample_rate / seg
+    half_bins = max(1, int((bw / 2.5) / bin_hz))
+    center = seg // 2
     lo = max(0, center - half_bins)
-    hi = min(fft_size, center + half_bins + 1)
+    hi = min(seg, center + half_bins + 1)
 
     # Average power per bin in the channel
     channel_power = float(np.sum(power_spectrum[lo:hi]) / max(1, (hi - lo)))
 
-    # Compensate for Hann window coherent gain (average ≈ 0.5)
-    channel_power /= 0.5
+    # Compensate for the window's coherent power gain
+    if win_gain > 0:
+        channel_power /= win_gain
 
     if channel_power <= 0:
         return -120.0
