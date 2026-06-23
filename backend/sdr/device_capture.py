@@ -31,6 +31,7 @@ This module is used by JobScheduler (backend/sdr/job_scheduler.py) to run
 recording jobs in the background. See connection_pool.py for arbitration.
 """
 import asyncio
+import concurrent.futures
 import logging
 import time
 import uuid
@@ -295,6 +296,20 @@ class DeviceCapture:
         self.max_recording_duration = max_recording_duration
         self.min_recording_duration = min_recording_duration
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
+
+        # Dedicated thread pool for the per-channel CPU-heavy DSP step
+        # (compute_signal_level ~21 ms + demod.process ~15 ms at 2.4 MSPS, per
+        # channel per 50 ms chunk). With N channels that's N × ~36 ms every
+        # 50 ms — e.g. 3 channels = ~108 ms, over 2× the per-chunk budget.
+        # Running that INLINE on the asyncio event loop pegged the process at
+        # 100% CPU and starved every other coroutine (logins, the Recordings
+        # list, live audio underruns). Offloading to worker threads frees the
+        # loop; numpy/scipy release the GIL during the FFT/linalg work. One
+        # worker per channel lets all channels process in parallel.
+        self._dsp_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(2, len(self.channels)),
+            thread_name_prefix=f"job-dsp-{job.id[:8]}",
+        )
 
         # Build frequency channels
         self.channels: List[_FrequencyChannel] = [
@@ -744,12 +759,29 @@ class DeviceCapture:
                     ch.signal_level = -120.0
                     continue
 
-                level = compute_signal_level(
-                    iq_data,
-                    sample_rate=actual_sr,
-                    mode=ch.demod_mode,
-                    channel_bw=ch.bandwidth_hz,
-                    vfo_offset_hz=ch.offset_hz,
+                # Snapshot the per-channel DSP params here on the event-loop
+                # thread before offloading, so the worker reads a consistent
+                # set of scalars even if config changes mid-chunk.
+                dsp_mode = ch.demod_mode
+                dsp_bw = ch.bandwidth_hz
+                dsp_vfo = ch.offset_hz
+                loop = asyncio.get_running_loop()
+                # Run the two CPU-heavy DSP steps (signal-level ~21 ms +
+                # demod ~15 ms at 2.4 MSPS) in PARALLEL off the event loop.
+                # Previously both ran inline and, across N channels, consumed
+                # N × ~36 ms per 50 ms chunk — pegging the process at 100% CPU
+                # and starving every HTTP/WebSocket coroutine.
+                level, audio = await asyncio.gather(
+                    loop.run_in_executor(
+                        self._dsp_executor,
+                        compute_signal_level,
+                        iq_data, actual_sr, dsp_mode, dsp_bw, dsp_vfo,
+                    ),
+                    loop.run_in_executor(
+                        self._dsp_executor,
+                        ch.demod.process,
+                        iq_data, dsp_mode, actual_sr, self.audio_rate, dsp_bw,
+                    ),
                 )
                 ch.signal_level = level
                 # Adaptive squelch: feed the new level to the per-channel
@@ -811,10 +843,9 @@ class DeviceCapture:
                         flush=True,
                     )
 
-                audio = ch.demod.process(
-                    iq_data, ch.demod_mode, actual_sr, self.audio_rate,
-                    channel_bw=ch.bandwidth_hz,
-                )
+                # `audio` came from the offloaded demod.process in the gather
+                # above. The rest of this loop body (squlech gating, buffering,
+                # recording start/finish) runs on the event loop and is cheap.
 
                 # === DIAG: audio RMS to confirm demod output quality ===
                 if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:

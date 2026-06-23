@@ -2,6 +2,7 @@
 SDR Manager - orchestrates RTL-TCP connection, demodulation, and recording.
 """
 import asyncio
+import concurrent.futures
 import json
 import time
 import logging
@@ -142,6 +143,19 @@ class SDRManager:
         # changes and resets its filter state internally, so no extra tracking
         # fields are needed here.
         self._demod = StreamingDemodulator()
+        # Dedicated thread pool for the CPU-heavy DSP step (compute_signal_level
+        # + demod.process) of the main _stream_loop. Measured cost at 2.4 MSPS:
+        # ~21 ms (signal_level) + ~15 ms (demod) = ~36 ms per 50 ms chunk — i.e.
+        # 72% of the per-chunk budget, run INLINE on the asyncio event loop.
+        # That starved every other coroutine (HTTP requests, WebSocket audio,
+        # DB writes) and kept the process at ~90% CPU, which is why logins,
+        # the Recordings list, and live audio (underrun/re-buffering) all felt
+        # sluggish. Offloading to a worker thread frees the event loop; numpy/
+        # scipy release the GIL during the heavy linalg/FFT calls. 2 workers is
+        # enough because the loop is strictly sequential (one chunk at a time).
+        self._dsp_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="sdr-dsp"
+        )
         # Track the listener count so we can demote/promote our LIVE pool
         # consumer's priority. When there are NO listeners we demote to
         # PRIORITY_IDLE (1) so background recording jobs (PRIORITY_JOB=5) can
@@ -1073,23 +1087,38 @@ class SDRManager:
 
                     consecutive_errors = 0
 
-                    self._signal_level = compute_signal_level(
-                        iq_data,
-                        sample_rate=self.client._sample_rate,
-                        mode=self.mode,
-                        channel_bw=self._channel_bw,
-                        vfo_offset_hz=self._vfo_offset_hz,
-                    )
-
                     sample_rate = self.client._sample_rate
-                    # Use the stateful streaming demodulator: it carries filter
-                    # state (deemphasis zi, voice-band SOS zi, FM phase, SSB LO
-                    # phase) across chunks, eliminating the ~20 Hz per-chunk
-                    # boundary clicks that the stateless demodulate() produced.
-                    audio = self._demod.process(
-                        iq_data, self.mode, sample_rate, self.audio_rate,
-                        channel_bw=self._channel_bw,
+                    # Snapshot the scalar DSP params here on the event-loop
+                    # thread before offloading, so the worker reads a single
+                    # consistent set of values even if a control message
+                    # (mode/VFO/bandwidth change) lands mid-chunk. All of these
+                    # are plain scalars, so the snapshot is cheap.
+                    dsp_mode = self.mode
+                    dsp_channel_bw = self._channel_bw
+                    dsp_vfo = self._vfo_offset_hz
+                    dsp_audio_rate = self.audio_rate
+
+                    loop = asyncio.get_running_loop()
+                    # Run the two CPU-heavy DSP steps (signal-level measurement
+                    # ~21 ms + demodulation ~15 ms at 2.4 MSPS) in PARALLEL on
+                    # worker threads, off the event loop. numpy/scipy release
+                    # the GIL during the FFT/linalg work, so they truly run
+                    # concurrently. This used to run inline and consume ~72% of
+                    # the 50 ms per-chunk budget on the loop, starving every
+                    # HTTP/WebSocket coroutine and causing logins, the Recordings
+                    # list, and live audio (underrun) to feel sluggish.
+                    sig_task = loop.run_in_executor(
+                        self._dsp_executor,
+                        compute_signal_level,
+                        iq_data, sample_rate, dsp_mode, dsp_channel_bw, dsp_vfo,
                     )
+                    demod_task = loop.run_in_executor(
+                        self._dsp_executor,
+                        self._demod.process,
+                        iq_data, dsp_mode, sample_rate, dsp_audio_rate, dsp_channel_bw,
+                    )
+                    signal_level, audio = await asyncio.gather(sig_task, demod_task)
+                    self._signal_level = signal_level
 
                     if len(audio) > 0:
                         self._audio_buffer.append(audio)
