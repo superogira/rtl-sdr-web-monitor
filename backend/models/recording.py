@@ -1,6 +1,9 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, Integer, BigInteger, Text, DateTime, Enum, ForeignKey, Boolean
+from sqlalchemy import (
+    Column, String, Float, Integer, BigInteger, Text, DateTime, Enum,
+    ForeignKey, Boolean, Index,
+)
 from sqlalchemy.orm import relationship
 from backend.database import Base
 import enum
@@ -89,6 +92,17 @@ class Recording(Base):
 
     def __repr__(self):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"
+
+    # Performance indexes. These mirror the idempotent CREATE INDEX statements
+    # added in backend/database.py::_run_migrations so existing databases get
+    # the same indexes as fresh ones. Declaring them here keeps `create_all`
+    # (new deployments) and the migration (existing deployments) in sync.
+    __table_args__ = (
+        Index("ix_recordings_recorded_at", "recorded_at"),
+        Index("ix_recordings_source_recorded_at", "source", "recorded_at"),
+        Index("ix_recordings_device_recorded_at", "device_id", "recorded_at"),
+        Index("ix_recordings_frequency", "frequency"),
+    )
 
     def to_dict(self):
         audio_deleted = bool(self.audio_deleted)

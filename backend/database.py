@@ -153,6 +153,34 @@ def _run_migrations(conn):
     if backfilled > 0:
         print(f"[migration] Backfilled file_size for {backfilled} recordings")
 
+    # === Recordings performance indexes ===
+    # The Recordings list page (and its count/sum aggregate) orders by
+    # recorded_at DESC with optional filters on source/device_id/frequency.
+    # Without these, EXPLAIN shows `SCAN recordings` + `USE TEMP B-TREE FOR
+    # ORDER BY` on every page load. As the table grows this becomes painful.
+    # Idempotent: CREATE INDEX IF NOT EXISTS is a no-op if the index exists.
+    recordings_indexes = [
+        # Covers the default ORDER BY recorded_at DESC LIMIT/OFFSET.
+        ("ix_recordings_recorded_at", "recordings", "recorded_at DESC"),
+        # Composite indexes for filter+sort combos used by _apply_recording_filters.
+        ("ix_recordings_source_recorded_at", "recordings", "source, recorded_at"),
+        ("ix_recordings_device_recorded_at", "recordings", "device_id, recorded_at"),
+        # Standalone index for the frequency filter (range match ±tolerance).
+        ("ix_recordings_frequency", "recordings", "frequency"),
+    ]
+    existing_idx = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='recordings'")
+        )
+    }
+    for idx_name, tbl, cols in recordings_indexes:
+        if idx_name not in existing_idx:
+            conn.execute(
+                text(f"CREATE INDEX {idx_name} ON {tbl} ({cols})")
+            )
+            print(f"[migration] Created index '{idx_name}' on {tbl}({cols})")
+
     # === recording_job_frequencies: add auto_squelch column ===
     result = conn.execute(text("PRAGMA table_info(recording_job_frequencies)"))
     freq_columns = [row[1] for row in result]
