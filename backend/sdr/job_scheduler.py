@@ -168,6 +168,7 @@ class JobScheduler:
                 # handled inside DeviceCapture (see its _on_preempt/_reclaim).
             except Exception as e:
                 logger.error(f"Failed to start DeviceCapture for job {job.id}: {e}")
+                print(f"❌ [SCHED] Failed to start DeviceCapture for job {job.id[:8]}: {e}", flush=True)
 
         # Stop captures whose jobs are no longer active
         to_stop = [jid for jid in self._captures if jid not in active_job_ids]

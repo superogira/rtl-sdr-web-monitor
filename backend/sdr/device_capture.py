@@ -79,18 +79,30 @@ class AutoSquelchEstimator:
 
     Why a low percentile (not a mean):
       Voice comms are silent ~50% of the time, so the *mean* level gets
-      pulled up by the signal itself. The p25 (lower quartile) tracks the
+      pulled up by the signal itself. A low percentile (p15-p25) tracks the
       quiet/noise baseline even while the channel is intermittently active,
       which is exactly what a squelch threshold must sit just above.
 
-    Freeze-on-active:
-      While a recording is in progress (signal presumed above threshold),
-      the floor estimate is FROZEN. Otherwise a long transmission would drag
-      the threshold upward and clip the tail of that same transmission.
+    Continuous learning (no full freeze):
+      Previously the estimator FROZE entirely while recording. Under dense
+      adjacent-channel traffic, leakage inflated the floor and a single
+      false-open would freeze the (already-too-high) threshold for the
+      whole recording → long noise files ("freeze-lock trap"). Now we keep
+      learning but switch to a LOWER percentile (p15) while active so a real
+      transmission cannot drag the floor up much, while the floor can still
+      DROP when noise subsides (unfreezing the gate on a stuck-open recording).
+
+    Hysteresis:
+      Two thresholds are exposed: open (higher) and close (lower). The gate
+      must cross open to START recording and drop below close to END it. This
+      prevents rapid open/close chatter when the level oscillates around a
+      single threshold — which previously reset the silence timer endlessly
+      and produced over-long spliced recordings.
 
     Inputs are channel signal levels in dB produced by compute_signal_level()
-    (one call per ~50 ms IQ chunk). The effective threshold returned is:
-        clamp(noise_floor + margin_db, min_db, max_db)
+    (one call per ~50 ms IQ chunk). The thresholds are:
+        open  = clamp(noise_floor + margin_open_db,  min_db, max_db)
+        close = clamp(noise_floor + margin_close_db, min_db, max_db)
     """
 
     def __init__(
@@ -98,7 +110,9 @@ class AutoSquelchEstimator:
         window_seconds: float = 8.0,
         chunk_seconds: float = 0.05,
         percentile: float = 25.0,
-        margin_db: float = 6.0,
+        active_percentile: float = 15.0,
+        margin_open_db: float = 8.0,
+        margin_close_db: float = 2.0,
         min_db: float = -115.0,
         max_db: float = -20.0,
     ):
@@ -107,38 +121,44 @@ class AutoSquelchEstimator:
         self._idx = 0
         self._filled = False
         self._pct = float(percentile)
-        self._margin = float(margin_db)
+        self._active_pct = float(active_percentile)
+        self._margin_open = float(margin_open_db)
+        self._margin_close = float(margin_close_db)
         self._min = float(min_db)
         self._max = float(max_db)
         # Start CLOSED (max_db) during warmup so no recording opens before we
-        # have enough samples to estimate a real noise floor. If we started
-        # wide-open, the first signal chunk would exceed threshold, start a
-        # recording, and FREEZE the estimator (see freeze-on-active) before it
-        # ever learned the floor → everything would be recorded constantly.
+        # have enough samples to estimate a real noise floor.
         self._floor = self._min
-        self._effective = self._max
+        self._open_thr = self._max
+        self._close_thr = self._max
         self._last_compute = 0.0
         self._min_samples_to_compute = 4
 
     def update(self, level_db: float, frozen: bool = False,
-               now: Optional[float] = None) -> float:
-        """Feed one level sample and return the effective squelch (dB)."""
+               now: Optional[float] = None) -> None:
+        """Feed one level sample and (re)compute thresholds if due.
+
+        `frozen` is kept for API compatibility but is now interpreted as
+        "active" — we still learn, just with a lower percentile so a real
+        transmission does not pull the floor up much.
+        """
         now = now if now is not None else time.time()
-        if not frozen:
-            self._buf[self._idx] = level_db
-            self._idx = (self._idx + 1) % self._n
-            if self._idx == 0:
-                self._filled = True
-            # Recompute at most ~2 Hz; the percentile over a few hundred
-            # floats is cheap but there's no reason to redo it every chunk.
-            if now - self._last_compute >= 0.5:
-                samples = self._samples()
-                if len(samples) >= self._min_samples_to_compute:
-                    self._last_compute = now
-                    self._floor = _percentile(samples, self._pct)
-                    eff = self._floor + self._margin
-                    self._effective = max(self._min, min(self._max, eff))
-        return self._effective
+        # Always feed the sample so the rolling window stays current. When
+        # "frozen" (recording active) use the lower percentile so genuine
+        # signal does not inflate the floor.
+        self._buf[self._idx] = level_db
+        self._idx = (self._idx + 1) % self._n
+        if self._idx == 0:
+            self._filled = True
+        # Recompute at most ~2 Hz.
+        if now - self._last_compute >= 0.5:
+            samples = self._samples()
+            if len(samples) >= self._min_samples_to_compute:
+                self._last_compute = now
+                pct = self._active_pct if frozen else self._pct
+                self._floor = _percentile(samples, pct)
+                self._open_thr = max(self._min, min(self._max, self._floor + self._margin_open))
+                self._close_thr = max(self._min, min(self._max, self._floor + self._margin_close))
 
     def _samples(self) -> List[float]:
         return self._buf if self._filled else self._buf[:self._idx]
@@ -148,8 +168,20 @@ class AutoSquelchEstimator:
         return self._floor
 
     @property
+    def open_threshold_db(self) -> float:
+        """Gate must cross this (rising) to START a recording."""
+        return self._open_thr
+
+    @property
+    def close_threshold_db(self) -> float:
+        """Gate must drop below this (falling) to END a recording."""
+        return self._close_thr
+
+    @property
     def effective_squelch_db(self) -> float:
-        return self._effective
+        # Back-compat alias: midpoint of the hysteresis band. Callers that
+        # only need a single representative value (e.g. display) use this.
+        return (self._open_thr + self._close_thr) * 0.5
 
     def reset(self) -> None:
         self._buf = [0.0] * self._n
@@ -157,7 +189,8 @@ class AutoSquelchEstimator:
         self._filled = False
         self._floor = self._min
         # Match __init__: start CLOSED during warmup.
-        self._effective = self._max
+        self._open_thr = self._max
+        self._close_thr = self._max
         self._last_compute = 0.0
 
 
@@ -726,7 +759,10 @@ class DeviceCapture:
                     ch.auto_estimator.update(level, frozen=ch.is_recording, now=now)
                 # === DIAGNOSTIC (SDR_JOB_DEBUG): per-channel level vs squelch,
                 # including a center-probe (offset=0) to isolate "no signal at
-                # target" from a broken demod/signal-level function. ===
+                # target" from a broken demod/signal-level function.
+                # Also logs the AUTO-SQUELCH state (noise floor, effective
+                # threshold, frozen) so we can see how the adaptive threshold
+                # behaves under dense adjacent-channel traffic. ===
                 if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:
                     try:
                         level_center = compute_signal_level(
@@ -738,12 +774,23 @@ class DeviceCapture:
                         )
                     except Exception:
                         level_center = -999.0
+                    # Auto-squelch state (if enabled)
+                    is_auto = ch.auto_estimator is not None
+                    if is_auto:
+                        nf = ch.auto_estimator.noise_floor_db
+                        ot = ch.auto_estimator.open_threshold_db
+                        ct = ch.auto_estimator.close_threshold_db
+                        frozen = ch.is_recording
+                        sq_str = (f"AUTO floor={nf:.1f} open={ot:.1f} close={ct:.1f} "
+                                  f"act={frozen}")
+                    else:
+                        sq_str = f"MANUAL sql={ch.squelch_db:.1f}"
                     print(
                         f"🔎 [probe] {ch.frequency_hz/1e6:.4f}MHz "
                         f"off={ch.offset_hz/1000:+.1f}kHz "
-                        f"target={level:.1f}dB | CENTER(off=0)={level_center:.1f}dB | "
-                        f"sql={ch.squelch_db:.1f}dB above={level > ch.squelch_db} "
-                        f"rec={ch.is_recording} {ch.demod_mode.value} bw={ch.bandwidth_hz}",
+                        f"level={level:.1f}dB | center0={level_center:.1f}dB | "
+                        f"{sq_str} | rec={ch.is_recording} "
+                        f"{ch.demod_mode.value} bw={ch.bandwidth_hz}",
                         flush=True,
                     )
 
@@ -769,7 +816,28 @@ class DeviceCapture:
                         flush=True,
                     )
 
-                above = level > ch.effective_squelch_db
+                # Gate decision with HYSTERESIS.
+                # - To OPEN (start recording): level must exceed the OPEN threshold.
+                # - To CLOSE (begin silence countdown): level must fall below the
+                #   CLOSE threshold. The band between open and close prevents the
+                #   gate from chattering open/closed when the level oscillates
+                #   around a single threshold — which previously reset the
+                #   silence timer on every re-cross and produced over-long
+                #   spliced-noise recordings under dense adjacent traffic.
+                is_auto = ch.auto_estimator is not None
+                if is_auto:
+                    open_thr = ch.auto_estimator.open_threshold_db
+                    close_thr = ch.auto_estimator.close_threshold_db
+                else:
+                    open_thr = ch.squelch_db
+                    close_thr = ch.squelch_db
+
+                if not ch.is_recording:
+                    # Gate closed: open only when level rises above OPEN.
+                    above = level > open_thr
+                else:
+                    # Gate open: stay open until level drops below CLOSE.
+                    above = level > close_thr
 
                 if above and not ch.is_recording:
                     ch.is_recording = True
@@ -778,7 +846,7 @@ class DeviceCapture:
                     ch.silence_start = None
                     logger.info(
                         f"📼 [job={self.job_id}] Auto-rec START {ch.frequency_hz/1e6:.4f} MHz "
-                        f"({level:.1f} dB)"
+                        f"({level:.1f} dB, open_thr={open_thr:.1f})"
                     )
                 elif above and ch.is_recording:
                     ch.silence_start = None
