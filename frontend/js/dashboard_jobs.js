@@ -24,8 +24,33 @@
             this._injectJobsPanel();
             await this.refresh();
             // Refresh every 15s (catches recording start/stop + time windows)
+            this._startAutoRefresh();
+            // Pause the 15s poll while the dashboard tab is hidden so an idle
+            // background tab stops firing 4 requests per tick at the server's
+            // single event loop. Resume (with an immediate refresh) on focus.
+            document.addEventListener('visibilitychange', this._onVisibility);
+        },
+
+        _startAutoRefresh() {
             if (this.autoRefreshTimer) clearInterval(this.autoRefreshTimer);
             this.autoRefreshTimer = setInterval(() => this.refresh(), 15000);
+        },
+
+        _stopAutoRefresh() {
+            if (this.autoRefreshTimer) {
+                clearInterval(this.autoRefreshTimer);
+                this.autoRefreshTimer = null;
+            }
+        },
+
+        _onVisibility() {
+            // `this` is document here (listener bound without bind); use DJ.
+            if (document.hidden) {
+                DJ._stopAutoRefresh();
+            } else {
+                DJ.refresh();
+                DJ._startAutoRefresh();
+            }
         },
 
         async refresh() {

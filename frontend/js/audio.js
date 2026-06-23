@@ -38,6 +38,7 @@ const LiveAudio = {
     // Heartbeat + diag
     _heartbeatTimer: null,
     _diagTimer: null,
+    _diagVisibilityHandler: null,
 
     /**
      * Connect to audio WebSocket and start playing.
@@ -156,6 +157,10 @@ const LiveAudio = {
         if (this._diagTimer) {
             clearInterval(this._diagTimer);
             this._diagTimer = null;
+        }
+        if (this._diagVisibilityHandler) {
+            document.removeEventListener("visibilitychange", this._diagVisibilityHandler);
+            this._diagVisibilityHandler = null;
         }
         this._queue = [];
         // Stop all active source nodes
@@ -404,23 +409,58 @@ const LiveAudio = {
     /**
      * Periodically fetch /api/audio/diag and log to console + status display.
      * Helps diagnose whether audio chunks are being produced server-side.
+     *
+     * This is a DIAGNOSTIC poll only (logs to console). Previously it ran every
+     * 3s for the entire listening session and even while the tab was hidden —
+     * pure overhead on the server's single event loop. Now it:
+     *   - stops after 5 ticks (≈ first 15s, matching the original comment), and
+     *   - pauses while the tab is hidden.
      */
     _startDiag() {
         if (this._diagTimer) clearInterval(this._diagTimer);
+        if (this._diagVisibilityHandler) {
+            document.removeEventListener("visibilitychange", this._diagVisibilityHandler);
+            this._diagVisibilityHandler = null;
+        }
+        const MAX_TICKS = 5;
         let tick = 0;
         const fetchDiag = async () => {
             try {
                 const res = await fetch("/api/audio/diag");
                 const data = await res.json();
                 tick++;
-                if (tick <= 5 || this._framesReceived === 0) {
+                if (tick <= MAX_TICKS || this._framesReceived === 0) {
                     console.log(`🔊 [diag] ${JSON.stringify(data)}`);
+                }
+                if (tick >= MAX_TICKS && this._framesReceived > 0) {
+                    // Enough diagnostic samples — stop polling.
+                    clearInterval(this._diagTimer);
+                    this._diagTimer = null;
+                    if (this._diagVisibilityHandler) {
+                        document.removeEventListener("visibilitychange", this._diagVisibilityHandler);
+                        this._diagVisibilityHandler = null;
+                    }
                 }
             } catch (e) {
                 console.warn("🔊 [diag] fetch failed:", e);
             }
         };
-        // First fetch immediately, then every 3s for the first 15s
+        // Pause polling while the tab is hidden to avoid needless server load.
+        this._diagVisibilityHandler = () => {
+            if (document.hidden) {
+                if (this._diagTimer) {
+                    clearInterval(this._diagTimer);
+                    this._diagTimer = null;
+                }
+            } else if (tick < MAX_TICKS) {
+                // Resumed before the 5-tick budget was spent — resume polling.
+                if (!this._diagTimer) {
+                    this._diagTimer = setInterval(fetchDiag, 3000);
+                }
+            }
+        };
+        document.addEventListener("visibilitychange", this._diagVisibilityHandler);
+        // First fetch immediately, then every 3s (auto-stops after MAX_TICKS).
         fetchDiag();
         this._diagTimer = setInterval(fetchDiag, 3000);
     },
