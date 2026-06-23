@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
@@ -56,13 +57,25 @@ class ChangePasswordRequest(BaseModel):
 
 
 # === Helper Functions ===
+#
+# bcrypt.checkpw / hashpw are deliberately expensive (~450 ms at cost factor 12).
+# They are CPU-bound and release the GIL only partially, so running them inline
+# on the asyncio event loop blocks EVERYTHING else — including the live audio
+# streaming path — for ~0.5 s on every login / register / change-password. That
+# is long enough to cause audio underruns and re-buffering for anyone listening
+# at the same moment. We push the work to the default thread pool so the event
+# loop stays responsive.
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return await asyncio.to_thread(
+        bcrypt.checkpw, plain_password.encode(), hashed_password.encode()
+    )
 
 
-def get_password_hash(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+async def get_password_hash(password: str) -> str:
+    def _hash() -> str:
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return await asyncio.to_thread(_hash)
 
 
 def user_to_dict(user: User) -> dict:
@@ -87,7 +100,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.username == request.username))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(request.password, user.hashed_password):
+    if user is None or not await verify_password(request.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -140,7 +153,7 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
         username=request.username,
         email=request.email,
         display_name=request.display_name or request.username,
-        hashed_password=get_password_hash(request.password),
+        hashed_password=await get_password_hash(request.password),
         role=UserRole.USER,
     )
     db.add(user)
@@ -205,13 +218,13 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Change current user's password."""
-    if not verify_password(request.old_password, current_user.hashed_password):
+    if not await verify_password(request.old_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect old password",
         )
 
-    current_user.hashed_password = get_password_hash(request.new_password)
+    current_user.hashed_password = await get_password_hash(request.new_password)
     await db.commit()
     invalidate_user_cache(current_user.id)
 
