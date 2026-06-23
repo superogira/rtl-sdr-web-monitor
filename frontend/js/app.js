@@ -15,6 +15,7 @@ const App = {
     isRecording: false,
     isConnected: false,
     isStreaming: false,
+    _autoSquelchOn: false,
 
     // Waterfall state
     waterfallCanvas: null,
@@ -635,6 +636,23 @@ const App = {
             },
         });
 
+        // Auto Squelch toggle: when ON, the server tracks the noise floor and
+        // gates audio automatically; the manual SQL slider is disabled until
+        // the user turns AUTO off again.
+        const sqlAutoBtn = document.getElementById('sql-auto-btn');
+        if (sqlAutoBtn) {
+            sqlAutoBtn.addEventListener('click', () => {
+                if (typeof LiveAudio === 'undefined' || !LiveAudio.isPlaying) {
+                    this._onAutoSquelchAck({ enabled: false });
+                    alert('กรุณากด "ฟังสด" ก่อนเปิด Auto Squelch');
+                    return;
+                }
+                const next = !this._autoSquelchOn;
+                LiveAudio.setAutoSquelch(next);
+                // UI updates on auto_squelch_ack from the server (below).
+            });
+        }
+
         // PPM / Frequency Correction (slider + numeric input, debounced)
         // Numeric input allows values beyond the slider range (-200..200 vs -100..100).
         _bindSliderInputPair({
@@ -923,6 +941,24 @@ const App = {
             default:
                 console.warn('🎙️ Unknown record_ack status:', obj.status);
         }
+    },
+
+    // Server confirmed an auto-squelch toggle for THIS listener. Update the
+    // button active state + disable/enable the manual SQL controls.
+    _onAutoSquelchAck(obj) {
+        this._autoSquelchOn = !!obj.enabled;
+        const btn = document.getElementById('sql-auto-btn');
+        const slider = document.getElementById('squelch-slider');
+        const input = document.getElementById('squelch-input');
+        if (btn) {
+            btn.textContent = this._autoSquelchOn ? '🎚️ AUTO ●' : '🎚️ AUTO';
+            btn.classList.toggle('auto-active', this._autoSquelchOn);
+        }
+        if (slider) slider.disabled = this._autoSquelchOn;
+        if (input) input.disabled = this._autoSquelchOn;
+        document.querySelectorAll('.step-mini-btn[data-target="squelch"]').forEach(b => {
+            b.disabled = this._autoSquelchOn;
+        });
     },
 
     async _syncRecordingState() {

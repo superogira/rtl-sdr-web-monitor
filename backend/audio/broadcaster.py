@@ -53,6 +53,7 @@ import numpy as np
 from backend.audio.demod import (
     DemodMode, StreamingDemodulator, compute_channel_power, iq_to_complex,
 )
+from backend.sdr.device_capture import AutoSquelchEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,11 @@ class Listener:
         # the noise floor / เสียงซ่า) so existing listeners are unaffected
         # unless a squelch value is explicitly set.
         self.squelch_db = -120.0
+        # Auto-squelch (per-listener): when on, the threshold tracks the noise
+        # floor adaptively via AutoSquelchEstimator (same estimator the JOB
+        # path uses). Off by default; toggled from the Dashboard.
+        self.auto_squelch = False
+        self.auto_estimator: Optional[AutoSquelchEstimator] = None
         # Last measured channel power (dB) for THIS listener's VFO/channel.
         # Updated by _demod_listener_raw and consumed by _apply_squelch.
         self.last_signal_db = -120.0
@@ -197,6 +203,23 @@ class Listener:
         self.squelch_db = max(-200.0, min(0.0, float(level_db)))
         # Force a re-evaluation on the next chunk by leaving _sq_open as-is;
         # the hysteresis logic in _apply_squelch will settle correctly.
+
+    def set_auto_squelch(self, on: bool) -> None:
+        """Toggle adaptive squelch for this listener.
+
+        When ON, the squelch threshold tracks the rolling noise floor via
+        AutoSquelchEstimator (the same estimator used by background recording
+        jobs), so the user does not have to hand-tune the SQL slider as the
+        band gets busy/quiet. When OFF, the manual squelch_db is used again.
+        """
+        self.auto_squelch = bool(on)
+        if on:
+            # (Re)create the estimator so it starts learning from scratch.
+            self.auto_estimator = AutoSquelchEstimator()
+        else:
+            self.auto_estimator = None
+        # Reset the gate so it re-evaluates against the new threshold source.
+        self._sq_open = False
 
 
 class AudioBroadcaster:
@@ -520,11 +543,36 @@ class AudioBroadcaster:
         the frame) keeps the client's playback clock continuous so there are
         no underrun clicks at the open/close transitions.
 
-        Hysteresis: the gate opens when the smoothed level exceeds the
-        threshold, and only closes once it falls threshold - hysteresis_db
-        below. This prevents rapid chatter when the signal sits near the
-        threshold.
+        Two modes:
+          - AUTO: the threshold tracks the rolling noise floor via
+            AutoSquelchEstimator (open = floor+margin_open, close =
+            floor+margin_close). The estimator is fed the raw per-chunk level
+            here so it keeps learning regardless of which demod path produced
+            the level. Hysteresis comes from the estimator's two thresholds.
+          - MANUAL: a fixed user threshold with a fixed hysteresis band
+            (_SQUELCH_HYSTERESIS_DB) below it. The -120 dB sentinel disables
+            squelch entirely (pass all audio).
         """
+        # === AUTO mode ===
+        if listener.auto_squelch and listener.auto_estimator is not None:
+            # Feed the latest measured level so the estimator keeps tracking
+            # the noise floor (uses raw last_signal_db, matching the JOB path;
+            # the estimator's own rolling window does the smoothing).
+            listener.auto_estimator.update(
+                listener.last_signal_db, frozen=listener._sq_open
+            )
+            open_thr = listener.auto_estimator.open_threshold_db
+            close_thr = listener.auto_estimator.close_threshold_db
+            level = listener._sig_smoothed
+            if not listener._sq_open:
+                if level >= open_thr:
+                    listener._sq_open = True
+            else:
+                if level < close_thr:
+                    listener._sq_open = False
+            return audio if listener._sq_open else np.zeros_like(audio)
+
+        # === MANUAL mode ===
         # Squelch disabled (sentinel) → always pass audio.
         if listener.squelch_db <= -120.0:
             return audio

@@ -244,6 +244,12 @@ const LiveAudio = {
                                 if (typeof App !== 'undefined' && App._onRecordAck) {
                                     App._onRecordAck(obj);
                                 }
+                            } else if (obj.type === "auto_squelch_ack") {
+                                // Server confirmed auto-squelch toggle.
+                                console.log("🎚️ [audio] auto_squelch_ack:", obj);
+                                if (typeof App !== 'undefined' && App._onAutoSquelchAck) {
+                                    App._onAutoSquelchAck(obj);
+                                }
                             } else {
                                 console.log("🔊 [audio] server text:", txt);
                             }
@@ -346,6 +352,14 @@ const LiveAudio = {
      */
     setSquelch(levelDb) {
         return this.sendControl({ type: "squelch", level: Number(levelDb) });
+    },
+
+    /**
+     * Toggle adaptive (auto) squelch for THIS listener. When on, the server
+     * tracks the noise floor and opens/closes the gate automatically.
+     */
+    setAutoSquelch(enabled) {
+        return this.sendControl({ type: "auto_squelch", enabled: Boolean(enabled) });
     },
 
     /**

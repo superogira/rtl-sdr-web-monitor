@@ -349,6 +349,24 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 )
             except Exception as e:
                 logger_aud.warning(f"🔊 Bad squelch control: {e}")
+        elif mtype == "auto_squelch":
+            # Per-listener AUTO squelch toggle: when on, the threshold tracks
+            # the rolling noise floor adaptively (no need to hand-tune the SQL
+            # slider as the band gets busy/quiet). When off, the manual
+            # squelch_db is used again.
+            try:
+                enabled = bool(msg.get("enabled", False))
+                listener.set_auto_squelch(enabled)
+                await websocket.send_text(json.dumps({
+                    "type": "auto_squelch_ack",
+                    "enabled": listener.auto_squelch,
+                }))
+                logger_aud.info(
+                    f"🔊 Listener {listener.id[:8]} auto-squelch → "
+                    f"{'ON' if listener.auto_squelch else 'OFF'}"
+                )
+            except Exception as e:
+                logger_aud.warning(f"🔊 Bad auto_squelch control: {e}")
         elif mtype == "record_start":
             # Per-user manual recording: check if the system allows it.
             # Admins can always record; regular users are subject to the
