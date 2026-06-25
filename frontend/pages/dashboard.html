@@ -53,6 +53,10 @@
                 <button class="btn btn-sm" id="btn-connect" onclick="App.connectSDR()">🔗 เชื่อมต่อ</button>
                 <button class="btn btn-sm" id="btn-stream" onclick="App.toggleStream()" style="display:none;">▶ รับสัญญาณ</button>
                 <button class="btn btn-sm btn-listen" id="btn-listen" onclick="LiveAudio.toggle()">🔈 ฟังสด</button>
+                <!-- Single / Dual VFO mode toggle. Dual listens to two frequencies
+                     at once (VFO A left, VFO B right) so an operator can monitor
+                     two channels by ear. -->
+                <button class="btn btn-sm" id="btn-vfo-mode" title="สลับโหมด Single / Dual VFO">🔂 Single</button>
                 <span id="listen-indicator" style="display:none; font-size:0.75rem; color:var(--accent-green);" title="กำลังฟังสด">●</span>
                 <span id="audio-status" style="font-size:0.7rem;"></span>
                 <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
@@ -103,6 +107,37 @@
                             <div class="bar"></div>
                         </div>
                         <span class="dbm" id="signal-dbm">--- dBm</span>
+                    </div>
+
+                    <!-- Dual-VFO control rows. VFO A is always shown; VFO B is
+                         shown only in Dual mode (toggled by App._updateVfoRows).
+                         Each row: select-active button + frequency + live dot +
+                         SIG level + speaker-routing dropdown (left/both/right).
+                         Clicking the waterfall / tune buttons targets the ACTIVE
+                         VFO (the one whose row is highlighted). -->
+                    <div class="vfo-rows" id="vfo-rows">
+                        <div class="vfo-row vfo-row-a vfo-active" id="vfo-row-a">
+                            <button class="vfo-sel-btn vfo-sel-a" id="btn-vfo-a" title="เลือก VFO A เป็นเป้าหมายคลิก">A</button>
+                            <span class="vfo-live" id="vfo-a-live"></span>
+                            <span class="vfo-freq" id="vfo-a-freq">--- MHz</span>
+                            <span class="vfo-sig" id="vfo-a-sig">--- dB</span>
+                            <select class="vfo-speaker" id="vfo-a-speaker" title="ลำโพงสำหรับ VFO A">
+                                <option value="both">🔈 ทั้งสอง</option>
+                                <option value="left">👈 ซ้าย</option>
+                                <option value="right">👉 ขวา</option>
+                            </select>
+                        </div>
+                        <div class="vfo-row vfo-row-b" id="vfo-row-b" style="display:none;">
+                            <button class="vfo-sel-btn vfo-sel-b" id="btn-vfo-b" title="เลือก VFO B เป็นเป้าหมายคลิก">B</button>
+                            <span class="vfo-live" id="vfo-b-live"></span>
+                            <span class="vfo-freq" id="vfo-b-freq">--- MHz</span>
+                            <span class="vfo-sig" id="vfo-b-sig">--- dB</span>
+                            <select class="vfo-speaker" id="vfo-b-speaker" title="ลำโพงสำหรับ VFO B">
+                                <option value="both">🔈 ทั้งสอง</option>
+                                <option value="left">👈 ซ้าย</option>
+                                <option value="right">👉 ขวา</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- Bookmarks -->
@@ -203,6 +238,12 @@
                 <!-- Record toggle -->
                 <div class="radio-controls">
                     <button class="radio-btn" id="btn-record" title="บันทึก (กดอีกครั้งเพื่อหยุด)">⏺</button>
+                    <!-- Per-user AUTO-record toggle (live listening only).
+                         When ON, the server auto-records the channel THIS user is
+                         listening to, gated by the user's own squelch + signal —
+                         fully independent of other users and of the global
+                         auto-record. Requires "ฟังสด" to be active. -->
+                    <button class="radio-btn" id="btn-auto-record" title="อัดอัตโนมัติของฉัน (ต้องกดฟังสดก่อน)">🔄</button>
                 </div>
 
                 <!-- Volume control -->

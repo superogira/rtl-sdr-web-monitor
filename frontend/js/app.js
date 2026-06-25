@@ -215,22 +215,24 @@ const App = {
                 );
             }
         }
-        // Sync gain slider + numeric input
-        if (data.gain !== undefined) {
+        // Sync gain slider + numeric input — but NOT while the user is editing
+        // it (mousedown/focus/typing), or the periodic status broadcast would
+        // snap the value back to the backend's stale value mid-drag.
+        if (data.gain !== undefined && !this._activeEdits.has('gain')) {
             const gs = document.getElementById('gain-slider');
             const gi = document.getElementById('gain-input');
             if (gs) gs.value = data.gain;
             if (gi) gi.value = data.gain;
         }
-        // Sync squelch slider + numeric input
-        if (data.squelch_level !== undefined) {
+        // Sync squelch slider + numeric input (same edit-guard as gain).
+        if (data.squelch_level !== undefined && !this._activeEdits.has('squelch')) {
             const ss = document.getElementById('squelch-slider');
             const si = document.getElementById('squelch-input');
             if (ss) ss.value = data.squelch_level;
             if (si) si.value = data.squelch_level;
         }
-        // Sync PPM (Frequency Correction) slider + numeric input
-        if (data.freq_correction_ppm !== undefined) {
+        // Sync PPM (Frequency Correction) slider + numeric input (same guard).
+        if (data.freq_correction_ppm !== undefined && !this._activeEdits.has('ppm')) {
             const ps = document.getElementById('ppm-slider');
             const pi = document.getElementById('ppm-input');
             if (ps) {
@@ -239,16 +241,12 @@ const App = {
             }
             if (pi) pi.value = data.freq_correction_ppm;
         }
-        // Sync GLOBAL VFO offset from backend — but ONLY when NOT listening.
-        // When listening, each client owns its own per-listener VFO (set via
-        // the audio WS), so the global offset must not overwrite the local
-        // display.
-        if (data.vfo_offset_hz !== undefined) {
-            const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying);
-            if (!listening) {
-                this._vfoOffsetHz = data.vfo_offset_hz;
-                this.updateFreqDisplay();
-            }
+        // VFO cursor is PER-USER. Only adopt the global value on the initial
+        // sync (before the user has moved their own cursor). After that, each
+        // client owns its cursor and is not dragged by other users' tunes.
+        if (data.vfo_offset_hz !== undefined && !this._vfoUserTouched) {
+            this._setVfoOffset(0, data.vfo_offset_hz);
+            this.updateFreqDisplay();
         }
     },
 
@@ -373,7 +371,57 @@ const App = {
     _stepSize: 1000,  // Default step: 1 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
     _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
-    _vfoOffsetHz: 0,    // VFO offset from center (Hz). 0 = listen at center.
+    // === Dual-VFO state ===
+    // Two independent listening cursors (A / B). Each entry: { offsetHz }.
+    // In single mode only A is used; in dual mode A + B each drive their own
+    // server-side listener (via LiveAudio's per-VFO WS) and their own
+    // waterfall cursor (A red, B blue).
+    _vfos: [
+        { id: 'A', offsetHz: 0 },
+        { id: 'B', offsetHz: 0 },
+    ],
+    _activeVfoIdx: 0,   // which VFO waterfall clicks / tune buttons target
+    _vfoMode: 'single', // 'single' | 'dual'
+    // Legacy alias kept so old WS/sync code (which still references
+    // _vfoOffsetHz) reads/writes the ACTIVE VFO. New code should use
+    // _vfoOffsetFor(idx) / _setVfoOffset(idx, hz).
+    get _vfoOffsetHz() { return this._vfos[this._activeVfoIdx].offsetHz; },
+    set _vfoOffsetHz(hz) { this._vfos[this._activeVfoIdx].offsetHz = hz; },
+    /** Read a VFO's offset by index (used by audio.js to claim its cursor). */
+    _vfoOffsetFor(idx) { return this._vfos[idx] ? this._vfos[idx].offsetHz : 0; },
+    _setVfoOffset(idx, hz) { if (this._vfos[idx]) this._vfos[idx].offsetHz = hz; },
+    // Becomes true the first time THIS user moves their own VFO cursor (click,
+    // tune buttons, or freq input). After that the global VFO broadcast no
+    // longer overwrites the local cursor — so one user tuning cannot drag
+    // anyone else's cursor. Reset only on full page reload.
+    _vfoUserTouched: false,
+    // Per-VFO SIG levels (driven by the audio WS "sig" frames). Active VFO's
+    // value feeds updateSignalMeter().
+    _vfoSig: [-120, -120],
+    // Set of control values the user is CURRENTLY editing (e.g. 'gain',
+    // 'squelch', 'ppm'). While a control is in this set, syncControlsFromStatus
+    // must NOT overwrite it from the periodic status broadcast — otherwise the
+    // value the user is dragging/typing gets snapped back to the backend's
+    // (stale) value every ~1s. A control enters the set on focus/mousedown and
+    // leaves a short time after blur/release, so the backend-confirmed value is
+    // re-adopted once the user is done.
+    _activeEdits: new Set(),
+    _activeEditTimers: {},
+
+    /**
+     * Mark a control as being actively edited so the periodic status sync
+     * stops fighting the user. Re-armable: each call while editing pushes the
+     * release out by `holdMs`, so a user dragging a slider keeps it locked
+     * until they stop interacting.
+     */
+    _beginEdit(control, holdMs = 1500) {
+        this._activeEdits.add(control);
+        if (this._activeEditTimers[control]) clearTimeout(this._activeEditTimers[control]);
+        this._activeEditTimers[control] = setTimeout(() => {
+            this._activeEdits.delete(control);
+            delete this._activeEditTimers[control];
+        }, holdMs);
+    },
 
     setupRadioControls() {
         // Role-based visibility:
@@ -563,10 +611,13 @@ const App = {
 
         // Helper: keep slider ↔ numeric input in sync bidirectionally and
         // send the value to the backend (with optional debounce).
-        const _bindSliderInputPair = ({ sliderId, inputId, setter, debounceMs = 0, clampToSliderRange = false }) => {
+        const _bindSliderInputPair = ({ sliderId, inputId, setter, debounceMs = 0, clampToSliderRange = false, controlName = null }) => {
             const slider = document.getElementById(sliderId);
             const input = document.getElementById(inputId);
             if (!slider || !input) return;
+            // controlName lets us lock this control against status-broadcast
+            // overwrites while the user is editing it. Defaults to sliderId.
+            const ctrl = controlName || sliderId.replace('-slider', '');
             let syncGuard = false;  // prevent feedback loops slider↔input
             let timer = null;
             const send = (val) => {
@@ -577,8 +628,15 @@ const App = {
                 if (debounceMs > 0) timer = setTimeout(doSend, debounceMs);
                 else doSend();
             };
+            // Any direct interaction claims the control so the periodic status
+            // sync stops snapping its value back while the user is mid-edit.
+            const claim = () => this._beginEdit(ctrl);
+            slider.addEventListener('mousedown', claim);
+            slider.addEventListener('touchstart', claim, { passive: true });
+            input.addEventListener('focus', claim);
             // Slider → input
             slider.addEventListener('input', (e) => {
+                claim();  // keep locked while dragging
                 if (syncGuard) return;
                 syncGuard = true;
                 input.value = e.target.value;
@@ -589,6 +647,7 @@ const App = {
             });
             // Input → slider
             input.addEventListener('input', (e) => {
+                claim();  // keep locked while typing
                 if (syncGuard) return;
                 syncGuard = true;
                 let v = parseInt(e.target.value);
@@ -694,6 +753,29 @@ const App = {
         const btnRecord = document.getElementById('btn-record');
         if (btnRecord) btnRecord.addEventListener('click', () => this.toggleRecording());
 
+        // Per-user AUTO-record toggle button (live listening only). When ON,
+        // the server auto-records the channel THIS user is listening to, gated
+        // by the user's own squelch + signal (independent of everyone else and
+        // of the global auto-record). Disabled until the user presses ฟังสด.
+        const btnAutoRec = document.getElementById('btn-auto-record');
+        if (btnAutoRec) btnAutoRec.addEventListener('click', () => this.toggleAutoRecord());
+
+        // === Dual-VFO controls ===
+        const btnVfoMode = document.getElementById('btn-vfo-mode');
+        if (btnVfoMode) btnVfoMode.addEventListener('click', () => this.toggleVfoMode());
+        // Active-VFO selector buttons (A / B).
+        const btnVfoA = document.getElementById('btn-vfo-a');
+        if (btnVfoA) btnVfoA.addEventListener('click', () => this.selectActiveVfo(0));
+        const btnVfoB = document.getElementById('btn-vfo-b');
+        if (btnVfoB) btnVfoB.addEventListener('click', () => this.selectActiveVfo(1));
+        // Per-VFO speaker dropdowns.
+        const selA = document.getElementById('vfo-a-speaker');
+        if (selA) selA.addEventListener('change', (e) => this.setVfoSpeaker(0, e.target.value));
+        const selB = document.getElementById('vfo-b-speaker');
+        if (selB) selB.addEventListener('change', (e) => this.setVfoSpeaker(1, e.target.value));
+        // Initial row state.
+        this._updateVfoRows();
+
         // Volume slider
         this.initVolumeSlider();
 
@@ -738,26 +820,33 @@ const App = {
     },
 
     async setVFO(freq) {
-        // Per-listener tuning: send via the AUDIO WebSocket (each connection
-        // owns its own demodulator), so one user tuning does NOT affect anyone
-        // else. Falls back to the REST endpoint (global) when not listening.
-        if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setVFO(freq)) {
+        // VFO tuning is PER-USER and now also PER-VFO (A/B). It NEVER
+        // broadcasts to other users. The active VFO (this._activeVfoIdx) is
+        // the target of clicks / tune buttons / freq input.
+        //   - Listening live → send via the ACTIVE VFO's audio WebSocket so
+        //     THAT listener's demodulator tunes (audio follows immediately).
+        //   - Not listening  → move ONLY this browser's cursor (client-side).
+        this._vfoUserTouched = true;
+        const idx = this._activeVfoIdx;
+        if (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(idx) && LiveAudio.setVfoVfo(idx, freq)) {
             const offset = freq - this.currentFreq;
-            this._vfoOffsetHz = offset;
+            this._setVfoOffset(idx, offset);
             this._waterfallDirty = true;
             this.updateFreqDisplay();
-            console.log(`🎯 VFO (per-listener): ${(freq/1e6).toFixed(4)} MHz (offset ${offset.toFixed(0)} Hz)`);
+            console.log(`🎯 VFO ${this._vfos[idx].id} (per-listener): ${(freq/1e6).toFixed(4)} MHz`);
             return;
         }
-        try {
-            const result = await API.sdr.setVFO(freq);
-            this._vfoOffsetHz = result.vfo_offset_hz || 0;
-            this._waterfallDirty = true;
-            this.updateFreqDisplay();
-            console.log(`🎯 VFO (global): ${(freq/1e6).toFixed(4)} MHz (offset ${this._vfoOffsetHz.toFixed(0)} Hz)`);
-        } catch (err) {
-            console.error('VFO set failed:', err);
+        // Client-side only: keep this user's cursor within its passband.
+        const sr = this._sampleRate || 0;
+        let offset = freq - this.currentFreq;
+        if (sr > 0) {
+            const maxOff = sr * 0.5 * 0.95;
+            offset = Math.max(-maxOff, Math.min(maxOff, offset));
         }
+        this._setVfoOffset(idx, offset);
+        this._waterfallDirty = true;
+        this.updateFreqDisplay();
+        console.log(`🎯 VFO ${this._vfos[idx].id} (local cursor): ${(freq/1e6).toFixed(4)} MHz`);
     },
 
     tuneFreq(delta) {
@@ -848,7 +937,7 @@ const App = {
         }
         this._lastWaterfallFreq = this.currentFreq;
 
-        // === Big display box: show VFO (listening) frequency ===
+        // === Big display box: show the ACTIVE VFO (listening) frequency ===
         const freqDisplay = document.getElementById('freq-display');
         if (freqDisplay) {
             const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
@@ -863,8 +952,13 @@ const App = {
             const warn = offscreen
                 ? ` <span style="color:#ff5050;font-size:0.5em;vertical-align:middle">⚠ นอกช่วงรับสัญญาณ</span>`
                 : '';
+            // In dual mode, prefix with the active VFO label + color so the
+            // operator knows which of the two cursors the big box reflects.
+            const vfoLabel = (this._vfoMode === 'dual')
+                ? `<span style="color:${this._activeVfoIdx === 0 ? '#ff5050' : '#50a0ff'};font-size:0.45em;vertical-align:middle;margin-right:6px">VFO ${this._vfos[this._activeVfoIdx].id}</span>`
+                : '';
             // Show all 4 decimal digits
-            freqDisplay.innerHTML = `${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>${warn}`;
+            freqDisplay.innerHTML = `${vfoLabel}${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>${warn}`;
         }
 
         // === Waterfall overlay: show CENTER frequency + band edges ===
@@ -941,6 +1035,170 @@ const App = {
             default:
                 console.warn('🎙️ Unknown record_ack status:', obj.status);
         }
+    },
+
+    /**
+     * Toggle per-user AUTO-record (live listening only). Each user can
+     * independently auto-record the channel they are listening to, gated by
+     * their own squelch threshold + measured signal. Uses the current SQL
+     * slider value as the record gate; <= -120 means "always record".
+     */
+    _autoRecordOn: false,
+    toggleAutoRecord() {
+        // Auto-record (per-user) rides on the live audio WebSocket, so it
+        // requires "ฟังสด" to be active first.
+        if (typeof LiveAudio === 'undefined' || !LiveAudio.isPlaying) {
+            alert('กรุณากด "🔈 ฟังสด" ก่อนเปิดอัดอัตโนมัติ');
+            return;
+        }
+        const next = !this._autoRecordOn;
+        // Use the current SQL slider value as the record-gate threshold so the
+        // user's existing squelch setting controls what gets recorded. This is
+        // separate from the live LISTENING squelch on the server.
+        const sqlInput = document.getElementById('squelch-input');
+        const squelch = sqlInput ? parseFloat(sqlInput.value) : -120;
+        LiveAudio.setAutoRecord(next, squelch);
+        // UI state is finalized in _onAutoRecordAck (server confirms).
+    },
+
+    /**
+     * Handle auto_record_ack messages from the audio WebSocket.
+     * Updates the AUTO-REC button active state.
+     */
+    _onAutoRecordAck(obj) {
+        this._autoRecordOn = !!obj.enabled;
+        const btn = document.getElementById('btn-auto-record');
+        if (btn) {
+            btn.classList.toggle('auto-rec-active', this._autoRecordOn);
+            btn.textContent = this._autoRecordOn ? '🔄●' : '🔄';
+            btn.title = this._autoRecordOn
+                ? 'อัดอัตโนมัติของฉัน: เปิดอยู่ (คลิกเพื่อปิด)'
+                : 'อัดอัตโนมัติของฉัน (ต้องกดฟังสดก่อน)';
+        }
+        if (obj.message) {
+            // e.g. recording disabled by admin → revert and inform.
+            alert(obj.message);
+        }
+        console.log(`🔄 Per-user auto-record → ${this._autoRecordOn ? 'ON' : 'OFF'}`);
+    },
+
+    // === Per-VFO callbacks (driven by LiveAudio's per-VFO audio WS) ===
+
+    /** A VFO's listener became "ready" on the server. */
+    _onVfoReady(idx, obj) {
+        // Adopt the server's per-listener default offset only if THIS VFO's
+        // cursor hasn't been user-touched yet.
+        if (obj.vfo_offset_hz !== undefined && this._vfos[idx]) {
+            this._setVfoOffset(idx, obj.vfo_offset_hz);
+            this.updateFreqDisplay();
+        }
+    },
+
+    /** A VFO's per-listener SIG level update (its own channel power). */
+    _onVfoSig(idx, db) {
+        if (idx >= 0 && idx < this._vfoSig.length) this._vfoSig[idx] = db;
+        // Refresh the SIG bar. In dual mode both VFOs feed separate bars.
+        this._renderVfoSig();
+    },
+
+    /** A VFO's vfo_ack (server confirmed this VFO's tune). */
+    _onVfoAck(idx, obj) {
+        if (this._vfos[idx] && obj.vfo_offset_hz !== undefined) {
+            this._setVfoOffset(idx, obj.vfo_offset_hz);
+            this.updateFreqDisplay();
+        }
+    },
+
+    /**
+     * Render the SIG meter for the current mode. Single → one bar (active
+     * VFO). Dual → both VFO bars (A red / B blue) side by side.
+     */
+    _renderVfoSig() {
+        const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+        if (!listening) return;  // global SIG drives the bar when not listening
+        if (this._vfoMode === 'dual') {
+            this._renderDualSig();
+        } else {
+            const s = this._vfoSig[this._activeVfoIdx];
+            this.updateSignalMeter((s === undefined) ? -120 : s);
+        }
+    },
+
+    _renderDualSig() {
+        // In dual mode, write both VFO levels into the single dbm readout as
+        // "A:xx B:yy" and light the bars by the STRONGER of the two (so the
+        // bar reflects "something is being received"). Per-VFO exact level is
+        // shown in each VFO row's own label.
+        const a = (this._vfoSig[0] === undefined) ? -120 : this._vfoSig[0];
+        const b = (this._vfoSig[1] === undefined) ? -120 : this._vfoSig[1];
+        const stronger = Math.max(a, b);
+        this.updateSignalMeter(stronger);
+        const dbmDisplay = document.getElementById('signal-dbm');
+        if (dbmDisplay) {
+            dbmDisplay.textContent = `A:${a.toFixed(0)} B:${b.toFixed(0)}`;
+        }
+        // Refresh per-row SIG labels if present.
+        const la = document.getElementById('vfo-a-sig');
+        const lb = document.getElementById('vfo-b-sig');
+        if (la) la.textContent = `${a.toFixed(0)} dB`;
+        if (lb) lb.textContent = `${b.toFixed(0)} dB`;
+    },
+
+    /**
+     * Refresh the Dual-VFO control rows (frequencies, active highlight,
+     * speaker dropdown, live indicator). Called by LiveAudio._updateUI.
+     */
+    _updateVfoRows() {
+        const rowB = document.getElementById('vfo-row-b');
+        if (rowB) rowB.style.display = (this._vfoMode === 'dual') ? '' : 'none';
+        // Active highlight
+        ['vfo-row-a', 'vfo-row-b'].forEach((rid, i) => {
+            const el = document.getElementById(rid);
+            if (el) el.classList.toggle('vfo-active', i === this._activeVfoIdx);
+        });
+        // Per-row frequency labels
+        const fa = document.getElementById('vfo-a-freq');
+        const fb = document.getElementById('vfo-b-freq');
+        const cf = this.currentFreq || 0;
+        if (fa) fa.textContent = ((cf + (this._vfos[0].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
+        if (fb) fb.textContent = ((cf + (this._vfos[1].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
+        // Per-row live indicator
+        const la = document.getElementById('vfo-a-live');
+        const lb = document.getElementById('vfo-b-live');
+        if (la) la.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(0)) ? '🔴' : '';
+        if (lb) lb.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(1)) ? '🔴' : '';
+        // Speaker dropdowns reflect current state
+        const sa = document.getElementById('vfo-a-speaker');
+        const sb = document.getElementById('vfo-b-speaker');
+        if (typeof LiveAudio !== 'undefined') {
+            if (sa) sa.value = LiveAudio.getSpeaker(0);
+            if (sb) sb.value = LiveAudio.getSpeaker(1);
+        }
+    },
+
+    /** Switch the active VFO target for clicks / tune buttons. */
+    selectActiveVfo(idx) {
+        if (idx < 0 || idx >= this._vfos.length) return;
+        this._activeVfoIdx = idx;
+        if (typeof LiveAudio !== 'undefined') LiveAudio.setActive(idx);
+        this._updateVfoRows();
+        this.updateFreqDisplay();
+    },
+
+    /** Toggle single / dual VFO mode. */
+    toggleVfoMode() {
+        const next = (this._vfoMode === 'dual') ? 'single' : 'dual';
+        this._vfoMode = next;
+        if (typeof LiveAudio !== 'undefined') LiveAudio.setVfoMode(next);
+        const btn = document.getElementById('btn-vfo-mode');
+        if (btn) btn.textContent = (next === 'dual') ? '🔀 Dual' : '🔂 Single';
+        this._updateVfoRows();
+        this.updateFreqDisplay();
+    },
+
+    /** Set speaker routing for a VFO from a dropdown change. */
+    setVfoSpeaker(idx, mode) {
+        if (typeof LiveAudio !== 'undefined') LiveAudio.setSpeaker(idx, mode);
     },
 
     // Server confirmed an auto-squelch toggle for THIS listener. Update the
@@ -1132,24 +1390,41 @@ const App = {
                 changed = true;
             }
             if (data.signal_level_db !== undefined) {
-                this.updateSignalMeter(data.signal_level_db);
+                // While any VFO is listening live, the SIG meter is driven by
+                // per-listener "sig" frames over the AUDIO WebSocket (each VFO
+                // sees its OWN channel power). Ignore the GLOBAL center-channel
+                // level here so it can't clobber the per-VFO value(s).
+                const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+                if (!listening) {
+                    this.updateSignalMeter(data.signal_level_db);
+                }
             }
             if (data.frequency) {
+                // When the HARDWARE center frequency changes (admin retune, or
+                // a background job reclaiming the tuner), every listener's VFO
+                // offset is reset to 0 server-side (offsets are relative to
+                // the OLD center and would point elsewhere). Mirror that here:
+                // reset this user's cursor to the new center so it doesn't
+                // dangle outside the new passband.
+                const centerChanged = data.frequency !== this.currentFreq;
                 this.currentFreq = data.frequency;
+                if (centerChanged) {
+                    // Center changed → reset BOTH VFO cursors (offsets are
+                    // relative to the old center and would point elsewhere).
+                    this._setVfoOffset(0, 0);
+                    this._setVfoOffset(1, 0);
+                    this._vfoUserTouched = false;
+                }
                 this._waterfallDirty = true;
                 this.updateFreqDisplay();
             }
-            // Sync GLOBAL VFO offset from backend — but ONLY when NOT listening.
-            // When listening, each client owns its own per-listener VFO (set via
-            // the audio WS), so the global offset must not overwrite the local
-            // display. The audio WS "ready"/"vfo_ack" messages handle the
-            // per-listener offset in that case.
-            if (data.vfo_offset_hz !== undefined) {
-                const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying);
-                if (!listening) {
-                    this._vfoOffsetHz = data.vfo_offset_hz;
-                    this.updateFreqDisplay();
-                }
+            // VFO cursor is PER-USER (and per-VFO). Once the user moves their
+            // own cursor, the global offset broadcast must NEVER overwrite the
+            // local display. We only adopt the global value on the very first
+            // status sync (before _vfoUserTouched), into VFO A.
+            if (data.vfo_offset_hz !== undefined && !this._vfoUserTouched) {
+                this._setVfoOffset(0, data.vfo_offset_hz);
+                this.updateFreqDisplay();
             }
             if (data.mode) {
                 this.currentMode = data.mode;
@@ -1747,8 +2022,22 @@ const App = {
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(this._waterfallBackBuffer, srcX, 0, srcW, h, 0, 0, w, h);
             this._drawFreqGrid(ctx, w, h);
-            this._drawChannelBwOverlay(ctx, w, h);
-            this._drawVFOCursor(ctx, w, h);
+            // Draw one cursor per active VFO. Single mode → just A (red).
+            // Dual mode → A (red) + B (blue). The active VFO is drawn last so
+            // it sits on top.
+            const colors = ['rgba(255, 80, 80, %a)', 'rgba(80, 160, 255, %a)'];
+            const order = (this._activeVfoIdx === 0) ? [1, 0] : [0, 1];
+            // Channel-BW overlay for all VFOs (only those that are "live" in
+            // dual mode, or always A in single mode).
+            const vfoCount = (this._vfoMode === 'dual') ? 2 : 1;
+            for (let i = 0; i < vfoCount; i++) {
+                this._drawChannelBwOverlay(ctx, w, h, this._vfos[i].offsetHz, colors[i]);
+            }
+            for (const i of order) {
+                if (i >= vfoCount && this._vfoMode !== 'dual') continue;
+                this._drawVFOCursor(ctx, w, h, this._vfos[i].offsetHz, colors[i],
+                                    i === this._activeVfoIdx, this._vfos[i].id);
+            }
             this._drawSignalAnnotations(ctx, w, h);
             this._waterfallDirty = false;
         }
@@ -1764,14 +2053,15 @@ const App = {
      *   ┊   (waterfall)  ┊
      *   ┊└               ┘┊
      */
-    _drawChannelBwOverlay(ctx, w, h) {
+    _drawChannelBwOverlay(ctx, w, h, offsetHz) {
         const bw = this._channelBw || 12000;
         const viewBw = this._wfVisibleBw();
         const bwPx = Math.min(w, (bw / viewBw) * w);
         if (bwPx < 4) return;  // too small to draw
 
-        // Draw at VFO position (center + offset) within the current zoom view
-        const cx = this._wfFreqToX(this.currentFreq + (this._vfoOffsetHz || 0), w);
+        // Draw at the given VFO position (center + offset) within the current
+        // zoom view. offsetHz is per-VFO (A or B).
+        const cx = this._wfFreqToX(this.currentFreq + (offsetHz || 0), w);
         const left = cx - bwPx / 2;
         const right = cx + bwPx / 2;
 
@@ -1839,9 +2129,10 @@ const App = {
      * CLAMPED to the near edge of the canvas and drawn dimmed with an
      * "off-screen" label, so it is never invisible.
      */
-    _drawVFOCursor(ctx, w, h) {
-        const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
-        const offscreen = !this._isVfoInPassband();
+    _drawVFOCursor(ctx, w, h, offsetHz, colorTpl, isActive, label) {
+        // colorTpl is like 'rgba(255, 80, 80, %a)' with %a as the alpha slot.
+        const vfoHz = this.currentFreq + (offsetHz || 0);
+        const offscreen = !this._isOffsetInPassband(offsetHz);
         // Raw (un-clamped) position; may be < 0 or > w when off-screen.
         const rawCx = this._wfFreqToX(vfoHz, w);
         // Clamp into [0, w] so the marker always stays visible.
@@ -1849,15 +2140,15 @@ const App = {
 
         ctx.save();
 
+        // Active VFO is drawn slightly thicker so it reads as "selected".
+        const lw = isActive ? 2.0 : 1.5;
         if (offscreen) {
-            // Dimmed + dotted to signal that the VFO is outside the passband.
-            ctx.strokeStyle = 'rgba(255, 80, 80, 0.35)';
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = colorTpl.replace('%a', '0.3');
+            ctx.lineWidth = lw;
             ctx.setLineDash([3, 4]);
         } else {
-            // Dashed vertical line (full height) at VFO position
-            ctx.strokeStyle = 'rgba(255, 80, 80, 0.7)';
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = colorTpl.replace('%a', isActive ? '0.85' : '0.6');
+            ctx.lineWidth = lw;
             ctx.setLineDash([10, 5]);
         }
         ctx.beginPath();
@@ -1867,7 +2158,7 @@ const App = {
 
         // ▼ wings marker at top
         ctx.setLineDash([]);
-        ctx.strokeStyle = offscreen ? 'rgba(255, 80, 80, 0.5)' : 'rgba(255, 80, 80, 0.95)';
+        ctx.strokeStyle = colorTpl.replace('%a', offscreen ? '0.5' : '0.95');
         ctx.lineWidth = 2;
         const armW = 8;
         ctx.beginPath();
@@ -1876,31 +2167,44 @@ const App = {
         ctx.lineTo(cx + armW, 0);
         ctx.stroke();
 
+        // VFO label badge (A / B) just under the wings, so the operator can
+        // tell the two cursors apart in dual mode.
+        if (label) {
+            ctx.fillStyle = colorTpl.replace('%a', '0.95');
+            ctx.font = 'bold 11px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(label, cx, 10);
+            ctx.textAlign = 'start';  // reset
+        }
+
         // "◀ off-screen" / "off-screen ▶" label when the VFO is outside band.
         if (offscreen) {
             ctx.setLineDash([]);
-            ctx.fillStyle = 'rgba(255, 80, 80, 0.85)';
+            ctx.fillStyle = colorTpl.replace('%a', '0.85');
             ctx.font = '11px monospace';
             ctx.textBaseline = 'top';
-            const label = rawCx < 0 ? '◀ VFO off-screen' : 'VFO off-screen ▶';
-            const tx = rawCx < 0 ? 4 : Math.max(4, w - 110);
-            ctx.fillText(label, tx, 12);
+            const text = rawCx < 0 ? `◀ ${label||'VFO'} off-screen` : `${label||'VFO'} off-screen ▶`;
+            const tx = rawCx < 0 ? 4 : Math.max(4, w - 130);
+            ctx.fillText(text, tx, 12);
         }
 
         ctx.restore();
     },
 
     /**
-     * Whether the current VFO offset places the listening frequency inside
-     * the usable passband (|offset| ≤ 0.95 × sampleRate/2). Used to flag an
-     * off-screen cursor and to warn in the big frequency display.
+     * Whether a given VFO offset places the listening frequency inside the
+     * usable passband (|offset| ≤ 0.95 × sampleRate/2). Used to flag an
+     * off-screen cursor and to warn in the frequency display.
      */
-    _isVfoInPassband() {
+    _isOffsetInPassband(offsetHz) {
         const sr = this._sampleRate || 0;
         if (sr <= 0) return true;
         const maxOff = sr * 0.5 * 0.95;
-        return Math.abs(this._vfoOffsetHz || 0) <= maxOff;
+        return Math.abs(offsetHz || 0) <= maxOff;
     },
+    /** Convenience: passband check for the ACTIVE VFO. */
+    _isVfoInPassband() { return this._isOffsetInPassband(this._vfoOffsetHz); },
 
     /**
      * Draw signal frequency annotations — vertical "sticks" with the frequency

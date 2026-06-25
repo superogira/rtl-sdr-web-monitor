@@ -997,6 +997,21 @@ a:hover {
     50% { box-shadow: 0 0 0 6px transparent; }
 }
 
+/* Per-user AUTO-record toggle button (live listening). Uses the yellow
+   accent + a slow pulse so it's visually distinct from the red manual
+   record button and from the global auto-record indicator. */
+.radio-btn.auto-rec-active {
+    border-color: var(--accent-yellow);
+    background: var(--accent-yellow)20;
+    color: var(--accent-yellow);
+    animation: pulse-auto-rec 1.4s infinite;
+}
+
+@keyframes pulse-auto-rec {
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-yellow)40; }
+    50% { box-shadow: 0 0 0 5px transparent; }
+}
+
 /* === Auto-Record Indicator (shown next to record button) === */
 #auto-rec-indicator {
     font-size: 0.65rem;
@@ -1841,3 +1856,63 @@ a:hover {
     [data-theme="v2"] .freq-display { font-size: 1.5rem; letter-spacing: 2px; }
     [data-theme="v2"] .clock-time { font-size: 1.8rem; }
 }
+
+/* === Dual-VFO control rows === */
+/* Each row sits under the SIG meter and shows one VFO (A=red, B=blue) with
+   its frequency, live indicator, SIG level, and a speaker-routing dropdown.
+   The ACTIVE VFO row (the target of waterfall clicks / tune buttons) gets a
+   brighter border + background. */
+.vfo-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 8px;
+}
+.vfo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+    font-size: 0.78rem;
+    transition: border-color 0.15s, background 0.15s;
+}
+.vfo-row.vfo-active {
+    border-color: rgba(234, 179, 8, 0.7);
+    background: rgba(234, 179, 8, 0.08);
+}
+.vfo-sel-btn {
+    width: 22px; height: 22px;
+    border: none; border-radius: 50%;
+    font-weight: 700; font-size: 0.75rem;
+    cursor: pointer;
+    color: #fff;
+    flex-shrink: 0;
+}
+.vfo-sel-a { background: #c0392b; }   /* red — matches VFO A cursor */
+.vfo-sel-b { background: #2563eb; }   /* blue — matches VFO B cursor */
+.vfo-row:not(.vfo-active) .vfo-sel-btn { opacity: 0.55; }
+.vfo-live { width: 10px; font-size: 0.7rem; }
+.vfo-freq {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    flex: 1;
+}
+.vfo-sig {
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    min-width: 52px;
+    text-align: right;
+}
+.vfo-speaker {
+    background: var(--bg-input, #1a1f2e);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
