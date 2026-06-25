@@ -851,6 +851,14 @@ const App = {
         this._setVfoOffset(idx, offset);
         this._waterfallDirty = true;
         this.updateFreqDisplay();
+        // Not listening live: tell the server our cursor offset so it can
+        // compute the SIG under our cursor (not just the global center) and
+        // send it back in the next status frame → VFO A bar reflects the freq
+        // we clicked. Only meaningful for VFO A in single mode (the bar we
+        // drive when not live). Live mode uses per-listener 'sig' frames.
+        if (idx === 0 && typeof WS !== 'undefined') {
+            WS.send({ type: "vfo_cursor", offset_hz: offset });
+        }
         console.log(`🎯 VFO ${this._vfos[idx].id} (local cursor): ${(freq/1e6).toFixed(4)} MHz`);
     },
 

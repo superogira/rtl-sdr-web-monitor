@@ -117,6 +117,13 @@ class SDRManager:
         self._callbacks: list = []
         self._spectrum_callbacks: list = []
         self._last_spectrum: list = []
+        # Cache of the most recent raw IQ bytes (+ its sample rate) from the
+        # stream loop. Used by the /ws endpoint to compute a per-cursor
+        # channel-power SIG for clients that are NOT listening live (so their
+        # VFO A bar reflects the frequency under their cursor, not just the
+        # global center). Updated every chunk in _stream_loop.
+        self._last_iq_bytes: Optional[bytes] = None
+        self._last_iq_sample_rate: int = 0
         self._spectrum_prev: Optional[np.ndarray] = None  # For exponential averaging
         self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
@@ -230,6 +237,29 @@ class SDRManager:
             # indicator below the clock).
             "active_job_captures": self._collect_job_captures(),
         }
+
+    def cursor_signal_level(self, offset_hz: float) -> Optional[float]:
+        """Channel power (dB) at (center + offset_hz), from the latest IQ.
+
+        Lets a non-live client see the SIG under its VFO cursor (not just the
+        global center level). Runs compute_channel_power on the cached IQ; this
+        is ~1 ms (single-shot FFT) so it is cheap to call per-client at ~1 FPS.
+        Returns None if no IQ is cached yet.
+        """
+        iq = self._last_iq_bytes
+        sr = self._last_iq_sample_rate
+        if not iq or sr <= 0:
+            return None
+        try:
+            from backend.audio.demod import compute_channel_power, iq_to_complex
+            iq_c = iq_to_complex(iq)
+            return float(compute_channel_power(
+                iq_c, sr, self.mode,
+                channel_bw=self._channel_bw,
+                vfo_offset_hz=float(offset_hz or 0.0),
+            ))
+        except Exception:
+            return None
 
     def _collect_job_captures(self) -> list:
         """Return runtime_status of all active background job captures."""
@@ -1172,6 +1202,10 @@ class SDRManager:
                     )
                     signal_level, audio = await asyncio.gather(sig_task, demod_task)
                     self._signal_level = signal_level
+                    # Cache the raw IQ for per-cursor SIG lookups (non-live
+                    # clients on /ws). Cheap: just keep a reference.
+                    self._last_iq_bytes = iq_data
+                    self._last_iq_sample_rate = int(sample_rate)
 
                     if len(audio) > 0:
                         self._audio_buffer.append(audio)

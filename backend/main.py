@@ -140,6 +140,7 @@ async def websocket_endpoint(websocket: WebSocket):
     import json
     import logging
     from backend.sdr.manager import sdr_manager
+    from backend.audio.broadcaster import audio_broadcaster
 
     logger_ws = logging.getLogger("websocket")
 
@@ -181,15 +182,37 @@ async def websocket_endpoint(websocket: WebSocket):
 
     sdr_manager.on_new_recording(on_new_recording)
 
+    # Per-connection VFO cursor offset for non-live SIG. When a client is NOT
+    # listening live it sends its cursor offset here; the status loop computes
+    # the channel power at that offset from the latest IQ so the client's VFO A
+    # bar reflects the frequency under its cursor (not just the global center).
+    # None means "use the global center level" (default / legacy behavior).
+    cursor_state = {"offset_hz": None}
+
+    async def _recv_loop():
+        """Drain client→server control messages (currently just vfo_cursor)."""
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                if msg.get("type") == "vfo_cursor":
+                    try:
+                        cursor_state["offset_hz"] = float(msg.get("offset_hz", 0.0))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception:
+            # Disconnect / closed — the main loop will also unwind.
+            return
+
+    recv_task = asyncio.ensure_future(_recv_loop())
+
     status_counter = 0
     try:
         while True:
             # Send spectrum data as a BINARY WebSocket frame.
-            # Frame format: 2-byte type tag (b"\x01\x00" = spectrum) + int16 LE
-            # payload. This replaces the old base64-in-JSON scheme, removing
-            # the ~33% base64 expansion and the per-byte atob() loop on the
-            # client. Binary frames and text (JSON) frames can coexist on one
-            # WebSocket connection; the client distinguishes them by type.
             if spectrum_data["latest"]:
                 payload = spectrum_data["latest"]
                 await websocket.send_bytes(b"\x01\x00" + payload)
@@ -209,12 +232,23 @@ async def websocket_endpoint(websocket: WebSocket):
             if status_counter >= 30:
                 status_counter = 0
                 status = sdr_manager.status
+                # If this client has declared a VFO cursor AND is not listening
+                # live, override the global signal_level_db with the channel
+                # power at its cursor offset (so VFO A shows the freq under the
+                # cursor, not the center). Live listeners get per-listener 'sig'
+                # frames over /ws/audio instead, so this is only for non-live.
+                off = cursor_state["offset_hz"]
+                if off is not None and not audio_broadcaster.has_listeners:
+                    lvl = sdr_manager.cursor_signal_level(off)
+                    if lvl is not None:
+                        status["signal_level_db"] = round(lvl, 1)
                 await websocket.send_text(json.dumps({"type": "status", "data": status}))
 
             await asyncio.sleep(0.033)  # ~30 FPS
     except Exception as e:
         logger_ws.info(f"🔌 WebSocket disconnected: {e}")
     finally:
+        recv_task.cancel()
         # Always unregister so callbacks don't leak across reconnects.
         sdr_manager.off_spectrum(on_spectrum)
         sdr_manager.off_new_recording(on_new_recording)
