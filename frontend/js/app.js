@@ -1363,24 +1363,18 @@ const App = {
     },
 
     // === Signal Meter ===
+    // The top shared SIG meter was removed; each VFO row has its own compact
+    // meter now. When NOT listening live, the global center-channel level
+    // (from /ws status) is shown on VFO A's bars so the operator always sees
+    // *some* signal indication without having to press ฟังสด first. Once live,
+    // per-listener 'sig' frames override this via _renderVfoSig → _updateVfoBars.
     updateSignalMeter(dbm) {
         this.currentSignal = dbm;
-        const bars = document.querySelectorAll('#signal-bars .bar');
-        const dbmDisplay = document.getElementById('signal-dbm');
-        if (!bars.length) return;
-        const normalized = Math.max(0, Math.min(10, (dbm + 120) / 9));
-        const activeBars = Math.round(normalized);
-        bars.forEach((bar, i) => {
-            bar.className = 'bar';
-            if (i < activeBars) {
-                if (i < 5) bar.classList.add('active-green');
-                else if (i < 8) bar.classList.add('active-yellow');
-                else bar.classList.add('active-red');
-            }
-        });
-        if (dbmDisplay) {
-            dbmDisplay.textContent = `${dbm.toFixed(0)} dBm`;
-            dbmDisplay.style.color = activeBars > 6 ? 'var(--accent-yellow)' : 'var(--accent-green)';
+        // When listening live, the per-VFO bars are driven by 'sig' frames —
+        // don't let the global level clobber them.
+        const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+        if (!listening) {
+            this._updateVfoBars(0, dbm);
         }
     },
 
