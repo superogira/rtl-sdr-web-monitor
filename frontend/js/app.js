@@ -857,6 +857,7 @@ const App = {
             this._setVfoOffset(idx, offset);
             this._waterfallDirty = true;
             this.updateFreqDisplay();
+            this._updateVfoRows();  // refresh the row's freq label
             console.log(`🎯 VFO ${this._vfos[idx].id} (per-listener): ${(freq/1e6).toFixed(4)} MHz`);
             return;
         }
@@ -870,6 +871,7 @@ const App = {
         this._setVfoOffset(idx, offset);
         this._waterfallDirty = true;
         this.updateFreqDisplay();
+        this._updateVfoRows();  // refresh the row's freq label
         // Not listening live: tell the server our cursor offset so it can
         // compute the SIG under our cursor (not just the global center) and
         // send it back in the next status frame → VFO A bar reflects the freq
@@ -1139,6 +1141,7 @@ const App = {
         if (this._vfos[idx] && obj.vfo_offset_hz !== undefined) {
             this._setVfoOffset(idx, obj.vfo_offset_hz);
             this.updateFreqDisplay();
+            this._updateVfoRows();
         }
     },
 
