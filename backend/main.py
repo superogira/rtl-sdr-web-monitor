@@ -150,13 +150,36 @@ async def websocket_endpoint(websocket: WebSocket):
         logger_ws.error(f"WebSocket accept failed: {e}")
         return
 
-    # Register spectrum callback
+    # Register spectrum callback (per-connection; unregistered on disconnect
+    # so a closed socket doesn't accumulate dead callbacks forever).
     spectrum_data = {"latest": None}
-    
+
     def on_spectrum(data):
         spectrum_data["latest"] = data
 
     sdr_manager.on_spectrum(on_spectrum)
+
+    # New-recording fan-out: each WS connection gets its OWN queue (unlike the
+    # old get_new_recordings() poll, which cleared a single global list after
+    # the FIRST reader — so with 2+ dashboards open only one of them ever saw
+    # "รายการล่าสุดไม่อัพเดท"). The manager fires these callbacks on save.
+    new_recording_queue: "asyncio.Queue" = asyncio.Queue(maxsize=64)
+
+    async def on_new_recording(rec):
+        try:
+            new_recording_queue.put_nowait(rec)
+        except asyncio.QueueFull:
+            # Drop oldest so a slow client stays near current.
+            try:
+                new_recording_queue.get_nowait()
+            except Exception:
+                pass
+            try:
+                new_recording_queue.put_nowait(rec)
+            except Exception:
+                pass
+
+    sdr_manager.on_new_recording(on_new_recording)
 
     status_counter = 0
     try:
@@ -172,6 +195,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_bytes(b"\x01\x00" + payload)
                 spectrum_data["latest"] = None
 
+            # Drain any new-recording notifications for THIS client (fan-out,
+            # so every open dashboard sees them, not just the first poller).
+            while not new_recording_queue.empty():
+                try:
+                    rec = new_recording_queue.get_nowait()
+                    await websocket.send_text(json.dumps({"type": "new_recording", "data": rec}))
+                except asyncio.QueueEmpty:
+                    break
+
             # Send status at ~1 FPS (every 30th iteration)
             status_counter += 1
             if status_counter >= 30:
@@ -179,14 +211,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 status = sdr_manager.status
                 await websocket.send_text(json.dumps({"type": "status", "data": status}))
 
-                # Check for new recordings
-                new = sdr_manager.get_new_recordings()
-                for rec in new:
-                    await websocket.send_text(json.dumps({"type": "new_recording", "data": rec}))
-
             await asyncio.sleep(0.033)  # ~30 FPS
     except Exception as e:
         logger_ws.info(f"🔌 WebSocket disconnected: {e}")
+    finally:
+        # Always unregister so callbacks don't leak across reconnects.
+        sdr_manager.off_spectrum(on_spectrum)
+        sdr_manager.off_new_recording(on_new_recording)
 
 
 # === Audio WebSocket endpoint (live audio streaming) ===
@@ -400,6 +431,50 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                 "status": "saved",
                 "recording": saved,
             }))
+        elif mtype == "auto_record":
+            # Per-listener AUTO-record toggle (multi-user). Each user can
+            # independently auto-record the channel they are listening to,
+            # gated by their OWN squelch threshold + measured signal. Admins
+            # bypass the manual_recording_enabled gate (same as manual record).
+            try:
+                enabled = bool(msg.get("enabled", False))
+                if ws_user_role != "admin":
+                    gate = await get_setting("manual_recording_enabled", "true")
+                    if str(gate).lower() != "true":
+                        await websocket.send_text(json.dumps({
+                            "type": "auto_record_ack",
+                            "enabled": False,
+                            "message": "ระบบบันทึกถูกปิดไว้ชั่วคราว กรุณาติดต่อผู้ดูแลระบบ",
+                        }))
+                        return True
+                # Optional squelch for the record gate (<= -120 = always record).
+                # Coerce defensively: accept int/float/numeric string; ignore
+                # anything that is not a number rather than crashing the handler
+                # (a malformed squelch used to raise an empty-message exception).
+                sq_raw = msg.get("squelch")
+                sq = None
+                if sq_raw is not None:
+                    try:
+                        sq = float(sq_raw)
+                    except (TypeError, ValueError):
+                        sq = None  # leave the listener's current record squelch
+                if enabled:
+                    audio_broadcaster.start_auto_record(listener, sq)
+                else:
+                    audio_broadcaster.stop_auto_record(listener)
+                await websocket.send_text(json.dumps({
+                    "type": "auto_record_ack",
+                    "enabled": listener.auto_record,
+                    "squelch": listener.record_squelch_db,
+                }))
+                logger_aud.info(
+                    "🎙️ Listener %s auto-record → %s (squelch=%.1f dB)",
+                    listener.id[:8],
+                    "ON" if listener.auto_record else "OFF",
+                    listener.record_squelch_db,
+                )
+            except Exception as e:
+                logger_aud.warning(f"🔊 Bad auto_record control: {e or e.__class__.__name__}")
         return True
 
     # Persistent two-task loop: one long-lived task for receiving control
@@ -440,7 +515,23 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             if frame_task in done:
                 try:
                     frame = frame_task.result()
-                    await websocket.send_bytes(frame)
+                    # The queue carries two frame kinds:
+                    #   - bytes        → AUD2 audio (binary WebSocket frame)
+                    #   - ("sig", db)  → per-listener SIG meter update (text)
+                    # Routing sig as a TEXT frame lets the client's audio
+                    # ArrayBuffer path and its JSON text path stay separate,
+                    # and avoids polluting the binary audio decoder.
+                    if isinstance(frame, tuple):
+                        try:
+                            kind = frame[0]
+                            if kind == "sig":
+                                await websocket.send_text(
+                                    json.dumps({"type": "sig", "db": frame[1]})
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        await websocket.send_bytes(frame)
                 except Exception as e:
                     logger_aud.info(f"🔊 Audio WS send_bytes error: {e}")
                     break

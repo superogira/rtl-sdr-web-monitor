@@ -42,6 +42,7 @@ users listen to the default/center channel.
 """
 import asyncio
 import concurrent.futures
+import json
 import logging
 import struct
 import time
@@ -80,10 +81,26 @@ _POOL_CEILING = 128
 # Absolute minimum and maximum for the configurable max_listeners value.
 _MIN_LISTENERS = 1
 _HARD_CAP_LISTENERS = 128
-# Bounded IQ input queue per listener. Small on purpose: real-time audio cares
-# about the LATEST samples, so when a listener falls behind we drop the oldest
-# IQ packet rather than queueing seconds of stale audio.
-_IQ_QUEUE_MAX = 4
+# Bounded IQ input queue per listener. Tuned to absorb event-loop jitter and
+# thread-pool scheduling latency without queueing SECONDS of stale audio.
+# 4 was too tight: under load the worker would fall momentarily behind, the
+# queue would fill, and ~37% of IQ packets got dropped — starving the demod so
+# it produced audio slower than real-time (the "เสียงเร็ว" symptom, because the
+# browser plays the sparse frames at full speed). 16 ≈ 0.8s of cushion at the
+# default 50ms IQ cadence, large enough to ride out a GC pause / executor stall
+# but small enough that a genuinely stuck listener still drops to near-real-time.
+_IQ_QUEUE_MAX = 16
+# How often (seconds) to push a per-listener "sig" text frame to the client's
+# SIG meter while listening live. ~100ms (10 FPS) keeps the bar responsive
+# without flooding the WebSocket. The level itself is updated every chunk; we
+# only THROTTLE the wire send.
+_SIG_FRAME_INTERVAL = 0.10
+# Max number of IQ packets the per-listener worker merges into ONE demod call.
+# Demod has a large per-call overhead (executor submit + filter warmup), so
+# batching N chunks into one call is much cheaper than N separate calls. 8 is
+# ~0.4s of audio at the 50ms cadence — large enough to amortize overhead, small
+# enough to keep latency well under a second.
+_WORKER_BATCH_MAX = 8
 
 # G.711 µ-law segment upper ends for the biased magnitude (ITU-T G.711). Used
 # by pcm16_to_ulaw() to compress int16 PCM → 8-bit µ-law (half the bandwidth
@@ -177,6 +194,31 @@ class Listener:
         # Drop diagnostics (incremented under event-loop thread only)
         self.iq_drops = 0       # IQ packets dropped on input (slow listener)
         self.queue_drops = 0    # AUD1 frames dropped on output (slow subscriber)
+        # Per-listener SIG meter: throttle for the "sig" text frames pushed to
+        # the client's SIG bar while listening live. The level itself lives in
+        # last_signal_db / _sig_smoothed (updated every chunk in the worker).
+        self._last_sig_send = 0.0
+        # === Per-listener AUTO-RECORD (multi-user) ===
+        # Each listener can independently auto-record the channel it is
+        # listening to (its own VFO/mode/bandwidth), gated by its OWN squelch
+        # threshold and measured signal — fully independent of every other
+        # listener and of the global (center-channel) auto-record in SDRManager.
+        # Master toggle for this listener's auto-record.
+        self.auto_record = False
+        # Squelch threshold (dB) used ONLY to gate this listener's auto-record.
+        # Kept separate from `squelch_db` (which mutes the live LISTENING audio)
+        # so a user can keep live squelch OFF (hear everything) while still only
+        # recording when the signal is strong enough. <= -120 = always record.
+        self.record_squelch_db = -120.0
+        # Auto-record state machine (mirrors SDRManager._stream_loop TRACK 2):
+        #   _ar_recording (bool)         currently buffering a recording
+        #   _ar_buffer  (list[ndarray])  demodulated audio chunks
+        #   _ar_start_time               monotonic start
+        #   _ar_silence_start            monotonic when signal first went quiet
+        self._ar_recording = False
+        self._ar_buffer: list = []
+        self._ar_start_time: Optional[float] = None
+        self._ar_silence_start: Optional[float] = None
 
     def set_vfo_offset(self, offset_hz: float) -> None:
         """Set this listener's VFO offset (Hz) relative to the center freq."""
@@ -221,6 +263,28 @@ class Listener:
         # Reset the gate so it re-evaluates against the new threshold source.
         self._sq_open = False
 
+    def set_record_squelch(self, level_db: float) -> None:
+        """Set the squelch threshold used to gate THIS listener's auto-record.
+
+        Separate from set_squelch() (which gates live listening audio) so a user
+        can listen with one squelch setting while recording on another. Values
+        <= -120 disable the recording gate (record everything while enabled).
+        """
+        self.record_squelch_db = max(-200.0, min(0.0, float(level_db)))
+
+    def enable_auto_record(self, on: bool) -> None:
+        """Toggle per-listener auto-record.
+
+        When turning OFF mid-recording, any buffered audio is finished (saved)
+        on the next worker tick via the normal silence/timeout path; we just
+        flip the flag so no NEW recording starts.
+        """
+        self.auto_record = bool(on)
+        if not on:
+            # Force-finish an in-flight recording immediately so it is not left
+            # dangling when the user disables auto-record.
+            self._ar_silence_start = -1.0  # sentinel: finish on next tick
+
 
 class AudioBroadcaster:
     """Manages live, INDEPENDENT audio streams to multiple WebSocket clients.
@@ -256,6 +320,17 @@ class AudioBroadcaster:
         # (SDRManager) can react — e.g. promote/demote their pool consumer
         # priority. Callback signature: cb(listener_count: int).
         self._listener_count_callbacks: List[Callable[[int], None]] = []
+        # Per-listener auto-record callbacks. Fired (on the event-loop thread)
+        # when a listener's auto-record finishes a segment, with the same dict
+        # shape stop_listener_recording() returns. The SDRManager registers one
+        # to save the audio to disk + DB via save_listener_recording().
+        self._auto_recording_callbacks: List[Callable] = []
+        # Shared auto-record policy (kept in sync by SDRManager from its global
+        # recording config). These are POLICY, not per-user — every listener's
+        # auto-record obeys the same limits (min/max duration, silence timeout).
+        self.ar_vad_silence_timeout = 3        # seconds of quiet → finish
+        self.ar_max_duration = 300             # hard cap per segment
+        self.ar_min_duration = 2               # shorter → discard
 
     def on_listener_count_change(self, callback: Callable[[int], None]) -> None:
         """Register a callback fired when the listener count changes.
@@ -265,6 +340,25 @@ class AudioBroadcaster:
         tuner to background jobs) when the last listener leaves.
         """
         self._listener_count_callbacks.append(callback)
+
+    def on_auto_recording(self, callback: Callable) -> None:
+        """Register a callback fired when a listener's auto-record finishes.
+
+        Signature: async def cb(listener: Listener, rec_data: dict) -> None
+        where rec_data has the same keys as stop_listener_recording() returns
+        (audio_data, duration, sample_rate, mode, vfo_offset_hz, user_id,
+        user_role, source="auto"). SDRManager registers one to persist the
+        recording. Best-effort: exceptions are logged, never raised.
+        """
+        self._auto_recording_callbacks.append(callback)
+
+    def _fire_auto_recording(self, listener, rec_data: dict) -> None:
+        """Fire all registered auto-recording callbacks (best-effort, async)."""
+        for cb in self._auto_recording_callbacks:
+            try:
+                asyncio.create_task(cb(listener, rec_data))
+            except Exception as e:
+                logger.warning("🎙️ Auto-record callback error: %s", e)
 
     def _fire_listener_count_change(self, count: int) -> None:
         """Fire all registered listener-count-change callbacks (best-effort)."""
@@ -336,6 +430,16 @@ class AudioBroadcaster:
             existed = self._listeners.pop(id(listener), None)
         if existed is None:
             return
+        # Finish any in-flight per-listener auto-record before tearing down so
+        # a user disconnecting mid-transmission still saves what was captured.
+        try:
+            if listener._ar_recording:
+                self._finish_listener_auto_record(
+                    listener, listener.audio_rate, reason="disconnect"
+                )
+        except Exception as e:
+            logger.warning("🎙️ Listener %s auto-record finish-on-unsub failed: %s",
+                           listener.id[:8], e)
         task = listener.task
         listener.task = None
         if task is not None:
@@ -417,57 +521,153 @@ class AudioBroadcaster:
         a worker thread via run_in_executor (numpy/scipy release the GIL).
         Batching/encoding (cheap) runs inline. Output frames are pushed to the
         listener's output queue (drained by the /ws/audio endpoint).
+
+        BATCHED DEMOD (important): when a listener listens to a frequency that
+        does NOT match the global demod (its own VFO offset), each chunk costs
+        ~23 ms of CPU in the executor + ~2 ms of submit/context-switch overhead
+        per call. At the ~50 ms IQ cadence that leaves no headroom and the iq
+        queue overflows → IQ drops → demod produces audio SLOWER than real-time
+        → the browser plays the sparse frames at full speed, heard as
+        sped-up / choppy audio. To fix this we DRAIN every queued packet in one
+        go and demod them as ONE merged buffer in a single executor call, which
+        amortizes the per-call overhead across many chunks (e.g. 4 chunks → 1
+        call of ~80 ms instead of 4 calls of ~25 ms each). The merged audio is
+        then re-split per chunk so squelch/batch/SIG still run per-chunk.
         """
         loop = asyncio.get_running_loop()
         try:
             while True:
                 pkt = await ln.iq_queue.get()
-                (iq_bytes, sample_rate, audio_rate,
-                 global_audio, g_mode, g_channel_bw, g_vfo,
-                 g_signal_level) = pkt
-
-                # Fast path: this listener listens to the SAME channel as the
-                # global demod → reuse the already-computed audio and skip the
-                # expensive per-listener demodulation.
-                if self._matches_global(
-                    ln, sample_rate, audio_rate,
-                    global_audio, g_mode, g_channel_bw, g_vfo,
-                ):
-                    audio = global_audio
-                    # Update the squelch signal level from the global value so
-                    # squelch works even on the CPU-saving reuse path.
-                    if g_signal_level is not None:
-                        ln.last_signal_db = float(g_signal_level)
-                        ln._sig_smoothed = (
-                            _SQUELCH_EMA * float(g_signal_level)
-                            + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
-                        )
-                else:
+                # Drain any additional packets already queued so we can process
+                # them as a batch (reduces executor overhead and keeps the
+                # listener near real time). Cap to avoid unbounded latency.
+                batch = [pkt]
+                while len(batch) < _WORKER_BATCH_MAX:
                     try:
-                        audio = await loop.run_in_executor(
+                        batch.append(ln.iq_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
+                # Separate "reuse global" packets from "own demod" packets.
+                # Reuse packets are cheap (no executor); own-demod packets are
+                # merged into a single executor call.
+                reuse_pkts = []
+                demod_pkts = []
+                last_sample_rate = None
+                last_audio_rate = None
+                for p in batch:
+                    (iq_bytes, sample_rate, audio_rate,
+                     global_audio, g_mode, g_channel_bw, g_vfo,
+                     g_signal_level) = p
+                    last_sample_rate = sample_rate
+                    last_audio_rate = audio_rate
+                    if self._matches_global(
+                        ln, sample_rate, audio_rate,
+                        global_audio, g_mode, g_channel_bw, g_vfo,
+                    ):
+                        reuse_pkts.append((global_audio, g_signal_level))
+                    else:
+                        demod_pkts.append(iq_bytes)
+
+                # Demod ALL own-demod packets in ONE executor call (merged).
+                demod_audios = []
+                if demod_pkts:
+                    try:
+                        merged_iq = b"".join(demod_pkts)
+                        merged_audio = await loop.run_in_executor(
                             self._executor, self._demod_listener_raw,
-                            ln, iq_bytes, sample_rate, audio_rate,
+                            ln, merged_iq, last_sample_rate, last_audio_rate,
                         )
+                        # Split the merged audio back per-chunk by ratio of the
+                        # input byte lengths (each chunk has the same IQ size
+                        # in practice, so this is an even split).
+                        demod_audios = self._split_audio_by_iq(
+                            merged_audio, demod_pkts)
                     except Exception as e:
                         logger.warning(
                             "🔊 Listener %s demod error: %s", ln.id[:8], e
                         )
+                        # On demod failure, skip these chunks but keep flowing.
+                        demod_audios = [None] * len(demod_pkts)
+
+                # Now process each original packet in order, attaching its
+                # audio (reused global, or the per-chunk slice of merged demod).
+                di = 0  # index into demod_audios
+                ri = 0  # index into reuse_pkts
+                for p in batch:
+                    (iq_bytes, sample_rate, audio_rate,
+                     global_audio, g_mode, g_channel_bw, g_vfo,
+                     g_signal_level) = p
+                    if self._matches_global(
+                        ln, sample_rate, audio_rate,
+                        global_audio, g_mode, g_channel_bw, g_vfo,
+                    ):
+                        audio, gsig = reuse_pkts[ri]
+                        ri += 1
+                        # Update the squelch signal level from the global value.
+                        if gsig is not None:
+                            ln.last_signal_db = float(gsig)
+                            ln._sig_smoothed = (
+                                _SQUELCH_EMA * float(gsig)
+                                + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
+                            )
+                    else:
+                        audio = demod_audios[di]
+                        di += 1
+
+                    if audio is None or len(audio) == 0:
                         continue
 
-                # Apply per-listener squelch: mute to silence when the signal
-                # is below the threshold (so live listening hears nothing but
-                # static-free quiet, like a real radio). Done on the loop
-                # thread (cheap: just a zero-comparison + optional zeros_like).
-                audio = self._apply_squelch(ln, audio)
-                frame = self._batch_listener(ln, audio, audio_rate)
-                if frame:
-                    self._enqueue_frame(ln, frame)
+                    # === Per-listener SIG meter (live listening) ===
+                    now = time.monotonic()
+                    if now - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
+                        ln._last_sig_send = now
+                        self._enqueue_frame(ln, ("sig", round(ln._sig_smoothed, 1)))
+
+                    # === Per-listener AUTO-RECORD (multi-user) ===
+                    if ln.auto_record:
+                        self._process_auto_record(ln, audio, audio_rate)
+
+                    # Apply per-listener squelch + batch into an AUD2 frame.
+                    audio = self._apply_squelch(ln, audio)
+                    frame = self._batch_listener(ln, audio, audio_rate)
+                    if frame:
+                        self._enqueue_frame(ln, frame)
         except asyncio.CancelledError:
             # Normal teardown on unsubscribe / disconnect.
             return
         except Exception as e:
             logger.error("🔊 Listener %s worker crashed: %s", ln.id[:8], e,
                          exc_info=True)
+
+    @staticmethod
+    def _split_audio_by_iq(merged_audio: np.ndarray,
+                           iq_chunks: list) -> list:
+        """Split merged demod audio back into per-chunk slices.
+
+        The merged audio came from concatenating N IQ chunks and demodulating
+        once. Because demodulation is (approximately) linear in length, we split
+        the output proportionally to each input chunk's byte length. In practice
+        all chunks in a batch are the same length, so this is an even split.
+        """
+        if merged_audio is None or len(merged_audio) == 0:
+            return [np.zeros(0, dtype=np.float32)] * len(iq_chunks)
+        total_bytes = sum(len(c) for c in iq_chunks)
+        if total_bytes <= 0:
+            return [np.zeros(0, dtype=np.float32)] * len(iq_chunks)
+        out = []
+        offset = 0
+        n_audio = len(merged_audio)
+        for c in iq_chunks:
+            frac = len(c) / total_bytes
+            take = int(round(n_audio * frac))
+            end = min(offset + take, n_audio)
+            out.append(merged_audio[offset:end])
+            offset = end
+        # If rounding left a tail, attach it to the last chunk.
+        if offset < n_audio and out:
+            out[-1] = np.concatenate([out[-1], merged_audio[offset:]])
+        return out
 
     @staticmethod
     def _matches_global(ln: Listener, sample_rate: int, audio_rate: int,
@@ -509,9 +709,12 @@ class AudioBroadcaster:
 
         listener.demod.set_vfo_offset(listener.vfo_offset_hz)
 
-        # Measure the channel power at this listener's VFO (dB). Done in the
-        # worker thread (CPU) and stored on the listener for the squelch gate.
-        # Cheap relative to the demod filters (one FFT of ≤4096 points).
+        # Parse the raw IQ bytes ONCE into a complex array and reuse it for
+        # BOTH the channel-power measurement (squelch/SIG) and demodulation.
+        # Previously each step called iq_to_complex() separately — two O(n)
+        # bytes→complex passes per chunk, plus an extra FFT — which doubled the
+        # per-listener CPU and was the main cause of iq_queue overflow (audio
+        # produced slower than real-time → the "เสียงเร็ว" symptom).
         try:
             iq = iq_to_complex(iq_bytes)
             level = compute_channel_power(
@@ -525,11 +728,17 @@ class AudioBroadcaster:
                 _SQUELCH_EMA * level + (1.0 - _SQUELCH_EMA) * listener._sig_smoothed
             )
         except Exception:
-            # Non-fatal: leave the previous level. Audio still flows.
-            pass
+            # Non-fatal: leave the previous level. Still need a complex array
+            # for demod, so parse defensively here.
+            try:
+                iq = iq_to_complex(iq_bytes)
+            except Exception:
+                return np.zeros(0, dtype=np.float32)
 
+        # Pass the already-parsed complex array so demod skips its own
+        # iq_to_complex() call (the process() overload accepts complex).
         audio = listener.demod.process(
-            iq_bytes, listener.mode, sample_rate, audio_rate,
+            iq, listener.mode, sample_rate, audio_rate,
             channel_bw=listener.channel_bw,
         )
         return audio
@@ -631,20 +840,32 @@ class AudioBroadcaster:
         header = struct.pack("<4sII", b"AUD2", int(listener._batch_sample_rate), len(ulaw))
         return header + ulaw.tobytes()
 
-    def _enqueue_frame(self, ln: Listener, frame: bytes) -> None:
-        """Push a finished AUD1 frame to the listener's output queue.
+    def _enqueue_frame(self, ln: Listener, frame) -> None:
+        """Push a finished frame to the listener's output queue.
+
+        `frame` is either:
+          - bytes  → an AUD2 audio frame (sent as a WebSocket binary frame)
+          - tuple  → ("sig", <db:float>) control text frame for the SIG meter
+                     (sent as a WebSocket text frame)
 
         Drop-oldest on overflow so a slow WebSocket subscriber cannot
         accumulate seconds of stale audio (which would otherwise manifest as
-        ever-growing latency — the "ฟลุด/ต้องกดฟังสดใหม่" symptom).
+        ever-growing latency — the "ฟลุด/ต้องกดฟังสดใหม่" symptom). When
+        dropping, prefer to drop a "sig" text frame over an audio frame so a
+        slow client never loses audio continuity just because SIG frames piled
+        up.
         """
-        ln.frames_sent += 1
-        self._bytes_sent += len(frame)
+        if isinstance(frame, bytes):
+            ln.frames_sent += 1
+            self._bytes_sent += len(frame)
         self._last_audio_time = time.time()
         try:
             ln.queue.put_nowait(frame)
         except asyncio.QueueFull:
             ln.queue_drops += 1
+            # Drop-oldest on overflow so a slow subscriber cannot accumulate
+            # stale audio. (A "sig" text frame is ~20 bytes; dropping either
+            # kind here is fine — real-time data is replaceable.)
             try:
                 ln.queue.get_nowait()
             except Exception:
@@ -653,6 +874,126 @@ class AudioBroadcaster:
                 ln.queue.put_nowait(frame)
             except Exception:
                 ln.queue_drops += 1
+
+    def _process_auto_record(self, ln: Listener, audio: np.ndarray,
+                             audio_rate: int) -> None:
+        """Per-listener auto-record state machine (runs on the event-loop thread).
+
+        Mirrors SDRManager._stream_loop TRACK 2 but uses THIS listener's own
+        measured signal (`_sig_smoothed`) and its OWN `record_squelch_db` gate,
+        so each user auto-records the channel they are actually listening to,
+        fully independent of every other user and of the global auto-record.
+
+        `audio` is the PRE-squelch demodulated signal (the real content), so a
+        user who keeps live listening squelch OFF still records complete audio.
+        """
+        level = ln._sig_smoothed
+        # Squelch gate: <= -120 dB means "always record while enabled".
+        gate_open = ln.record_squelch_db <= -120.0 or level >= ln.record_squelch_db
+        now = time.monotonic()
+
+        if gate_open:
+            if not ln._ar_recording:
+                # Signal rose above the gate → start a new segment.
+                ln._ar_recording = True
+                ln._ar_buffer = []
+                ln._ar_start_time = now
+                ln._ar_silence_start = None
+                logger.info(
+                    "🎙️ Listener %s auto-record started (signal %.1f dB, user=%s)",
+                    ln.id[:8], level, ln.user_id,
+                )
+            else:
+                # Already recording and still above gate → reset silence timer.
+                ln._ar_silence_start = None
+            ln._ar_buffer.append(audio.copy())
+        else:
+            if ln._ar_recording:
+                # Below gate: accumulate the tail and count silence.
+                ln._ar_buffer.append(audio.copy())
+                if ln._ar_silence_start is None:
+                    ln._ar_silence_start = now
+                silence = now - ln._ar_silence_start
+                # Finish on silence timeout, OR if the user just disabled
+                # auto-record (_ar_silence_start sentinel == -1.0).
+                disabled = ln._ar_silence_start < 0
+                if disabled or silence >= self.ar_vad_silence_timeout:
+                    self._finish_listener_auto_record(ln, audio_rate,
+                                                      reason="silence" if not disabled else "disabled")
+
+        # Hard duration cap.
+        if ln._ar_recording and ln._ar_start_time is not None:
+            elapsed = now - ln._ar_start_time
+            if elapsed >= self.ar_max_duration:
+                self._finish_listener_auto_record(ln, audio_rate, reason="max_duration")
+
+    def _finish_listener_auto_record(self, ln: Listener, audio_rate: int,
+                                     reason: str = "silence") -> None:
+        """Finish a listener's in-flight auto-record segment and fire callbacks.
+
+        Discards segments shorter than ar_min_duration (noise blips). Resets the
+        listener's auto-record state machine so the next above-gate signal
+        starts a fresh segment.
+        """
+        if not ln._ar_recording:
+            return
+        ln._ar_recording = False
+        buf = ln._ar_buffer
+        start = ln._ar_start_time
+        ln._ar_buffer = []
+        ln._ar_start_time = None
+        ln._ar_silence_start = None
+        if not buf:
+            return
+
+        audio_data = np.concatenate(buf)
+        duration = len(audio_data) / max(1, audio_rate)
+        if duration < self.ar_min_duration:
+            logger.info(
+                "🎙️ Listener %s auto-record discarded (too short: %.1fs)",
+                ln.id[:8], duration,
+            )
+            return
+
+        rec_data = {
+            "audio_data": audio_data,
+            "duration": duration,
+            "sample_rate": audio_rate,
+            "mode": ln.mode.value,
+            "vfo_offset_hz": ln.vfo_offset_hz,
+            "user_id": ln.user_id,
+            "user_role": ln.user_role,
+            "source": "auto",
+        }
+        logger.info(
+            "🎙️ Listener %s auto-record finished (%.1fs, reason=%s, user=%s)",
+            ln.id[:8], duration, reason, ln.user_id,
+        )
+        self._fire_auto_recording(ln, rec_data)
+
+    def start_auto_record(self, listener: Listener, squelch_db: Optional[float] = None) -> bool:
+        """Enable per-listener auto-record (optionally setting the record squelch).
+
+        Returns True (always enabled after this call).
+        """
+        if squelch_db is not None:
+            listener.set_record_squelch(float(squelch_db))
+        listener.enable_auto_record(True)
+        logger.info(
+            "🎙️ Listener %s auto-record ENABLED (squelch=%.1f dB, user=%s)",
+            listener.id[:8], listener.record_squelch_db, listener.user_id,
+        )
+        return True
+
+    def stop_auto_record(self, listener: Listener) -> None:
+        """Disable per-listener auto-record (finishes any in-flight segment)."""
+        listener.enable_auto_record(False)
+        # Finish an in-flight recording immediately on the next worker tick;
+        # enable_auto_record(False) already sets the sentinel for that.
+        logger.info(
+            "🎙️ Listener %s auto-record DISABLED (user=%s)",
+            listener.id[:8], listener.user_id,
+        )
 
     def get_stats(self) -> dict:
         """Return broadcaster statistics."""

@@ -165,6 +165,13 @@ class SDRManager:
         audio_broadcaster.on_listener_count_change(
             self._on_listener_count_changed
         )
+        # Register the per-listener auto-record callback so finished segments
+        # are persisted via the SAME save_listener_recording() path used for
+        # manual per-user recordings. This gives every user an independent
+        # auto-record on their own VFO/mode/bandwidth, fully decoupled from
+        # the global (center-channel) auto-record in _stream_loop.
+        audio_broadcaster.on_auto_recording(self._on_listener_auto_recording)
+        self._sync_auto_record_policy()
 
     # ------------------------------------------------------------------
     # Properties
@@ -970,8 +977,22 @@ class SDRManager:
     def on_new_recording(self, callback):
         self._callbacks.append(callback)
 
+    def off_new_recording(self, callback):
+        """Unregister a new-recording callback (prevents leak on disconnect)."""
+        try:
+            self._callbacks.remove(callback)
+        except ValueError:
+            pass
+
     def on_spectrum(self, callback):
         self._spectrum_callbacks.append(callback)
+
+    def off_spectrum(self, callback):
+        """Unregister a spectrum callback (prevents leak on disconnect)."""
+        try:
+            self._spectrum_callbacks.remove(callback)
+        except ValueError:
+            pass
 
     def _on_listener_count_changed(self, count: int) -> None:
         """Broadcaster callback: promote/demote our LIVE pool consumer.
@@ -1016,6 +1037,38 @@ class SDRManager:
         except RuntimeError:
             # No running loop (shouldn't happen here): best-effort no-op.
             pass
+
+    def _sync_auto_record_policy(self) -> None:
+        """Push the global recording-policy limits into the broadcaster.
+
+        Per-listener auto-record shares the same POLICY (min/max duration,
+        silence timeout) as the global auto-record. Tuning these on the admin
+        settings page propagates to every listener's auto-record. Safe to call
+        before the event loop is running (called once from __init__).
+        """
+        try:
+            audio_broadcaster.ar_vad_silence_timeout = int(self._vad_silence_timeout)
+            audio_broadcaster.ar_max_duration = int(self._max_recording_duration)
+            audio_broadcaster.ar_min_duration = int(self._min_recording_duration)
+        except Exception as e:
+            logger.warning(f"Failed to sync auto-record policy: {e}")
+
+    async def _on_listener_auto_recording(self, listener, rec_data: dict) -> None:
+        """Broadcaster callback: persist a finished per-listener auto-record.
+
+        Reuses save_listener_recording() (the same path as per-user MANUAL
+        recording) so the file naming, DB row, owner, device_id and STT
+        auto-transcribe are identical. `source` in rec_data is "auto".
+        """
+        try:
+            saved = await self.save_listener_recording(rec_data)
+            if saved:
+                logger.info(
+                    f"💾 Listener auto-record saved: {saved.get('filename')} "
+                    f"({saved.get('duration')}s, user={rec_data.get('user_id')})"
+                )
+        except Exception as e:
+            logger.error(f"Listener auto-record save failed: {e}", exc_info=True)
 
     def _device_has_active_jobs(self) -> bool:
         """Check if the active device has any running background recording job."""
@@ -1542,6 +1595,10 @@ class SDRManager:
         freq_mhz = freq_hz / 1e6
         now = datetime.now(timezone.utc)
         user_id = rec_data.get("user_id")
+        # source: "manual" (user pressed record) or "auto" (per-user auto-record
+        # gated by the listener's own squelch/signal). Defaults to "manual" for
+        # backward compatibility with stop_listener_recording()'s dict.
+        source = rec_data.get("source") or "manual"
 
         # Insert into DB and fetch recorder display name for WS payload
         recorder_username = None
@@ -1558,7 +1615,7 @@ class SDRManager:
                     file_size=file_size,
                     duration=round(duration, 2),
                     status=RecordingStatus.COMPLETED,
-                    source="manual",
+                    source=source,
                     recorded_by_user_id=user_id,
                     is_unread=1,
                     device_id=self._active_device_id,
@@ -1595,7 +1652,7 @@ class SDRManager:
             "recorded_at": now.isoformat(),
             "transcription": None,
             "transcript": None,
-            "source": "manual",
+            "source": source,
             "status": "completed",
             "is_unread": 1,
             "recorded_by_user_id": user_id,
