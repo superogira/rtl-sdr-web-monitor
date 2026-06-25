@@ -892,7 +892,11 @@ const App = {
     },
 
     // Shared core for the frequency input dialog (used by VFO + center freq).
-    _openFreqInputDialog({ title, defaultValueMHz, onApply }) {
+    // RTL-SDR Blog V4 covers HF (via direct sampling, ~500 kHz up) through
+    // ~1766 MHz, so allow down to 0.5 MHz. The VFO dialog passes a tighter
+    // floor only when it makes sense (it doesn't here — VFO follows whatever
+    // center the admin set, which may itself be HF).
+    _openFreqInputDialog({ title, defaultValueMHz, onApply, minMHz = 0.5, maxMHz = 1766 }) {
         const overlay = document.createElement('div');
         overlay.className = 'freq-input-overlay';
         overlay.innerHTML = `
@@ -914,8 +918,11 @@ const App = {
         const close = () => overlay.remove();
         const apply = () => {
             const val = parseFloat(input.value);
-            if (!isNaN(val) && val >= 24 && val <= 1766) {
+            if (!isNaN(val) && val >= minMHz && val <= maxMHz) {
                 onApply(Math.round(val * 1e6));
+            } else {
+                alert(`ความถี่ต้องอยู่ระหว่าง ${minMHz} – ${maxMHz} MHz`);
+                return;  // keep dialog open so the user can correct it
             }
             close();
         };
