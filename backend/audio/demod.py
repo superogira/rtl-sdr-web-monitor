@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Optional
 from scipy.signal import (
     lfilter, butter, sosfiltfilt, sosfilt,
-    lfilter_zi, sosfilt_zi,
+    lfilter_zi, sosfilt_zi, resample_poly,
 )
 
 logger = logging.getLogger(__name__)
@@ -310,24 +310,26 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     else:
         bw = _CHANNEL_BW.get(mode.value if hasattr(mode, "value") else str(mode), 12000)
 
-    # --- Welch averaging setup ---
-    # Pick a per-segment FFT size (power of two) that allows at least 2
-    # overlapping segments from the available samples. Smaller segments → more
-    # averaging but coarser bin resolution; we keep a floor for resolution.
-    target_seg = 1024
+    # --- Single-shot windowed FFT (was Welch averaging) ---
+    # The previous implementation split the block into ~200 overlapping 1024-pt
+    # segments and ran an FFT on EACH — ~25 ms of CPU per call at 2.048 MSPS.
+    # That alone consumed ~half the per-chunk real-time budget and was the
+    # primary cause of iq_queue overflow on the per-listener path (audio
+    # produced slower than real-time → "เสียงเร็ว" symptom).
+    #
+    # For a real-time squelch/S-meter we do NOT need Welch-grade variance
+    # reduction: the consumer (_sig_smoothed) already applies an EMA low-pass,
+    # which does the temporal averaging the Welch loop used to do in-chunk. So
+    # a SINGLE FFT of a moderately large segment is both sufficient and ~25x
+    # faster (≈1 ms vs 25 ms). We keep the Blackman window for its low
+    # sidelobes (≈-92 dB first sidelobe), which is what actually prevents a
+    # loud adjacent carrier from inflating the level.
+    target_seg = 4096
     seg = 1 << int(np.floor(np.log2(min(n, target_seg))))
-    if seg < 256:
-        seg = 256
-    overlap = seg // 2  # 50% overlap
-    step = seg - overlap
-    if step < 1:
-        step = seg
+    if seg < 512:
+        seg = 512
 
-    # Count how many full segments fit. If only one fits, fall back to a
-    # single-shot estimate (still windowed, just not averaged).
-    n_segs = max(1, (n - seg) // step + 1)
-
-    # Blackman-Harris window: first sidelobe ≈ -92 dB (vs Hann -32 dB).
+    # Blackman window: first sidelobe ≈ -92 dB (vs Hann -32 dB).
     # This is what keeps a strong adjacent carrier (10-20 dB louder than the
     # desired one, common in dense VHF/UHF) from leaking into our channel.
     try:
@@ -336,16 +338,10 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
         window = np.hanning(seg).astype(np.float32)
     win_gain = float(np.mean(window ** 2))  # coherent power gain for normalization
 
-    acc = np.zeros(seg, dtype=np.float64)
-    for s in range(n_segs):
-        a = s * step
-        b = a + seg
-        if b > n:
-            break
-        segment = iq[a:b].astype(np.complex64) * window
-        fft_result = np.fft.fftshift(np.fft.fft(segment) / seg)
-        acc += (np.abs(fft_result) ** 2).astype(np.float64)
-    power_spectrum = acc / n_segs
+    # One FFT on the FIRST `seg` samples of the (VFO-shifted) IQ block.
+    segment = iq[:seg].astype(np.complex64) * window
+    fft_result = np.fft.fftshift(np.fft.fft(segment) / seg)
+    power_spectrum = (np.abs(fft_result) ** 2).astype(np.float64)
 
     # Integrate only the central portion of the channel (±bw/2.5 instead of
     # ±bw/2) so the edge bins — which sit closest to adjacent carriers and
@@ -570,17 +566,40 @@ class StreamingDemodulator:
 
     def _decimate_audio(self, audio: np.ndarray, sample_rate: float,
                         audio_rate: float) -> np.ndarray:
-        """Anti-alias filter then decimate real audio to audio_rate.
+        """Anti-alias filter then decimate real audio to exactly audio_rate.
 
         Without the pre-decimation LPF, the naive [::N] stride folds
         high-frequency discriminator/envelope noise into the audio band,
         giving a muddy "telephone" quality. Filter state is carried.
+
+        Two paths:
+          - If sample_rate is an exact integer multiple of audio_rate (the
+            common case, e.g. 2.048 MHz / 32 k = 64), use the fast integer
+            stride decimation with the carried anti-alias filter state.
+          - Otherwise (e.g. 2.205 MHz / 32 k = 68.9) use scipy resample_poly
+            for exact output rate. The integer stride would produce
+            sample_rate//N Hz (e.g. 32426 Hz) while the AUD2 frame claims
+            audio_rate (32000 Hz) → the browser plays it ~1.3% too FAST, which
+            is audible as sped-up/chipmunk speech. resample_poly is slightly
+            more expensive but only runs for these non-divisor sample rates.
         """
-        decim_factor = max(1, int(sample_rate / audio_rate))
-        if decim_factor <= 1 or self._decim_sos is None:
+        if sample_rate <= audio_rate or self._decim_sos is None:
             return audio
+        # Apply the carried anti-alias LPF for BOTH paths (it also cleans
+        # out-of-band noise for resample_poly's downsample stage).
         audio, self._decim_zi = sosfilt(self._decim_sos, audio, zi=self._decim_zi)
-        return audio[::decim_factor]
+
+        decim_factor = sample_rate / audio_rate
+        # Exact integer ratio → fast stride path.
+        if abs(decim_factor - round(decim_factor)) < 1e-6:
+            return audio[::int(round(decim_factor))]
+        # Non-integer ratio → exact rational resample to audio_rate.
+        # Find the reduced up/down ratio so resample_poly is efficient.
+        from math import gcd
+        up = int(round(audio_rate))
+        down = int(round(sample_rate))
+        g = gcd(up, down)
+        return resample_poly(audio, up // g, down // g).astype(np.float32)
 
     def _ensure_fm_state(self, sample_rate: float, audio_rate: float, wbfm: bool):
         first = (
@@ -676,24 +695,38 @@ class StreamingDemodulator:
         self._vfo_phase = self._vfo_phase % (2.0 * np.pi)
         return (iq.astype(np.complex64) * lo).astype(np.complex64)
 
-    def process(self, iq_bytes: bytes, mode: DemodMode, sample_rate: float,
+    def process(self, iq_bytes, mode: DemodMode, sample_rate: float,
                 audio_rate: float, channel_bw: int = 0) -> np.ndarray:
         """Demodulate one chunk, carrying filter state across calls.
 
         Returns float32 audio in [-1, 1]. Returns an empty array on short input.
+
+        `iq_bytes` may be either raw IQ bytes (uint8 interleaved I/Q) OR a
+        pre-parsed complex ndarray (already normalized). Accepting the latter
+        lets a caller that already parsed the IQ (e.g. to compute channel
+        power for squelch) reuse it here and avoid a redundant O(n)
+        bytes→complex pass — important on the per-listener path where this
+        runs for every chunk.
         """
-        if len(iq_bytes) < 4:
-            return np.array([], dtype=np.float32)
+        # Accept a pre-parsed complex array to avoid a redundant iq_to_complex.
+        if isinstance(iq_bytes, np.ndarray) and np.iscomplexobj(iq_bytes):
+            if len(iq_bytes) < 8:
+                return np.array([], dtype=np.float32)
+            iq = iq_bytes
+        else:
+            if len(iq_bytes) < 4:
+                return np.array([], dtype=np.float32)
+            iq = iq_to_complex(iq_bytes)
+            if len(iq) < 8:
+                return np.array([], dtype=np.float32)
 
         # Any change to mode or core config → full reset for safety.
         if self._mode != mode or self._sample_rate != sample_rate \
                 or self._audio_rate != audio_rate:
             self.reset()
             self._mode = mode
-
-        iq = iq_to_complex(iq_bytes)
-        if len(iq) < 8:
-            return np.array([], dtype=np.float32)
+            self._sample_rate = sample_rate
+            self._audio_rate = audio_rate
 
         # Apply VFO offset shift (OpenWebRX-style): move the signal at
         # center_freq + vfo_offset_hz down to DC before demodulation.
