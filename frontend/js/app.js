@@ -1519,6 +1519,17 @@ const App = {
             this.drawWaterfall(spectrum);
         });
 
+        // Per-cursor SIG at 5 FPS (non-live only). Drives VFO A's bar so the
+        // operator sees the signal under their cursor update responsively,
+        // not just once per second with the full status frame.
+        WS.on('sig_cursor', (data) => {
+            const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+            if (listening) return;  // live mode uses per-listener 'sig' frames
+            if (data && typeof data.db === 'number') {
+                this._updateVfoBars(0, data.db);
+            }
+        });
+
         WS.on('new_recording', (data) => {
             this.addLiveFeedItem(data);
             // If manual recording just finished, clear the button state

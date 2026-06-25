@@ -210,6 +210,12 @@ async def websocket_endpoint(websocket: WebSocket):
     recv_task = asyncio.ensure_future(_recv_loop())
 
     status_counter = 0
+    sig_cursor_counter = 0
+    # Per-iteration interval is ~33ms (the loop's asyncio.sleep). 6 iterations
+    # ≈ 200ms = 5 FPS for the lightweight per-cursor SIG frame (vs the full
+    # status frame at 1 FPS). 5 FPS keeps the bar responsive without flooding;
+    # each computation is ~1ms (single-shot FFT).
+    SIG_CURSOR_INTERVAL = 6
     try:
         while True:
             # Send spectrum data as a BINARY WebSocket frame.
@@ -226,6 +232,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"type": "new_recording", "data": rec}))
                 except asyncio.QueueEmpty:
                     break
+
+            # Lightweight per-cursor SIG at 5 FPS (only when the client has
+            # declared a cursor AND is not listening live — live listeners get
+            # per-listener 'sig' frames over /ws/audio). Much more responsive
+            # than waiting for the 1 FPS full-status frame.
+            sig_cursor_counter += 1
+            off = cursor_state["offset_hz"]
+            if off is not None and sig_cursor_counter >= SIG_CURSOR_INTERVAL \
+                    and not audio_broadcaster.has_listeners:
+                sig_cursor_counter = 0
+                lvl = sdr_manager.cursor_signal_level(off)
+                if lvl is not None:
+                    await websocket.send_text(json.dumps({
+                        "type": "sig_cursor", "data": {"db": round(lvl, 1)},
+                    }))
 
             # Send status at ~1 FPS (every 30th iteration)
             status_counter += 1
