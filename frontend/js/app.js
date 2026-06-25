@@ -371,17 +371,35 @@ const App = {
     _stepSize: 1000,  // Default step: 1 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
     _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
-    // === Dual-VFO state ===
-    // Two independent listening cursors (A / B). Each entry: { offsetHz }.
-    // In single mode only A is used; in dual mode A + B each drive their own
-    // server-side listener (via LiveAudio's per-VFO WS) and their own
-    // waterfall cursor (A red, B blue).
+    // === Multi-VFO state (1-4 VFOs: A/B/C/D) ===
+    // Each entry: { id, offsetHz }. Up to 4 independent listening cursors.
+    // The number of ACTIVE VFOs is _vfoCount (1-4); only the first _vfoCount
+    // slots drive a server-side listener + waterfall cursor. Inactive slots
+    // are hidden from the UI.
+    _MAX_VFOS: 4,
     _vfos: [
         { id: 'A', offsetHz: 0 },
         { id: 'B', offsetHz: 0 },
+        { id: 'C', offsetHz: 0 },
+        { id: 'D', offsetHz: 0 },
     ],
     _activeVfoIdx: 0,   // which VFO waterfall clicks / tune buttons target
-    _vfoMode: 'single', // 'single' | 'dual'
+    _vfoCount: 1,       // number of active VFOs (1-4)
+    // Per-VFO identity + color (used for cursor, row button, freq label).
+    // Keep in sync with .vfo-sel-X in app.css.
+    _VFO_IDS: ['A', 'B', 'C', 'D'],
+    // Waterfall cursor + freq-label color templates. '%a' = alpha slot.
+    _VFO_COLORS: [
+        'rgba(255, 80, 80, %a)',   // A red
+        'rgba(80, 160, 255, %a)',  // B blue
+        'rgba(80, 220, 120, %a)',  // C green
+        'rgba(200, 120, 255, %a)', // D purple
+    ],
+    _VFO_LABEL_HEX: ['#ff5050', '#50a0ff', '#50dc78', '#c878ff'],
+    _vfoId(idx) { return this._VFO_IDS[idx] || ('?' + idx); },
+    _vfoLower(idx) { return (this._VFO_IDS[idx] || '?').toLowerCase(); },
+    _vfoColorTpl(idx) { return this._VFO_COLORS[idx] || this._VFO_COLORS[0]; },
+    _vfoLabelHex(idx) { return this._VFO_LABEL_HEX[idx] || this._VFO_LABEL_HEX[0]; },
     // Legacy alias kept so old WS/sync code (which still references
     // _vfoOffsetHz) reads/writes the ACTIVE VFO. New code should use
     // _vfoOffsetFor(idx) / _setVfoOffset(idx, hz).
@@ -397,7 +415,9 @@ const App = {
     _vfoUserTouched: false,
     // Per-VFO SIG levels (driven by the audio WS "sig" frames). Active VFO's
     // value feeds updateSignalMeter().
-    _vfoSig: [-120, -120],
+    _vfoSig: [-120, -120, -120, -120],
+    // Backwards-compat: code that checked _vfoMode === 'dual'.
+    get _vfoMode() { return this._vfoCount > 1 ? 'dual' : 'single'; },
     // Set of control values the user is CURRENTLY editing (e.g. 'gain',
     // 'squelch', 'ppm'). While a control is in this set, syncControlsFromStatus
     // must NOT overwrite it from the periodic status broadcast — otherwise the
@@ -760,25 +780,24 @@ const App = {
         const btnAutoRec = document.getElementById('btn-auto-record');
         if (btnAutoRec) btnAutoRec.addEventListener('click', () => this.toggleAutoRecord());
 
-        // === Dual-VFO controls ===
-        const btnVfoMode = document.getElementById('btn-vfo-mode');
-        if (btnVfoMode) btnVfoMode.addEventListener('click', () => this.toggleVfoMode());
-        // Active-VFO selector buttons (A / B).
-        const btnVfoA = document.getElementById('btn-vfo-a');
-        if (btnVfoA) btnVfoA.addEventListener('click', () => this.selectActiveVfo(0));
-        const btnVfoB = document.getElementById('btn-vfo-b');
-        if (btnVfoB) btnVfoB.addEventListener('click', () => this.selectActiveVfo(1));
-        // Per-VFO speaker dropdowns.
-        const selA = document.getElementById('vfo-a-speaker');
-        if (selA) selA.addEventListener('change', (e) => this.setVfoSpeaker(0, e.target.value));
-        const selB = document.getElementById('vfo-b-speaker');
-        if (selB) selB.addEventListener('change', (e) => this.setVfoSpeaker(1, e.target.value));
-        // Per-VFO mute buttons.
-        const muteA = document.getElementById('vfo-a-mute');
-        if (muteA) muteA.addEventListener('click', () => this.toggleVfoMute(0));
-        const muteB = document.getElementById('vfo-b-mute');
-        if (muteB) muteB.addEventListener('click', () => this.toggleVfoMute(1));
-        // Initial row state.
+        // === Multi-VFO controls (1-4 VFOs: A/B/C/D) ===
+        // +VFO / -VFO count buttons.
+        const btnVfoAdd = document.getElementById('btn-vfo-add');
+        if (btnVfoAdd) btnVfoAdd.addEventListener('click', () => this.adjustVfoCount(+1));
+        const btnVfoSub = document.getElementById('btn-vfo-sub');
+        if (btnVfoSub) btnVfoSub.addEventListener('click', () => this.adjustVfoCount(-1));
+        // Per-VFO select / speaker / mute — wired by index so all 4 rows work.
+        for (let i = 0; i < this._MAX_VFOS; i++) {
+            const lo = this._vfoLower(i);
+            const sel = document.getElementById(`btn-vfo-${lo}`);
+            if (sel) sel.addEventListener('click', () => this.selectActiveVfo(i));
+            const sp = document.getElementById(`vfo-${lo}-speaker`);
+            if (sp) sp.addEventListener('change', (e) => this.setVfoSpeaker(i, e.target.value));
+            const mu = document.getElementById(`vfo-${lo}-mute`);
+            if (mu) mu.addEventListener('click', () => this.toggleVfoMute(i));
+        }
+        // Initial state.
+        this._updateVfoCountBtn();
         this._updateVfoRows();
 
         // Volume slider
@@ -965,10 +984,11 @@ const App = {
             const warn = offscreen
                 ? ` <span style="color:#ff5050;font-size:0.5em;vertical-align:middle">⚠ นอกช่วงรับสัญญาณ</span>`
                 : '';
-            // In dual mode, prefix with the active VFO label + color so the
-            // operator knows which of the two cursors the big box reflects.
-            const vfoLabel = (this._vfoMode === 'dual')
-                ? `<span style="color:${this._activeVfoIdx === 0 ? '#ff5050' : '#50a0ff'};font-size:0.45em;vertical-align:middle;margin-right:6px">VFO ${this._vfos[this._activeVfoIdx].id}</span>`
+            // When more than one VFO is active, prefix the big display with the
+            // active VFO label + its color so the operator knows which cursor
+            // the box reflects.
+            const vfoLabel = (this._vfoCount > 1)
+                ? `<span style="color:${this._vfoLabelHex(this._activeVfoIdx)};font-size:0.45em;vertical-align:middle;margin-right:6px">VFO ${this._vfos[this._activeVfoIdx].id}</span>`
                 : '';
             // Show all 4 decimal digits
             freqDisplay.innerHTML = `${vfoLabel}${intPart} . ${decPart.slice(0,3)} <span class="decimal">${decPart.slice(3)}</span>${warn}`;
@@ -1123,28 +1143,27 @@ const App = {
     },
 
     /**
-     * Render the SIG meter for the current mode. Single → one bar (active
-     * VFO). Dual → both VFO bars (A red / B blue) side by side.
+     * Render the SIG meters for all active VFOs (each row has its own bar).
+     * Also keeps currentSignal in sync with the strongest active VFO.
      */
     _renderVfoSig() {
         const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
         if (!listening) return;  // global SIG drives the bar when not listening
-        // Always refresh the per-VFO bars (each VFO row has its own meter now).
-        this._updateVfoBars(0, this._vfoSig[0]);
-        this._updateVfoBars(1, this._vfoSig[1]);
-        if (this._vfoMode === 'dual') {
-            this._renderDualSig();
-        } else {
-            // Single mode: the global SIG meter still reflects the active VFO.
-            const s = this._vfoSig[this._activeVfoIdx];
-            this.updateSignalMeter((s === undefined) ? -120 : s);
+        let strongest = -120;
+        for (let i = 0; i < this._vfoCount; i++) {
+            const s = this._vfoSig[i];
+            const val = (s === undefined) ? -120 : s;
+            this._updateVfoBars(i, val);
+            if (val > strongest) strongest = val;
         }
+        this.updateSignalMeter(strongest);
     },
 
     /** Light the compact SIG bars in VFO row `idx` according to `db`. */
     _updateVfoBars(idx, db) {
-        const container = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-sig-bars`);
-        const label = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-sig`);
+        const lo = this._vfoLower(idx);
+        const container = document.getElementById(`vfo-${lo}-sig-bars`);
+        const label = document.getElementById(`vfo-${lo}-sig`);
         if (!container) return;
         const v = (db === undefined) ? -120 : db;
         const bars = container.querySelectorAll('.vfo-bar');
@@ -1161,50 +1180,32 @@ const App = {
         if (label) label.textContent = `${v.toFixed(0)} dB`;
     },
 
-    _renderDualSig() {
-        // The per-VFO bars (drawn by _updateVfoBars) are the only SIG display
-        // now (the top shared meter was removed). Just keep currentSignal in
-        // sync with the stronger VFO for any internal readers.
-        const a = (this._vfoSig[0] === undefined) ? -120 : this._vfoSig[0];
-        const b = (this._vfoSig[1] === undefined) ? -120 : this._vfoSig[1];
-        this.updateSignalMeter(Math.max(a, b));
-    },
-
     /**
-     * Refresh the Dual-VFO control rows (frequencies, active highlight,
-     * speaker dropdown, live indicator). Called by LiveAudio._updateUI.
+     * Refresh the VFO control rows (frequencies, active highlight, speaker
+     * dropdown, live indicator, mute). Called by LiveAudio._updateUI and on
+     * count/active changes. Generalized to loop 0..MAX_VFOS-1.
      */
     _updateVfoRows() {
-        const rowB = document.getElementById('vfo-row-b');
-        if (rowB) rowB.style.display = (this._vfoMode === 'dual') ? '' : 'none';
-        // Active highlight
-        ['vfo-row-a', 'vfo-row-b'].forEach((rid, i) => {
-            const el = document.getElementById(rid);
-            if (el) el.classList.toggle('vfo-active', i === this._activeVfoIdx);
-        });
-        // Per-row frequency labels
-        const fa = document.getElementById('vfo-a-freq');
-        const fb = document.getElementById('vfo-b-freq');
         const cf = this.currentFreq || 0;
-        if (fa) fa.textContent = ((cf + (this._vfos[0].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
-        if (fb) fb.textContent = ((cf + (this._vfos[1].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
-        // Per-row live indicator
-        const la = document.getElementById('vfo-a-live');
-        const lb = document.getElementById('vfo-b-live');
-        if (la) la.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(0)) ? '🔴' : '';
-        if (lb) lb.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(1)) ? '🔴' : '';
-        // Speaker dropdowns reflect current state
-        const sa = document.getElementById('vfo-a-speaker');
-        const sb = document.getElementById('vfo-b-speaker');
-        if (typeof LiveAudio !== 'undefined') {
-            if (sa) sa.value = LiveAudio.getSpeaker(0);
-            if (sb) sb.value = LiveAudio.getSpeaker(1);
-        }
-        // Mute buttons reflect current state (in case of reconnect).
-        if (typeof LiveAudio !== 'undefined') {
-            for (const i of [0, 1]) {
-                const m = document.getElementById(`vfo-${i === 0 ? 'a' : 'b'}-mute`);
-                if (!m) continue;
+        for (let i = 0; i < this._MAX_VFOS; i++) {
+            const lo = this._vfoLower(i);
+            const row = document.getElementById(`vfo-row-${lo}`);
+            if (!row) continue;
+            // Show only active VFOs (first _vfoCount slots).
+            row.style.display = (i < this._vfoCount) ? '' : 'none';
+            row.classList.toggle('vfo-active', i === this._activeVfoIdx);
+            // Frequency label.
+            const f = document.getElementById(`vfo-${lo}-freq`);
+            if (f) f.textContent = ((cf + (this._vfos[i].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
+            // Live indicator.
+            const live = document.getElementById(`vfo-${lo}-live`);
+            if (live) live.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(i)) ? '🔴' : '';
+            // Speaker dropdown.
+            const sp = document.getElementById(`vfo-${lo}-speaker`);
+            if (sp && typeof LiveAudio !== 'undefined') sp.value = LiveAudio.getSpeaker(i);
+            // Mute button.
+            const m = document.getElementById(`vfo-${lo}-mute`);
+            if (m && typeof LiveAudio !== 'undefined') {
                 const muted = LiveAudio.isMuted(i);
                 m.textContent = muted ? '🔇' : '🔊';
                 m.classList.toggle('muted', muted);
@@ -1214,22 +1215,34 @@ const App = {
 
     /** Switch the active VFO target for clicks / tune buttons. */
     selectActiveVfo(idx) {
-        if (idx < 0 || idx >= this._vfos.length) return;
+        if (idx < 0 || idx >= this._vfoCount) return;
         this._activeVfoIdx = idx;
         if (typeof LiveAudio !== 'undefined') LiveAudio.setActive(idx);
         this._updateVfoRows();
         this.updateFreqDisplay();
     },
 
-    /** Toggle single / dual VFO mode. */
-    toggleVfoMode() {
-        const next = (this._vfoMode === 'dual') ? 'single' : 'dual';
-        this._vfoMode = next;
-        if (typeof LiveAudio !== 'undefined') LiveAudio.setVfoMode(next);
-        const btn = document.getElementById('btn-vfo-mode');
-        if (btn) btn.textContent = (next === 'dual') ? '🔀 Dual' : '🔂 Single';
+    /** Increase/decrease the number of active VFOs (1..MAX). delta = +1/-1. */
+    adjustVfoCount(delta) {
+        const next = Math.max(1, Math.min(this._MAX_VFOS, this._vfoCount + delta));
+        if (next === this._vfoCount) return;
+        this._vfoCount = next;
+        if (typeof LiveAudio !== 'undefined') LiveAudio.setVfoCount(next);
+        // Keep active index in range.
+        if (this._activeVfoIdx >= next) this._activeVfoIdx = next - 1;
+        this._updateVfoCountBtn();
         this._updateVfoRows();
         this.updateFreqDisplay();
+    },
+
+    /** Update the "+VFO/-VFO" buttons' enabled state + label. */
+    _updateVfoCountBtn() {
+        const lbl = document.getElementById('vfo-count-label');
+        if (lbl) lbl.textContent = `VFO ${this._vfoCount}`;
+        const add = document.getElementById('btn-vfo-add');
+        const sub = document.getElementById('btn-vfo-sub');
+        if (add) add.disabled = (this._vfoCount >= this._MAX_VFOS);
+        if (sub) sub.disabled = (this._vfoCount <= 1);
     },
 
     /** Set speaker routing for a VFO from a dropdown change. */
@@ -1241,11 +1254,12 @@ const App = {
     toggleVfoMute(idx) {
         if (typeof LiveAudio === 'undefined') return;
         const muted = LiveAudio.toggleMute(idx);
-        const btn = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-mute`);
+        const lo = this._vfoLower(idx);
+        const btn = document.getElementById(`vfo-${lo}-mute`);
         if (btn) {
             btn.textContent = muted ? '🔇' : '🔊';
             btn.classList.toggle('muted', muted);
-            btn.title = muted ? `เปิดเสียง VFO ${idx === 0 ? 'A' : 'B'}` : `ปิดเสียง VFO ${idx === 0 ? 'A' : 'B'}`;
+            btn.title = muted ? `เปิดเสียง VFO ${this._vfoId(idx)}` : `ปิดเสียง VFO ${this._vfoId(idx)}`;
         }
     },
 
@@ -1451,10 +1465,9 @@ const App = {
                 const centerChanged = data.frequency !== this.currentFreq;
                 this.currentFreq = data.frequency;
                 if (centerChanged) {
-                    // Center changed → reset BOTH VFO cursors (offsets are
+                    // Center changed → reset EVERY VFO cursor (offsets are
                     // relative to the old center and would point elsewhere).
-                    this._setVfoOffset(0, 0);
-                    this._setVfoOffset(1, 0);
+                    for (let i = 0; i < this._MAX_VFOS; i++) this._setVfoOffset(i, 0);
                     this._vfoUserTouched = false;
                 }
                 this._waterfallDirty = true;
@@ -2075,21 +2088,22 @@ const App = {
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(this._waterfallBackBuffer, srcX, 0, srcW, h, 0, 0, w, h);
             this._drawFreqGrid(ctx, w, h);
-            // Draw one cursor per active VFO. Single mode → just A (red).
-            // Dual mode → A (red) + B (blue). The active VFO is drawn last so
-            // it sits on top.
-            const colors = ['rgba(255, 80, 80, %a)', 'rgba(80, 160, 255, %a)'];
-            const order = (this._activeVfoIdx === 0) ? [1, 0] : [0, 1];
-            // Channel-BW overlay for all VFOs (only those that are "live" in
-            // dual mode, or always A in single mode).
-            const vfoCount = (this._vfoMode === 'dual') ? 2 : 1;
-            for (let i = 0; i < vfoCount; i++) {
-                this._drawChannelBwOverlay(ctx, w, h, this._vfos[i].offsetHz, colors[i]);
+            // Draw one cursor per active VFO (up to _vfoCount). The active VFO
+            // is drawn LAST so it sits on top of the others.
+            const cnt = this._vfoCount;
+            // Channel-BW overlay for all active VFOs.
+            for (let i = 0; i < cnt; i++) {
+                this._drawChannelBwOverlay(ctx, w, h, this._vfos[i].offsetHz);
             }
+            // Cursor draw order: non-active first, active last.
+            const order = [];
+            for (let i = 0; i < cnt; i++) if (i !== this._activeVfoIdx) order.push(i);
+            order.push(this._activeVfoIdx);
             for (const i of order) {
-                if (i >= vfoCount && this._vfoMode !== 'dual') continue;
-                this._drawVFOCursor(ctx, w, h, this._vfos[i].offsetHz, colors[i],
-                                    i === this._activeVfoIdx, this._vfos[i].id);
+                if (i >= cnt) continue;
+                this._drawVFOCursor(ctx, w, h, this._vfos[i].offsetHz,
+                                    this._vfoColorTpl(i), i === this._activeVfoIdx,
+                                    this._vfos[i].id);
             }
             this._drawSignalAnnotations(ctx, w, h);
             this._waterfallDirty = false;

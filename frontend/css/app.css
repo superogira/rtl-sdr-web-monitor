@@ -1893,6 +1893,8 @@ a:hover {
 }
 .vfo-sel-a { background: #c0392b; }   /* red — matches VFO A cursor */
 .vfo-sel-b { background: #2563eb; }   /* blue — matches VFO B cursor */
+.vfo-sel-c { background: #16a34a; }   /* green — matches VFO C cursor */
+.vfo-sel-d { background: #9333ea; }   /* purple — matches VFO D cursor */
 .vfo-row:not(.vfo-active) .vfo-sel-btn { opacity: 0.55; }
 .vfo-live { width: 10px; font-size: 0.7rem; }
 .vfo-freq {
@@ -1956,5 +1958,24 @@ a:hover {
     border-color: var(--accent-red);
     color: var(--accent-red);
     background: rgba(239, 68, 68, 0.12);
+}
+
+/* VFO count control (+/- buttons + label) in the header. */
+.vfo-count-ctrl {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+.vfo-count-ctrl .btn-sm {
+    padding: 1px 8px;
+    min-width: 28px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+.vfo-count-ctrl .btn-sm:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 

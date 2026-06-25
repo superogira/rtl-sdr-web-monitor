@@ -26,6 +26,9 @@
 // Per-VFO speaker routing → StereoPannerNode pan value.
 //   'left'  → -1   'both' → 0   'right' → +1
 const SPEAKER_PAN = { left: -1, both: 0, right: 1 };
+// Maximum number of simultaneous VFOs (A/B/C/D). Each active VFO is one
+// server-side listener, so this also bounds the per-client listener cost.
+const MAX_VFOS = 4;
 
 const LiveAudio = {
     // === Shared audio graph (one output device for all VFOs) ===
@@ -39,7 +42,7 @@ const LiveAudio = {
     //   reconnectTimer, heartbeatTimer, sigDb }
     _vfos: [],
     _activeIdx: 0,       // which VFO app.js controls (clicks, sliders) target
-    _mode: 'single',     // 'single' (1 VFO) | 'dual' (A + B)
+    _MAX_VFOS: MAX_VFOS, // max simultaneous VFOs (A/B/C/D)
     // Shared diag timer — only one for the whole manager.
     _debugTimer: null,
 
@@ -72,6 +75,7 @@ const LiveAudio = {
 
     setActive(idx) {
         if (idx < 0 || idx >= this._vfos.length) return;
+        if (!this._vfos[idx].enabled) return;  // can't activate a disabled VFO
         this._activeIdx = idx;
         this._updateUI();
         if (typeof App !== 'undefined' && App.updateFreqDisplay) App.updateFreqDisplay();
@@ -79,36 +83,52 @@ const LiveAudio = {
 
     get activeIdx() { return this._activeIdx; },
 
-    setVfoMode(mode) {
-        if (mode !== 'single' && mode !== 'dual') return;
-        if (mode === this._mode) return;
+    /** Set how many VFOs are active (1-4). Replaces the old single/dual string
+     * mode. When increasing while live, the newly-enabled VFOs auto-start so
+     * the operator doesn't have to re-press ฟังสด. When decreasing, the
+     * extra VFOs are stopped. */
+    setVfoCount(n) {
+        n = Math.max(1, Math.min(this._MAX_VFOS, n|0));
+        this._ensureVfo(this._MAX_VFOS - 1);  // make sure all slots exist
         const wasPlaying = this.anyPlaying;
-        this._mode = mode;
-        if (mode === 'dual') {
-            this._ensureVfo(1);
-            // If we are already listening, auto-start VFO B so switching to
-            // Dual while live actually brings up the second channel —
-            // otherwise B stays without a listener and its SIG is stuck at
-            // the initial -120 (no 'sig' frames ever arrive).
-            if (wasPlaying && this._vfos[1] && !this._vfos[1].isPlaying) {
-                // Fire-and-forget; startVfo is async and self-guards.
-                this.startVfo(1).catch(e => console.warn('VFO B autostart failed:', e));
+        // Mark enabled flags.
+        for (let i = 0; i < this._vfos.length; i++) {
+            this._vfos[i].enabled = (i < n);
+        }
+        // If live, start any newly-enabled VFO that isn't playing, and stop
+        // any newly-disabled VFO that is playing.
+        if (wasPlaying) {
+            for (let i = 0; i < this._vfos.length; i++) {
+                const v = this._vfos[i];
+                if (v.enabled && !v.isPlaying) {
+                    this.startVfo(i).catch(e => console.warn(`VFO ${v.id} autostart failed:`, e));
+                } else if (!v.enabled && v.isPlaying) {
+                    this.stopVfo(i);
+                }
             }
         }
-        // When switching to single, stop VFO B if it was playing.
-        if (mode === 'single' && this._vfos[1] && this._vfos[1].isPlaying) {
-            this.stopVfo(1);
-        }
+        // Keep active index in range.
+        if (this._activeIdx >= n) this._activeIdx = n - 1;
         this._updateUI();
         if (typeof App !== 'undefined' && App.updateFreqDisplay) App.updateFreqDisplay();
     },
 
-    get mode() { return this._mode; },
+    get vfoCount() {
+        return this._vfos.filter(v => v && v.enabled).length;
+    },
+    /** Backwards-compat: 'single' if count==1 else 'multi'. */
+    get mode() { return this.vfoCount > 1 ? 'multi' : 'single'; },
+    /** Legacy alias kept for any caller using setVfoMode. */
+    setVfoMode(mode) {
+        if (mode === 'single') this.setVfoCount(1);
+        else if (mode === 'dual') this.setVfoCount(2);
+    },
 
     /** Ensure a VFO slot exists (lazy-creates the registry entry). */
     _ensureVfo(idx) {
         while (this._vfos.length <= idx) {
-            const id = this._vfos.length === 0 ? 'A' : 'B';
+            // VFO identity by index: A, B, C, D, ... (so VFO 2 = 'C', not 'B').
+            const id = String.fromCharCode(65 + this._vfos.length);
             this._vfos.push(this._newVfoState(id));
         }
         return this._vfos[idx];
@@ -117,6 +137,7 @@ const LiveAudio = {
     _newVfoState(id) {
         return {
             id,
+            enabled: (id === 'A'),  // only VFO A is enabled by default
             ws: null,
             sourceNodes: [],
             nextStartTime: 0,
@@ -181,21 +202,14 @@ const LiveAudio = {
     // Public: start / stop / toggle
     // ------------------------------------------------------------------
 
-    /** Start the ACTIVE VFO (and, in dual mode, the OTHER one too).
-     *
-     * In dual mode BOTH VFOs must start regardless of which is active.
-     * Previously this branched on `this._vfos[1]` literally, so when the
-     * active VFO was B (idx 1) it started B, then re-checked idx 1 (already
-     * playing → skip) and NEVER started A — leaving A with no WS, no SIG
-     * (stuck at -120) and no recording. Now we always start the active one
-     * first, then any other VFO that isn't already playing. */
+    /** Start the ACTIVE VFO first, then every other ENABLED VFO that isn't
+     * already playing. VFOs beyond the active count are not started. */
     async start() {
         await this.startVfo(this._activeIdx);
-        if (this._mode === 'dual') {
-            for (let i = 0; i < this._vfos.length; i++) {
-                if (i !== this._activeIdx && this._vfos[i] && !this._vfos[i].isPlaying) {
-                    await this.startVfo(i);
-                }
+        for (let i = 0; i < this._vfos.length; i++) {
+            const v = this._vfos[i];
+            if (v && v.enabled && i !== this._activeIdx && !v.isPlaying) {
+                await this.startVfo(i);
             }
         }
     },
@@ -240,10 +254,11 @@ const LiveAudio = {
         console.log(`🔊 [audio] VFO ${v.id} start() complete`);
     },
 
-    /** Stop the active VFO (single) or all VFOs (dual). */
+    /** Stop every VFO that is currently playing. */
     stop() {
-        this.stopVfo(this._activeIdx);
-        if (this._mode === 'dual' && this._vfos[1]) this.stopVfo(1);
+        for (let i = 0; i < this._vfos.length; i++) {
+            if (this._vfos[i] && this._vfos[i].isPlaying) this.stopVfo(i);
+        }
     },
 
     stopVfo(idx) {
