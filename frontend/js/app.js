@@ -2,11 +2,10 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.22-v2',  // Auto Squelch (real-time, per-channel): adaptive
-                                // noise-floor tracking via rolling p25 percentile
-                                // with freeze-on-active + warmup-squelch-closed.
-                                // New per-frequency "auto_squelch" option in
-                                // recording jobs; dashboard shows floor/eff dB.
+    VERSION: '2026.06.25',  // VFO RX-active green flash: each VFO row blinks
+                             // green when its squelch gate opens (audio is
+                             // passing) so the operator can see which freq is
+                             // active at a glance.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -416,6 +415,11 @@ const App = {
     // Per-VFO SIG levels (driven by the audio WS "sig" frames). Active VFO's
     // value feeds updateSignalMeter().
     _vfoSig: [-120, -120, -120, -120],
+    // Per-VFO squelch-gate state (driven by sq_open in the audio WS "sig"
+    // frames). True = audio is passing (signal > squelch) → the VFO row
+    // flashes green (class "vfo-rx-active") so the operator can see which
+    // frequency is active at a glance.
+    _vfoSqOpen: [false, false, false, false],
     // Backwards-compat: code that checked _vfoMode === 'dual'.
     get _vfoMode() { return this._vfoCount > 1 ? 'dual' : 'single'; },
     // Set of control values the user is CURRENTLY editing (e.g. 'gain',
@@ -1136,11 +1140,30 @@ const App = {
         }
     },
 
-    /** A VFO's per-listener SIG level update (its own channel power). */
-    _onVfoSig(idx, db) {
+    /** A VFO's per-listener SIG level update (its own channel power).
+     *  Also carries `sq_open` (squelch gate open = audio is passing) which
+     *  flashes the VFO row green so the operator can see which frequency is
+     *  active at a glance. */
+    _onVfoSig(idx, db, sqOpen) {
         if (idx >= 0 && idx < this._vfoSig.length) this._vfoSig[idx] = db;
+        if (idx >= 0 && idx < this._vfoSqOpen.length) this._vfoSqOpen[idx] = !!sqOpen;
         // Refresh the SIG bar. In dual mode both VFOs feed separate bars.
         this._renderVfoSig();
+        // Apply/remove the green "RX active" flash on the VFO row.
+        this._updateVfoRxActive(idx);
+    },
+
+    /** Toggle the "vfo-rx-active" class on a VFO row based on its squelch
+     *  gate state. When audio is passing (sq_open=true) the row flashes
+     *  green via the CSS animation. Only flashes when the VFO is actually
+     *  live (a stale sq_open from a closed WS shouldn't keep a row flashing). */
+    _updateVfoRxActive(idx) {
+        const lo = this._vfoLower(idx);
+        const row = document.getElementById(`vfo-row-${lo}`);
+        if (!row) return;
+        const open = !!(this._vfoSqOpen && this._vfoSqOpen[idx]);
+        const live = (typeof LiveAudio !== 'undefined') ? LiveAudio.isVfoPlaying(idx) : false;
+        row.classList.toggle('vfo-rx-active', open && live);
     },
 
     /** A VFO's vfo_ack (server confirmed this VFO's tune). */
@@ -1164,6 +1187,8 @@ const App = {
             const s = this._vfoSig[i];
             const val = (s === undefined) ? -120 : s;
             this._updateVfoBars(i, val);
+            // Keep the RX-active flash in sync with the latest SIG data.
+            this._updateVfoRxActive(i);
             if (val > strongest) strongest = val;
         }
         this.updateSignalMeter(strongest);
@@ -1220,6 +1245,9 @@ const App = {
                 m.textContent = muted ? '🔇' : '🔊';
                 m.classList.toggle('muted', muted);
             }
+            // Keep the green "RX active" flash in sync (clears when a VFO
+            // stops playing, or lights up if its squelch just opened).
+            this._updateVfoRxActive(i);
         }
     },
 

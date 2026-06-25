@@ -572,7 +572,11 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     frame = frame_task.result()
                     # The queue carries two frame kinds:
                     #   - bytes        → AUD2 audio (binary WebSocket frame)
-                    #   - ("sig", db)  → per-listener SIG meter update (text)
+                    #   - ("sig", {db, sq_open})  → per-listener SIG meter
+                    #     update (text). Carries the smoothed signal level AND
+                    #     the current squelch-gate state so the client can show
+                    #     a "RX active" indicator (flashing green) on the VFO
+                    #     row when audio is passing.
                     # Routing sig as a TEXT frame lets the client's audio
                     # ArrayBuffer path and its JSON text path stay separate,
                     # and avoids polluting the binary audio decoder.
@@ -580,8 +584,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         try:
                             kind = frame[0]
                             if kind == "sig":
+                                payload = frame[1]
+                                # payload is a dict: {db, sq_open}.
                                 await websocket.send_text(
-                                    json.dumps({"type": "sig", "db": frame[1]})
+                                    json.dumps({"type": "sig", **payload})
                                 )
                         except Exception:
                             pass

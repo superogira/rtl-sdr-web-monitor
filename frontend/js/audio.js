@@ -464,7 +464,13 @@ const LiveAudio = {
                 } else if (obj.type === "sig") {
                     const v = this._vfos[idx];
                     if (v) v.sigDb = obj.db;
-                    if (typeof App !== 'undefined' && App._onVfoSig) App._onVfoSig(idx, obj.db);
+                    // sq_open (squelch gate open) tells the UI whether this VFO
+                    // is currently producing audio (signal > squelch). Used to
+                    // flash the VFO row green so the operator can see which
+                    // frequency is active at a glance.
+                    if (typeof App !== 'undefined' && App._onVfoSig) {
+                        App._onVfoSig(idx, obj.db, !!obj.sq_open);
+                    }
                 } else if (obj.type === "vfo_ack") {
                     if (typeof App !== 'undefined' && App._onVfoAck) App._onVfoAck(idx, obj);
                 } else if (obj.type === "record_ack") {

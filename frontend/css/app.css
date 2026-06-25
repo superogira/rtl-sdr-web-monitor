@@ -1883,6 +1883,32 @@ a:hover {
     border-color: rgba(234, 179, 8, 0.7);
     background: rgba(234, 179, 8, 0.08);
 }
+/* "RX active" flash: when a VFO's squelch is open (audio passing), the whole
+   row pulses bright green so the operator can see which frequency is active
+   at a glance — even peripherally while watching the waterfall. */
+.vfo-row.vfo-rx-active {
+    animation: rx-blink 0.8s ease-in-out infinite;
+}
+@keyframes rx-blink {
+    0%, 100% {
+        border-color: rgba(34, 211, 238, 0.4);
+        background: rgba(34, 211, 238, 0.12);
+        box-shadow: 0 0 0 rgba(34, 211, 238, 0);
+    }
+    50% {
+        border-color: rgba(74, 222, 128, 1);
+        background: rgba(74, 222, 128, 0.30);
+        box-shadow: 0 0 14px rgba(74, 222, 128, 0.55);
+    }
+}
+/* Respect reduced-motion: don't animate, just hold a steady green tint. */
+@media (prefers-reduced-motion: reduce) {
+    .vfo-row.vfo-rx-active {
+        animation: none;
+        border-color: rgba(74, 222, 128, 0.8);
+        background: rgba(74, 222, 128, 0.20);
+    }
+}
 .vfo-sel-btn {
     width: 22px; height: 22px;
     border: none; border-radius: 50%;

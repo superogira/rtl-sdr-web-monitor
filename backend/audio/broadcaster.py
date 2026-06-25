@@ -618,18 +618,30 @@ class AudioBroadcaster:
                     if audio is None or len(audio) == 0:
                         continue
 
-                    # === Per-listener SIG meter (live listening) ===
-                    now = time.monotonic()
-                    if now - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
-                        ln._last_sig_send = now
-                        self._enqueue_frame(ln, ("sig", round(ln._sig_smoothed, 1)))
-
                     # === Per-listener AUTO-RECORD (multi-user) ===
+                    # NOTE: uses PRE-squelch audio (the real content) so a user
+                    # with live squelch OFF still records complete audio.
                     if ln.auto_record:
                         self._process_auto_record(ln, audio, audio_rate)
 
                     # Apply per-listener squelch + batch into an AUD2 frame.
+                    # Done BEFORE the SIG frame so the squelch gate state
+                    # (_sq_open) reflects THIS chunk — the frontend uses it to
+                    # flash the VFO row green when audio is passing.
                     audio = self._apply_squelch(ln, audio)
+
+                    # === Per-listener SIG meter (live listening) ===
+                    # Throttled to ~10 FPS. Carries the smoothed signal level
+                    # AND the current squelch-gate state so the client can show
+                    # a "RX active" indicator (flashing green) on the VFO row.
+                    now = time.monotonic()
+                    if now - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
+                        ln._last_sig_send = now
+                        self._enqueue_frame(ln, ("sig", {
+                            "db": round(ln._sig_smoothed, 1),
+                            "sq_open": bool(ln._sq_open),
+                        }))
+
                     frame = self._batch_listener(ln, audio, audio_rate)
                     if frame:
                         self._enqueue_frame(ln, frame)
