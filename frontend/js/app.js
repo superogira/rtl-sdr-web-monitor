@@ -1154,16 +1154,12 @@ const App = {
     },
 
     _renderDualSig() {
-        // In dual mode the global SIG readout shows both levels; the per-VFO
-        // bars (drawn by _updateVfoBars above) are the primary indicator.
+        // The per-VFO bars (drawn by _updateVfoBars) are the only SIG display
+        // now (the top shared meter was removed). Just keep currentSignal in
+        // sync with the stronger VFO for any internal readers.
         const a = (this._vfoSig[0] === undefined) ? -120 : this._vfoSig[0];
         const b = (this._vfoSig[1] === undefined) ? -120 : this._vfoSig[1];
-        const stronger = Math.max(a, b);
-        this.updateSignalMeter(stronger);
-        const dbmDisplay = document.getElementById('signal-dbm');
-        if (dbmDisplay) {
-            dbmDisplay.textContent = `A:${a.toFixed(0)} B:${b.toFixed(0)}`;
-        }
+        this.updateSignalMeter(Math.max(a, b));
     },
 
     /**

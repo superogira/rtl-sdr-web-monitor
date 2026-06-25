@@ -82,8 +82,19 @@ const LiveAudio = {
     setVfoMode(mode) {
         if (mode !== 'single' && mode !== 'dual') return;
         if (mode === this._mode) return;
+        const wasPlaying = this.anyPlaying;
         this._mode = mode;
-        if (mode === 'dual') this._ensureVfo(1);
+        if (mode === 'dual') {
+            this._ensureVfo(1);
+            // If we are already listening, auto-start VFO B so switching to
+            // Dual while live actually brings up the second channel —
+            // otherwise B stays without a listener and its SIG is stuck at
+            // the initial -120 (no 'sig' frames ever arrive).
+            if (wasPlaying && this._vfos[1] && !this._vfos[1].isPlaying) {
+                // Fire-and-forget; startVfo is async and self-guards.
+                this.startVfo(1).catch(e => console.warn('VFO B autostart failed:', e));
+            }
+        }
         // When switching to single, stop VFO B if it was playing.
         if (mode === 'single' && this._vfos[1] && this._vfos[1].isPlaying) {
             this.stopVfo(1);
