@@ -159,11 +159,22 @@ const LiveAudio = {
     // Public: start / stop / toggle
     // ------------------------------------------------------------------
 
-    /** Start the ACTIVE VFO (and, in dual mode, the other one too). */
+    /** Start the ACTIVE VFO (and, in dual mode, the OTHER one too).
+     *
+     * In dual mode BOTH VFOs must start regardless of which is active.
+     * Previously this branched on `this._vfos[1]` literally, so when the
+     * active VFO was B (idx 1) it started B, then re-checked idx 1 (already
+     * playing → skip) and NEVER started A — leaving A with no WS, no SIG
+     * (stuck at -120) and no recording. Now we always start the active one
+     * first, then any other VFO that isn't already playing. */
     async start() {
         await this.startVfo(this._activeIdx);
-        if (this._mode === 'dual' && this._vfos[1] && !this._vfos[1].isPlaying) {
-            await this.startVfo(1);
+        if (this._mode === 'dual') {
+            for (let i = 0; i < this._vfos.length; i++) {
+                if (i !== this._activeIdx && this._vfos[i] && !this._vfos[i].isPlaying) {
+                    await this.startVfo(i);
+                }
+            }
         }
     },
 
@@ -271,16 +282,30 @@ const LiveAudio = {
     /** Send a control message to the ACTIVE VFO's WS. (backwards-compat) */
     sendControl(obj) { return this._sendControlVfo(this._activeIdx, obj); },
 
+    /** Send a control message to ALL live VFOs. Used for settings that apply
+     * to every VFO at once (squelch, mode, bandwidth, auto-record, auto-
+     * squelch) — the UI has a single SQL slider / AUTO button, so in dual mode
+     * both VFOs must receive it or the non-active one stays stale (e.g. SQL
+     * stuck, auto-record not running on VFO B). Returns true if sent to any. */
+    sendControlAll(obj) {
+        let any = false;
+        for (let i = 0; i < this._vfos.length; i++) {
+            if (this._sendControlVfo(i, obj)) any = true;
+        }
+        return any;
+    },
+
     setVFO(freqHz) { return this.sendControl({ type: "vfo", frequency: freqHz }); },
     setVfoVfo(idx, freqHz) { return this._sendControlVfo(idx, { type: "vfo", frequency: freqHz }); },
-    setMode(mode) { return this.sendControl({ type: "mode", mode: String(mode).toUpperCase() }); },
-    setBandwidth(bwHz) { return this.sendControl({ type: "bandwidth", bandwidth: bwHz }); },
-    setSquelch(levelDb) { return this.sendControl({ type: "squelch", level: Number(levelDb) }); },
-    setAutoSquelch(enabled) { return this.sendControl({ type: "auto_squelch", enabled: Boolean(enabled) }); },
+    // mode/bandwidth/squelch/auto-* apply to ALL VFOs (shared UI controls).
+    setMode(mode) { return this.sendControlAll({ type: "mode", mode: String(mode).toUpperCase() }); },
+    setBandwidth(bwHz) { return this.sendControlAll({ type: "bandwidth", bandwidth: bwHz }); },
+    setSquelch(levelDb) { return this.sendControlAll({ type: "squelch", level: Number(levelDb) }); },
+    setAutoSquelch(enabled) { return this.sendControlAll({ type: "auto_squelch", enabled: Boolean(enabled) }); },
     setAutoRecord(enabled, squelchDb) {
         const obj = { type: "auto_record", enabled: Boolean(enabled) };
         if (squelchDb !== undefined && squelchDb !== null) obj.squelch = Number(squelchDb);
-        return this.sendControl(obj);
+        return this.sendControlAll(obj);
     },
     startRecording() { return this.sendControl({ type: "record_start" }); },
     stopRecording() { return this.sendControl({ type: "record_stop" }); },

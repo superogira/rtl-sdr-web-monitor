@@ -359,8 +359,8 @@ const App = {
             const radioMode = document.getElementById('radio-mode');
             if (radioMode) radioMode.textContent = mode;
             // Per-listener mode change (audio WS) when listening; else global REST.
-            if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setMode(mode)) {
-                console.log(`🎛️ Mode (per-listener): ${mode}`);
+            if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setMode(mode)) {
+                console.log(`🎛️ Mode (per-VFO): ${mode}`);
                 return;
             }
             try { await API.sdr.setMode(mode); } catch (err) { console.error('Set mode failed:', err); }
@@ -489,9 +489,9 @@ const App = {
                 bwButtons.querySelectorAll('.bw-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this._channelBw = newBw;
-                // Per-listener bandwidth change (audio WS) when listening; else global REST.
-                if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying && LiveAudio.setBandwidth(newBw)) {
-                    console.log(`🎛️ Channel BW (per-listener): ${newBw/1e3} kHz`);
+                // Per-VFO bandwidth change (audio WS) when listening; else global REST.
+                if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setBandwidth(newBw)) {
+                    console.log(`🎛️ Channel BW (per-VFO): ${newBw/1e3} kHz`);
                     return;
                 }
                 try {
@@ -686,8 +686,8 @@ const App = {
             inputId: 'squelch-input',
             setter: (v) => {
                 const level = parseFloat(v);
-                // Per-listener live squelch (immediate, no round-trip)
-                if (typeof LiveAudio !== 'undefined' && LiveAudio.isPlaying) {
+                // Per-VFO live squelch (broadcast to all VFOs, immediate)
+                if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying) {
                     LiveAudio.setSquelch(level);
                 }
                 // Global squelch (for auto-recording gating + persistence)
@@ -701,7 +701,7 @@ const App = {
         const sqlAutoBtn = document.getElementById('sql-auto-btn');
         if (sqlAutoBtn) {
             sqlAutoBtn.addEventListener('click', () => {
-                if (typeof LiveAudio === 'undefined' || !LiveAudio.isPlaying) {
+                if (typeof LiveAudio === 'undefined' || !LiveAudio.anyPlaying) {
                     this._onAutoSquelchAck({ enabled: false });
                     alert('กรุณากด "ฟังสด" ก่อนเปิด Auto Squelch');
                     return;
@@ -1047,7 +1047,7 @@ const App = {
     toggleAutoRecord() {
         // Auto-record (per-user) rides on the live audio WebSocket, so it
         // requires "ฟังสด" to be active first.
-        if (typeof LiveAudio === 'undefined' || !LiveAudio.isPlaying) {
+        if (typeof LiveAudio === 'undefined' || !LiveAudio.anyPlaying) {
             alert('กรุณากด "🔈 ฟังสด" ก่อนเปิดอัดอัตโนมัติ');
             return;
         }
