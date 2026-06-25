@@ -2,10 +2,11 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.25',  // VFO RX-active green flash: each VFO row blinks
-                             // green when its squelch gate opens (audio is
-                             // passing) so the operator can see which freq is
-                             // active at a glance.
+    VERSION: '2026.06.25-v2',  // 3D Waterfall: signal frequency labels (Sprite
+                               // + stick) above peaks, mirrors the 2D Signal
+                               // Tag feature. Billboard labels face the camera
+                               // at any orbit angle; capped at 10 simultaneous
+                               // labels with ±50 kHz dedup.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -627,6 +628,20 @@ const App = {
                 }
                 console.log(`📡 Signal Tag ${this.signalTagEnabled ? 'ON' : 'OFF'}`);
             });
+        }
+
+        // Waterfall 3D toggle — switches between the 2D scroll-blit waterfall
+        // and the Three.js 3D terrain view. Lazily inits WebGL on first enable.
+        const wf3dBtn = document.getElementById('wf-3d-btn');
+        if (wf3dBtn) {
+            // Disable the button if Three.js failed to load (offline CDN).
+            if (typeof THREE === 'undefined') {
+                wf3dBtn.disabled = true;
+                wf3dBtn.title = 'Three.js ไม่พร้อมใช้งาน (offline?)';
+                wf3dBtn.style.opacity = '0.4';
+            } else {
+                wf3dBtn.addEventListener('click', () => this.toggleWaterfall3D());
+            }
         }
 
         // Direct frequency input (click on freq display)
@@ -1568,6 +1583,8 @@ const App = {
                 return;
             }
             this.drawWaterfall(spectrum);
+            // Feed the 3D view too (no-op if 3D mode is off).
+            this._feedWaterfall3D(spectrum);
         });
 
         // Per-cursor SIG at 5 FPS (non-live only). Drives VFO A's bar so the
@@ -2530,6 +2547,68 @@ const App = {
             this._colorLUTDbMin = null;
             this._colorLUTDbMax = null;
             console.log(`🌊 Applied waterfall dB range: [${newMin}, ${newMax}] (source: ${this._deviceWaterfallActive ? 'device' : 'global'})`);
+        }
+    },
+
+    // === Waterfall 3D (Three.js terrain view) ===
+    // Lazily toggles between the 2D scroll-blit canvas and the Three.js 3D
+    // surface renderer. Both consume the SAME spectrum frames from the WS
+    // 'spectrum' handler, so they stay in sync.
+    _waterfall3dOn: false,
+    toggleWaterfall3D() {
+        const btn = document.getElementById('wf-3d-btn');
+        const c2d = document.getElementById('waterfall-2d-container');
+        const c3d = document.getElementById('waterfall-3d-container');
+        const hint = document.getElementById('waterfall-3d-hint');
+        if (!c2d || !c3d) return;
+
+        if (this._waterfall3dOn) {
+            // → switch back to 2D
+            this._waterfall3dOn = false;
+            Waterfall3D.dispose();
+            c3d.style.display = 'none';
+            if (hint) hint.style.display = 'none';
+            c2d.style.display = '';
+            if (btn) { btn.classList.remove('active'); btn.textContent = '📊 3D'; }
+            console.log('📊 Waterfall → 2D');
+        } else {
+            // → switch to 3D (lazy init)
+            c3d.style.display = '';
+            if (hint) hint.style.display = '';
+            c2d.style.display = 'none';
+            const ok = Waterfall3D.init(c3d);
+            if (!ok) {
+                c3d.style.display = 'none';
+                if (hint) hint.style.display = 'none';
+                c2d.style.display = '';
+                alert('ไม่สามารถเริ่ม 3D waterfall ได้ (WebGL/Three.js ไม่พร้อมใช้งาน)');
+                return;
+            }
+            this._waterfall3dOn = true;
+            if (btn) { btn.classList.add('active'); btn.textContent = '📊 2D'; }
+            console.log('📊 Waterfall → 3D');
+        }
+    },
+
+    /** Feed spectrum to the 3D view (no-op when 3D is off). */
+    _feedWaterfall3D(spectrum) {
+        if (!this._waterfall3dOn) return;
+        Waterfall3D.feed(spectrum, this._dbMin, this._dbMax);
+        // Signal labels (frequency tags above peaks) — mirrors the 2D Signal
+        // Tag feature. Only active when the user has enabled Signal Tag, so
+        // the same toggle controls both views and there are no stray labels
+        // when the feature is off.
+        if (this.signalTagEnabled) {
+            const signals = this._detectSignals(spectrum);
+            const numBins = spectrum.length;
+            const sr = this._sampleRate || 2048000;
+            Waterfall3D.setSignalLabels(signals, {
+                lowHz: this.currentFreq - sr / 2,
+                binHz: sr / numBins,
+                numBins,
+                sr,
+                centerHz: this.currentFreq,
+            });
         }
     },
 
