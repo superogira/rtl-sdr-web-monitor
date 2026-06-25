@@ -1916,3 +1916,45 @@ a:hover {
     cursor: pointer;
 }
 
+/* Per-VFO compact SIG meter inside the VFO row (bars + dB). */
+.vfo-sig-meter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+.vfo-sig-bars {
+    display: flex;
+    gap: 1px;
+    width: 70px;
+}
+.vfo-bar {
+    height: 10px;
+    flex: 1;
+    background: var(--bg-input);
+    border-radius: 1px;
+    transition: background 0.1s;
+}
+.vfo-bar.active-green { background: var(--accent-green); }
+.vfo-bar.active-yellow { background: var(--accent-yellow); }
+.vfo-bar.active-red { background: var(--accent-red); }
+
+/* Per-VFO mute button. */
+.vfo-mute-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    line-height: 1;
+    color: var(--text-secondary);
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.vfo-mute-btn:hover { color: var(--text-primary); }
+.vfo-mute-btn.muted {
+    border-color: var(--accent-red);
+    color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.12);
+}
+

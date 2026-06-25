@@ -773,6 +773,11 @@ const App = {
         if (selA) selA.addEventListener('change', (e) => this.setVfoSpeaker(0, e.target.value));
         const selB = document.getElementById('vfo-b-speaker');
         if (selB) selB.addEventListener('change', (e) => this.setVfoSpeaker(1, e.target.value));
+        // Per-VFO mute buttons.
+        const muteA = document.getElementById('vfo-a-mute');
+        if (muteA) muteA.addEventListener('click', () => this.toggleVfoMute(0));
+        const muteB = document.getElementById('vfo-b-mute');
+        if (muteB) muteB.addEventListener('click', () => this.toggleVfoMute(1));
         // Initial row state.
         this._updateVfoRows();
 
@@ -1116,19 +1121,41 @@ const App = {
     _renderVfoSig() {
         const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
         if (!listening) return;  // global SIG drives the bar when not listening
+        // Always refresh the per-VFO bars (each VFO row has its own meter now).
+        this._updateVfoBars(0, this._vfoSig[0]);
+        this._updateVfoBars(1, this._vfoSig[1]);
         if (this._vfoMode === 'dual') {
             this._renderDualSig();
         } else {
+            // Single mode: the global SIG meter still reflects the active VFO.
             const s = this._vfoSig[this._activeVfoIdx];
             this.updateSignalMeter((s === undefined) ? -120 : s);
         }
     },
 
+    /** Light the compact SIG bars in VFO row `idx` according to `db`. */
+    _updateVfoBars(idx, db) {
+        const container = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-sig-bars`);
+        const label = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-sig`);
+        if (!container) return;
+        const v = (db === undefined) ? -120 : db;
+        const bars = container.querySelectorAll('.vfo-bar');
+        const normalized = Math.max(0, Math.min(10, (v + 120) / 9));
+        const activeBars = Math.round(normalized);
+        bars.forEach((bar, i) => {
+            bar.className = 'vfo-bar';
+            if (i < activeBars) {
+                if (i < 5) bar.classList.add('active-green');
+                else if (i < 8) bar.classList.add('active-yellow');
+                else bar.classList.add('active-red');
+            }
+        });
+        if (label) label.textContent = `${v.toFixed(0)} dB`;
+    },
+
     _renderDualSig() {
-        // In dual mode, write both VFO levels into the single dbm readout as
-        // "A:xx B:yy" and light the bars by the STRONGER of the two (so the
-        // bar reflects "something is being received"). Per-VFO exact level is
-        // shown in each VFO row's own label.
+        // In dual mode the global SIG readout shows both levels; the per-VFO
+        // bars (drawn by _updateVfoBars above) are the primary indicator.
         const a = (this._vfoSig[0] === undefined) ? -120 : this._vfoSig[0];
         const b = (this._vfoSig[1] === undefined) ? -120 : this._vfoSig[1];
         const stronger = Math.max(a, b);
@@ -1137,11 +1164,6 @@ const App = {
         if (dbmDisplay) {
             dbmDisplay.textContent = `A:${a.toFixed(0)} B:${b.toFixed(0)}`;
         }
-        // Refresh per-row SIG labels if present.
-        const la = document.getElementById('vfo-a-sig');
-        const lb = document.getElementById('vfo-b-sig');
-        if (la) la.textContent = `${a.toFixed(0)} dB`;
-        if (lb) lb.textContent = `${b.toFixed(0)} dB`;
     },
 
     /**
@@ -1174,6 +1196,16 @@ const App = {
             if (sa) sa.value = LiveAudio.getSpeaker(0);
             if (sb) sb.value = LiveAudio.getSpeaker(1);
         }
+        // Mute buttons reflect current state (in case of reconnect).
+        if (typeof LiveAudio !== 'undefined') {
+            for (const i of [0, 1]) {
+                const m = document.getElementById(`vfo-${i === 0 ? 'a' : 'b'}-mute`);
+                if (!m) continue;
+                const muted = LiveAudio.isMuted(i);
+                m.textContent = muted ? '🔇' : '🔊';
+                m.classList.toggle('muted', muted);
+            }
+        }
     },
 
     /** Switch the active VFO target for clicks / tune buttons. */
@@ -1199,6 +1231,18 @@ const App = {
     /** Set speaker routing for a VFO from a dropdown change. */
     setVfoSpeaker(idx, mode) {
         if (typeof LiveAudio !== 'undefined') LiveAudio.setSpeaker(idx, mode);
+    },
+
+    /** Toggle a VFO's mute. Updates the button icon + the audio graph. */
+    toggleVfoMute(idx) {
+        if (typeof LiveAudio === 'undefined') return;
+        const muted = LiveAudio.toggleMute(idx);
+        const btn = document.getElementById(`vfo-${idx === 0 ? 'a' : 'b'}-mute`);
+        if (btn) {
+            btn.textContent = muted ? '🔇' : '🔊';
+            btn.classList.toggle('muted', muted);
+            btn.title = muted ? `เปิดเสียง VFO ${idx === 0 ? 'A' : 'B'}` : `ปิดเสียง VFO ${idx === 0 ? 'A' : 'B'}`;
+        }
     },
 
     // Server confirmed an auto-squelch toggle for THIS listener. Update the

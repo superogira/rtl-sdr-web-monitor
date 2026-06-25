@@ -120,23 +120,44 @@
                             <button class="vfo-sel-btn vfo-sel-a" id="btn-vfo-a" title="เลือก VFO A เป็นเป้าหมายคลิก">A</button>
                             <span class="vfo-live" id="vfo-a-live"></span>
                             <span class="vfo-freq" id="vfo-a-freq">--- MHz</span>
-                            <span class="vfo-sig" id="vfo-a-sig">--- dB</span>
+                            <!-- Per-VFO SIG meter (compact bars + dB) -->
+                            <div class="vfo-sig-meter" title="กำลังสัญญาณ VFO A">
+                                <div class="vfo-sig-bars" id="vfo-a-sig-bars">
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div>
+                                </div>
+                                <span class="vfo-sig" id="vfo-a-sig">--- dB</span>
+                            </div>
                             <select class="vfo-speaker" id="vfo-a-speaker" title="ลำโพงสำหรับ VFO A">
                                 <option value="both">🔈 ทั้งสอง</option>
                                 <option value="left">👈 ซ้าย</option>
                                 <option value="right">👉 ขวา</option>
                             </select>
+                            <!-- Per-VFO mute toggle. When muted the VFO's audio is
+                                 fully silenced (gain 0) regardless of speaker routing. -->
+                            <button class="vfo-mute-btn" id="vfo-a-mute" title="ปิดเสียง VFO A">🔊</button>
                         </div>
                         <div class="vfo-row vfo-row-b" id="vfo-row-b" style="display:none;">
                             <button class="vfo-sel-btn vfo-sel-b" id="btn-vfo-b" title="เลือก VFO B เป็นเป้าหมายคลิก">B</button>
                             <span class="vfo-live" id="vfo-b-live"></span>
                             <span class="vfo-freq" id="vfo-b-freq">--- MHz</span>
-                            <span class="vfo-sig" id="vfo-b-sig">--- dB</span>
+                            <div class="vfo-sig-meter" title="กำลังสัญญาณ VFO B">
+                                <div class="vfo-sig-bars" id="vfo-b-sig-bars">
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
+                                    <div class="vfo-bar"></div>
+                                </div>
+                                <span class="vfo-sig" id="vfo-b-sig">--- dB</span>
+                            </div>
                             <select class="vfo-speaker" id="vfo-b-speaker" title="ลำโพงสำหรับ VFO B">
                                 <option value="both">🔈 ทั้งสอง</option>
                                 <option value="left">👈 ซ้าย</option>
                                 <option value="right">👉 ขวา</option>
                             </select>
+                            <button class="vfo-mute-btn" id="vfo-b-mute" title="ปิดเสียง VFO B">🔊</button>
                         </div>
                     </div>
 

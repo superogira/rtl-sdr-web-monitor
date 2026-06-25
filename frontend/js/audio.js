@@ -115,6 +115,8 @@ const LiveAudio = {
             resyncs: 0,
             isPlaying: false,
             panner: null,         // StereoPannerNode (created on start)
+            muteNode: null,       // GainNode (gain 0 when muted) — created on start
+            muted: false,         // per-VFO mute flag (persisted across reconnects)
             speaker: 'both',      // 'left' | 'both' | 'right'
             reconnectTimer: null,
             heartbeatTimer: null,
@@ -145,13 +147,22 @@ const LiveAudio = {
         }
     },
 
-    /** Create (or reset) a VFO's StereoPannerNode and connect it to master. */
+    /** Create (or reset) a VFO's audio chain: mute gain → panner → master.
+     *
+     * Graph per VFO:  BufferSource → muteNode (gain 0/1) → panner → masterGain
+     * The muteNode is a dedicated GainNode so muting is independent of the
+     * master volume and of speaker routing. */
     _ensurePanner(v) {
         if (!this.ctx) return;
         if (v.panner) { try { v.panner.disconnect(); } catch (e) {} }
+        if (v.muteNode) { try { v.muteNode.disconnect(); } catch (e) {} }
+        v.muteNode = this.ctx.createGain();
+        v.muteNode.gain.value = v.muted ? 0 : 1;
         v.panner = this.ctx.createStereoPanner();
         const pan = SPEAKER_PAN[v.speaker];
         v.panner.pan.value = (pan === undefined) ? 0 : pan;
+        // Chain: muteNode → panner → masterGain.
+        v.muteNode.connect(v.panner);
         v.panner.connect(this.masterGain);
     },
 
@@ -258,6 +269,27 @@ const LiveAudio = {
     /** Backwards-compat: set speaker on the active VFO. */
     setSpeakerActive(mode) { this.setSpeaker(this._activeIdx, mode); },
     getSpeaker(idx) { const v = this._vfos[idx]; return v ? v.speaker : 'both'; },
+
+    // ------------------------------------------------------------------
+    // Per-VFO mute (independent of speaker routing & master volume)
+    // ------------------------------------------------------------------
+    /** Mute/unmute a VFO. When muted the VFO's audio is fully silenced
+     * (muteNode gain → 0) regardless of its speaker routing. The flag is kept
+     * on the VFO state so it survives a WS reconnect / restart. */
+    setMute(idx, on) {
+        const v = this._vfos[idx];
+        if (!v) return;
+        v.muted = !!on;
+        if (v.muteNode) v.muteNode.gain.value = v.muted ? 0 : 1;
+        console.log(`🔊 [audio] VFO ${v.id} ${v.muted ? 'MUTED' : 'unmuted'}`);
+    },
+    toggleMute(idx) {
+        const v = this._vfos[idx];
+        if (!v) return false;
+        this.setMute(idx, !v.muted);
+        return v.muted;
+    },
+    isMuted(idx) { const v = this._vfos[idx]; return v ? v.muted : false; },
 
     // ------------------------------------------------------------------
     // Volume (shared master)
@@ -517,8 +549,10 @@ const LiveAudio = {
         const source = this.ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.playbackRate.value = playbackRate;
-        // Route through THIS VFO's panner (L/R/both) → master gain → speakers.
-        if (v.panner) source.connect(v.panner);
+        // Route: source → muteNode (gain 0/1) → panner (L/R/both) → master →
+        // speakers. Connect to muteNode so muting silences this VFO only.
+        if (v.muteNode) source.connect(v.muteNode);
+        else if (v.panner) source.connect(v.panner);
         else source.connect(this.masterGain);
         source.start(v.nextStartTime);
         v.nextStartTime += audioBuffer.duration / playbackRate;
