@@ -181,6 +181,13 @@
                         <option value="false">ปิด (ไม่บันทึกกลางอัตโนมัติ)</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label>Squelch (dB) — บันทึกเมื่อสัญญาณเกินค่านี้</label>
+                    <input type="number" id="rec-squelch" value="-70" step="1" min="-150" max="0">
+                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        ค่าต่ำ = ไวต่อสัญญาณ (บันทึกง่าย อาจเก็บเสียงรบกวน) · ค่าสูง = เข้มงวด (บันทึกเฉพาะสัญญาณแรง)
+                    </p>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Silence Timeout (วินาที) - หยุดอัดเมื่อเงียบเกิน</label>
@@ -1007,11 +1014,15 @@
             try {
                 const cfg = await API.sdr.getRecordingConfig();
                 const elAuto = document.getElementById('rec-auto');
+                const elSquelch = document.getElementById('rec-squelch');
                 const elSilence = document.getElementById('rec-silence');
                 const elMin = document.getElementById('rec-min');
                 const elMax = document.getElementById('rec-max');
                 if (elAuto && typeof cfg.auto_record === 'boolean') {
                     elAuto.value = cfg.auto_record ? 'true' : 'false';
+                }
+                if (elSquelch && cfg.squelch_level !== undefined) {
+                    elSquelch.value = cfg.squelch_level;
                 }
                 if (elSilence && cfg.vad_silence_timeout !== undefined) {
                     elSilence.value = cfg.vad_silence_timeout;
@@ -1038,6 +1049,7 @@
 
         async saveRecording() {
             const auto_record = document.getElementById('rec-auto').value === 'true';
+            const squelch_level = parseFloat(document.getElementById('rec-squelch').value);
             const vad_silence_timeout = parseInt(document.getElementById('rec-silence').value);
             const min_recording_duration = parseInt(document.getElementById('rec-min').value);
             const max_recording_duration = parseInt(document.getElementById('rec-max').value);
@@ -1048,6 +1060,7 @@
             try {
                 const result = await API.sdr.setRecordingConfig({
                     auto_record,
+                    squelch_level,
                     vad_silence_timeout,
                     min_recording_duration,
                     max_recording_duration,
