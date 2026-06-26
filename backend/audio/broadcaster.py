@@ -1007,6 +1007,30 @@ class AudioBroadcaster:
             listener.id[:8], listener.user_id,
         )
 
+    def get_listener_recordings(self) -> list:
+        """Return per-listener recording status (manual + auto) for dashboard.
+
+        Enumerates every connected audio listener and reports whether it is
+        currently doing a manual recording or a per-listener auto-record, plus
+        the channel (mode / VFO offset / bandwidth) and owning user. Consumed
+        by SDRManager.status → frontend dashboard indicator below the clock.
+        """
+        result = []
+        for ln in self._listeners.values():
+            entry = {
+                "listener_id": ln.id[:8],
+                "user_id": ln.user_id,
+                "user_role": ln.user_role,
+                "mode": ln.mode.value,
+                "vfo_offset_hz": round(ln.vfo_offset_hz, 1),
+                "channel_bw": int(ln.channel_bw),
+                "manual_recording": bool(ln.is_recording),
+                "auto_record_enabled": bool(ln.auto_record),
+                "auto_recording": bool(ln._ar_recording),
+            }
+            result.append(entry)
+        return result
+
     def get_stats(self) -> dict:
         """Return broadcaster statistics."""
         total_iq_drops = 0

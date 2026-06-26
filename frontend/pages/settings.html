@@ -168,16 +168,17 @@
             </div>
 
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>🎙️ การอัดเสียงอัตโนมัติ (เมื่อผู้ใช้ฟังสด)</h2>
+                <h2>🎙️ การบันทึกเสียงความถี่กลาง (Center) อัตโนมัติ</h2>
                 <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
-                    ควบคุมการอัดเสียงอัตโนมัติในขณะที่ผู้ใช้งานกำลังฟังสดที่ความถี่ใดความถี่หนึ่ง
-                    <br>การตั้งค่า Squelch สำหรับการอัดจะย้ายไปอยู่ในส่วน "การตั้งค่าการอัดเสียงของอุปกรณ์" ด้านล่าง
+                    บันทึกเสียงที่ <b>ความถี่กลาง (Center Frequency)</b> ที่ตั้งไว้ในระบบอัตโนมัติเมื่อมีสัญญาณเข้าเกณฑ์ Squelch (ทำงานเป็น background ไม่ต้องมีใครฟังสด)
+                    <br>แยกจากการอัดเสียงของผู้ใช้ตอนฟังสด (ซึ่งเปิด/ปิดได้ที่ Dashboard รายบุคคล)
+                    <br>ค่า Silence / Min / Max Duration ด้านล่างนี้ใช้ <b>ร่วม</b> กับทั้งการบันทึกกลางอัตโนมัติและการอัดอัตโนมัติของผู้ใช้ตอนฟังสด
                 </p>
                 <div class="form-group">
-                    <label>Auto Record (เมื่อผู้ใช้ฟังสด)</label>
+                    <label>บันทึกเสียงความถี่กลางอัตโนมัติ (Center Auto-Record)</label>
                     <select id="rec-auto">
-                        <option value="true">เปิด (อัดอัตโนมัติเมื่อจับสัญญาณตามค่าที่ตั้งใน Dashboard)</option>
-                        <option value="false">ปิด (อัดเองเท่านั้น)</option>
+                        <option value="true">เปิด (บันทึกกลางอัตโนมัติเมื่อจับสัญญาณเกิน Squelch)</option>
+                        <option value="false">ปิด (ไม่บันทึกกลางอัตโนมัติ)</option>
                     </select>
                 </div>
                 <div class="form-row">
@@ -195,7 +196,7 @@
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึกการอัดอัตโนมัติ</button>
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึกการตั้งค่า</button>
                 </div>
             </div>
 

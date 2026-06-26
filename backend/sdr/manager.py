@@ -236,6 +236,11 @@ class SDRManager:
             # Background recording jobs active on any device (for dashboard
             # indicator below the clock).
             "active_job_captures": self._collect_job_captures(),
+            # Per-listener (live listening) recording status: each connected
+            # listener's manual + per-listener auto-record state, channel and
+            # owning user. Drives the dashboard indicator below the clock so
+            # admins can see who is recording what (manual vs auto, which user).
+            "listener_recordings": audio_broadcaster.get_listener_recordings(),
         }
 
     def cursor_signal_level(self, offset_hz: float) -> Optional[float]:

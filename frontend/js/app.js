@@ -1437,15 +1437,40 @@ const App = {
             this.isRecording = !!status.manual_recording;
             const btn = document.getElementById('btn-record');
             if (btn) btn.classList.toggle('recording', this.isRecording);
-            // Show auto-recording indicator if active
-            this.updateAutoRecordIndicator(status.auto_recording, status.recording_source);
+            // Show auto-recording indicator if active (pass full status)
+            this.updateAutoRecordIndicator(status);
         } catch (e) { /* ignore */ }
     },
 
-    updateAutoRecordIndicator(isAuto, source, data) {
-        // Inline button indicator (next to record button)
+    updateAutoRecordIndicator(status) {
+        // Accept either a full status object or legacy (isAuto, source, data).
+        // This keeps backward compatibility with any other callers.
+        let isAuto, source, data;
+        if (status && typeof status === 'object' && !Array.isArray(status)) {
+            data = status;
+            isAuto = !!status.auto_recording;
+            source = status.recording_source;
+        } else {
+            isAuto = arguments[0];
+            source = arguments[1];
+            data = arguments[2] || {};
+        }
+
+        // Inline button indicator (next to record button).
+        // Show if ANY recording is active (manual / center auto / per-listener
+        // auto / job captures) so the icon reflects all activity, not just the
+        // global center auto-record.
+        const hasManual = !!(data && data.manual_recording);
+        const hasListenerRec = !!(data && Array.isArray(data.listener_recordings) &&
+            data.listener_recordings.some(l => l.manual_recording || l.auto_recording));
+        const hasJobRec = !!(data && Array.isArray(data.active_job_captures) &&
+            data.active_job_captures.some(cap =>
+                Array.isArray(cap.frequencies) && cap.frequencies.some(f => f.is_recording)
+            ));
+        const anyActive = isAuto || hasManual || hasListenerRec || hasJobRec;
+
         let el = document.getElementById('auto-rec-indicator');
-        if (isAuto) {
+        if (anyActive) {
             if (!el) {
                 el = document.createElement('span');
                 el.id = 'auto-rec-indicator';
@@ -1453,31 +1478,68 @@ const App = {
                 const btn = document.getElementById('btn-record');
                 if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
             }
-            el.textContent = '🔄AUTO';
-            el.title = `กำลังอัดอัตโนมัติ (source: ${source || 'auto'})`;
+            el.textContent = '🔄REC';
+            el.title = `กำลังบันทึก (source: ${source || 'auto'})`;
         } else if (el) {
             el.remove();
         }
 
-        // Recording status list (below clock)
+        // Recording status list (below clock) — shows ALL active recordings:
+        // 1. Manual (center) recording
+        // 2. Center auto-record (global)
+        // 3. Per-listener manual + auto-record (each user)
+        // 4. Background job captures
         const list = document.getElementById('recording-status-list');
         if (!list) return;
         const items = [];
-        // Auto recording from live listening
+
+        // Helper: build a colored status row
+        const row = (icon, text, color) =>
+            `<div class="rec-status-item" style="display:flex;align-items:center;gap:4px;font-size:0.7rem;color:${color || 'var(--accent-yellow)'};margin-top:2px;">`
+            + `<span style="animation:blink 1s infinite;">${icon}</span>`
+            + `<span>${text}</span>`
+            + `</div>`;
+
+        // Helper: compute VFO frequency from center + offset
+        const centerFreq = (data && data.frequency) || this.currentFreq || 0;
+        const freqFromOffset = (offsetHz) => {
+            const f = centerFreq + (offsetHz || 0);
+            return (f / 1e6).toFixed(4);
+        };
+
+        // 1. Manual recording (center channel, pressed by current user)
+        if (hasManual) {
+            const freqMhz = freqFromOffset(0);
+            const mode = (data && data.mode) || this.currentMode || 'FM';
+            items.push(row('🔴', `บันทึกด้วยมือ: ${freqMhz} MHz | ${mode}`));
+        }
+
+        // 2. Center auto-record (global background)
         if (isAuto) {
-            const freqHz = (data && data.vfo_frequency) || this.currentFreq || 0;
+            const freqMhz = freqFromOffset(0);
             const mode = (data && data.mode) || this.currentMode || 'FM';
             const bwHz = (data && data.channel_bw) || this._channelBw || 12000;
-            const freqMhz = (freqHz / 1e6).toFixed(4);
             const bwKhz = (bwHz / 1000).toFixed(0);
-            items.push(
-                `<div class="rec-status-item" style="display:flex;align-items:center;gap:4px;font-size:0.7rem;color:var(--accent-yellow);margin-top:4px;">`
-                + `<span style="animation:blink 1s infinite;">🔴</span>`
-                + `<span>อัดอัตโนมัติ: ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz</span>`
-                + `</div>`
-            );
+            items.push(row('🔴', `อัดกลางอัตโนมัติ: ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
         }
-        // Background job captures (from status payload, if provided)
+
+        // 3. Per-listener recordings (manual + auto, each user's own VFO)
+        if (data && Array.isArray(data.listener_recordings)) {
+            for (const ln of data.listener_recordings) {
+                const freqMhz = freqFromOffset(ln.vfo_offset_hz);
+                const mode = ln.mode || 'FM';
+                const bwKhz = ((ln.channel_bw || 12000) / 1000).toFixed(0);
+                const userTag = ln.user_id ? `👤 ${ln.user_id.slice(0, 8)}` : '👤 guest';
+                if (ln.manual_recording) {
+                    items.push(row('🔴', `บันทึกด้วยมือ (${userTag}): ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
+                }
+                if (ln.auto_recording) {
+                    items.push(row('🎙️', `อัดอัตโนมัติ ฟังสด (${userTag}): ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
+                }
+            }
+        }
+
+        // 4. Background job captures
         if (data && Array.isArray(data.active_job_captures)) {
             for (const cap of data.active_job_captures) {
                 if (!Array.isArray(cap.frequencies)) continue;
@@ -1485,12 +1547,8 @@ const App = {
                     if (!f.is_recording) continue;
                     const freqMhz = (f.frequency_hz / 1e6).toFixed(4);
                     const bwKhz = ((f.bandwidth_hz || 12000) / 1000).toFixed(0);
-                    items.push(
-                        `<div class="rec-status-item" style="display:flex;align-items:center;gap:4px;font-size:0.7rem;color:var(--accent-yellow);margin-top:2px;">`
-                        + `<span style="animation:blink 1s infinite;">📼</span>`
-                        + `<span>Job ${cap.job_label || cap.job_id.slice(0,8)}: ${freqMhz} MHz | ${f.demod_mode} | BW ${bwKhz}kHz</span>`
-                        + `</div>`
-                    );
+                    const label = cap.job_label || (cap.job_id ? cap.job_id.slice(0, 8) : 'job');
+                    items.push(row('📼', `Job ${label}: ${freqMhz} MHz | ${f.demod_mode} | BW ${bwKhz}kHz`));
                 }
             }
         }
@@ -1656,9 +1714,12 @@ const App = {
                     el.textContent = data.listeners > 0 ? `👥 ${data.listeners}` : '';
                 }
             }
-            // Sync auto-recording indicator (independent from manual record button)
-            if (data.auto_recording !== undefined || data.recording_source !== undefined) {
-                this.updateAutoRecordIndicator(data.auto_recording, data.recording_source, data);
+            // Sync auto-recording indicator (independent from manual record button).
+            // Pass the full status object so the indicator can show ALL active
+            // recordings (manual / center auto / per-listener auto / job captures).
+            if (data.auto_recording !== undefined || data.recording_source !== undefined ||
+                Array.isArray(data.listener_recordings) || Array.isArray(data.active_job_captures)) {
+                this.updateAutoRecordIndicator(data);
             }
             if (changed) {
                 this.updateUI();
