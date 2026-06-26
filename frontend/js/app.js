@@ -232,12 +232,20 @@ const App = {
             if (gs) gs.value = data.gain;
             if (gi) gi.value = data.gain;
         }
-        // Sync squelch slider + numeric input (same edit-guard as gain).
+        // Sync squelch slider + numeric input. While listening live the SQL is
+        // PER-LISTENER (this user's own value, sent via the audio WS), so the
+        // GLOBAL `data.squelch_level` is NOT this user's value. Adopting it
+        // here would snap the slider back to the global value every ~1s (the
+        // "เด้งกลับ" symptom that also let one user move another's slider). We
+        // only adopt the global value when NOT listening live.
         if (data.squelch_level !== undefined && !this._activeEdits.has('squelch')) {
-            const ss = document.getElementById('squelch-slider');
-            const si = document.getElementById('squelch-input');
-            if (ss) ss.value = data.squelch_level;
-            if (si) si.value = data.squelch_level;
+            const listeningSql = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+            if (!listeningSql) {
+                const ss = document.getElementById('squelch-slider');
+                const si = document.getElementById('squelch-input');
+                if (ss) ss.value = data.squelch_level;
+                if (si) si.value = data.squelch_level;
+            }
         }
         // Sync PPM (Frequency Correction) slider + numeric input (same guard).
         if (data.freq_correction_ppm !== undefined && !this._activeEdits.has('ppm')) {
@@ -722,23 +730,31 @@ const App = {
             setter: (v) => API.sdr.setGain(v),
         });
 
-        // Squelch (slider + numeric input)
-        // - Updates the GLOBAL squelch (used for auto-recording gating).
-        // - ALSO pushes the value to the per-listener audio WS so that the
-        //   LIVE audio is muted to silence when the signal is below the
-        //   threshold (like a real radio — no static/noise comes through).
+        // Squelch (slider + numeric input) — PER-LISTENER (per-user), like a
+        // real radio. Each user's SQL is independent:
+        //   - Listening live → send ONLY to this user's per-listener audio WS
+        //     ({"type":"squelch"}). Never touches the global state, so one user
+        //     moving SQL no longer moves anyone else's slider.
+        //   - Not listening → remember the value locally (_pendingSquelch) and
+        //     push it to the listener as soon as they press ฟังสด. Admins may
+        //     additionally set the GLOBAL baseline via the admin-only
+        //     /api/sdr/squelch endpoint (used for global auto-record gating +
+        //     the initial value handed to new listeners).
         //   Values <= -120 disable squelch (pass everything, including noise).
         _bindSliderInputPair({
             sliderId: 'squelch-slider',
             inputId: 'squelch-input',
             setter: (v) => {
                 const level = parseFloat(v);
-                // Per-VFO live squelch (broadcast to all VFOs, immediate)
+                // Remember this user's chosen SQL so it applies on next listen.
+                this._pendingSquelch = level;
                 if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying) {
+                    // Per-listener (broadcast to all of THIS user's VFOs only).
                     LiveAudio.setSquelch(level);
+                } else if (Auth.isAdmin && Auth.isAdmin()) {
+                    // Admin (not listening) may also set the global baseline.
+                    API.sdr.setSquelch(level);
                 }
-                // Global squelch (for auto-recording gating + persistence)
-                API.sdr.setSquelch(level);
             },
         });
 
@@ -1322,6 +1338,23 @@ const App = {
             btn.classList.toggle('muted', muted);
             btn.title = muted ? `เปิดเสียง VFO ${this._vfoId(idx)}` : `ปิดเสียง VFO ${this._vfoId(idx)}`;
         }
+    },
+
+    // Server confirmed THIS listener's per-listener squelch (the value the
+    // audio WS actually applied). While listening live the SQL slider/input
+    // should reflect THIS user's value (not the global status broadcast).
+    // We deliberately ignore the global `squelch_level` in
+    // syncControlsFromStatus() while live (see the guard there), so this ack
+    // is the authoritative source of truth for the slider while listening.
+    _onSquelchAck(idx, obj) {
+        if (obj.level === undefined || obj.level === null) return;
+        const level = Number(obj.level);
+        // Don't clobber while the user is mid-edit (re-arming the edit lock).
+        if (this._activeEdits.has('squelch')) return;
+        const ss = document.getElementById('squelch-slider');
+        const si = document.getElementById('squelch-input');
+        if (ss) ss.value = level;
+        if (si) si.value = level;
     },
 
     // Server confirmed an auto-squelch toggle for THIS listener. Update the

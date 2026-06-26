@@ -395,6 +395,18 @@ const LiveAudio = {
                     if (center > 0) {
                         this._sendControlVfo(idx, { type: "vfo", frequency: Math.round(center + off) });
                     }
+                    // Push THIS user's pending squelch so the listener starts
+                    // with the user's own SQL (independent of the global value
+                    // or what other users have set). Falls back to the current
+                    // slider value if no explicit pending value was stored.
+                    let sqlLevel = App._pendingSquelch;
+                    if (sqlLevel === undefined || sqlLevel === null) {
+                        const si = document.getElementById('squelch-input');
+                        sqlLevel = si ? parseFloat(si.value) : null;
+                    }
+                    if (sqlLevel !== null && !isNaN(sqlLevel)) {
+                        this._sendControlVfo(idx, { type: "squelch", level: Number(sqlLevel) });
+                    }
                 }
             };
 
@@ -479,6 +491,13 @@ const LiveAudio = {
                     if (typeof App !== 'undefined' && App._onAutoRecordAck) App._onAutoRecordAck(obj);
                 } else if (obj.type === "auto_squelch_ack") {
                     if (typeof App !== 'undefined' && App._onAutoSquelchAck) App._onAutoSquelchAck(obj);
+                } else if (obj.type === "squelch_ack") {
+                    // Server confirmed this listener's per-listener squelch.
+                    // Track it on the VFO and let App sync the slider from the
+                    // acknowledged value (NOT the global status broadcast).
+                    const v = this._vfos[idx];
+                    if (v) v.squelch = obj.level;
+                    if (typeof App !== 'undefined' && App._onSquelchAck) App._onSquelchAck(idx, obj);
                 }
             } catch {
                 // non-JSON (e.g. "pong") — ignore

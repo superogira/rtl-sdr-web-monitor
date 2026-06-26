@@ -258,9 +258,16 @@ async def set_mode(
 @router.post("/squelch")
 async def set_squelch(
     req: SquelchRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set squelch level."""
+    """Set the GLOBAL squelch baseline (admin only).
+
+    This controls the global auto-record gating threshold and the initial
+    squelch given to newly-connected listeners. Regular users adjust their
+    OWN per-listener squelch via the audio WebSocket ({"type":"squelch"}),
+    which is fully independent — one user changing SQL no longer moves
+    anyone else's slider.
+    """
     sdr_manager.set_squelch(req.level)
     return {"squelch": req.level}
 
