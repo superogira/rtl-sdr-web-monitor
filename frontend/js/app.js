@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.26-v2',  // Waterfall AUTO (once/cont) fix: no longer
+    VERSION: '2026.06.26-v3',  // Waterfall AUTO (once/cont) fix: no longer
                                // clobbered by periodic status sync. AUTO
                                // values now persist until the user changes
                                // them or the active device changes.
@@ -61,6 +61,7 @@ const App = {
         API.sdr.setFFTSize(fftSize).catch(() => {});
 
         await this.loadRecentRecordings();
+        this.initBookmarks();
         this._showVersionBadge();
         console.log('✅ App initialized v' + this.VERSION);
     },
@@ -2963,6 +2964,9 @@ const App = {
 
         // Signal Tag: detect strong signals and update annotations
         this._updateSignalAnnotations(line);
+        // Bookmark signal detection: blink chips/rows green when their
+        // frequency has a signal above squelch.
+        this._updateBookmarkSignals(line);
     },
 
     spectrumToColor(db) {
@@ -3249,12 +3253,309 @@ const App = {
         window.location.href = '/recordings';
     },
 
+    // === Bookmarks (client-side, per-user via localStorage) ===
+    // Each bookmark: { id, name, freqHz, mode, createdAt }
+    // Key is namespaced by username so different accounts on the same
+    // browser don't see each other's bookmarks.
+    _BOOKMARK_MODES: ['FM', 'AM', 'USB', 'LSB'],
+
+    _bookmarkKey() {
+        let user = '';
+        try { user = (Auth.getUser() || {}).username || 'guest'; } catch (e) { user = 'guest'; }
+        return `bookmarks_v1__${user}`;
+    },
+
+    _loadBookmarks() {
+        try {
+            const raw = localStorage.getItem(this._bookmarkKey());
+            this.bookmarks = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(this.bookmarks)) this.bookmarks = [];
+        } catch (e) {
+            console.warn('Failed to load bookmarks:', e);
+            this.bookmarks = [];
+        }
+        return this.bookmarks;
+    },
+
+    _saveBookmarks() {
+        try {
+            localStorage.setItem(this._bookmarkKey(), JSON.stringify(this.bookmarks));
+        } catch (e) {
+            console.error('Failed to save bookmarks:', e);
+            alert('บันทึก bookmark ไม่สำเร็จ (อาจเกินโควต้า localStorage)');
+        }
+    },
+
+    /** Initialize bookmark UI: load from storage + render both panels + wire
+     *  the collapse toggle for the right-panel frequency list. */
+    initBookmarks() {
+        this._loadBookmarks();
+        // Restore the collapsed state of the right-panel frequency list.
+        const freqList = document.querySelector('.freq-list');
+        if (freqList) {
+            const collapsed = localStorage.getItem('freq_list_collapsed') === 'true';
+            freqList.classList.toggle('collapsed', collapsed);
+            const chev = document.getElementById('freq-list-chevron');
+            if (chev) chev.textContent = collapsed ? '▸' : '▾';
+        }
+        this.renderBookmarks();
+        this.renderFreqList();
+    },
+
+    /** Bookmark chips in the LEFT panel (Bookmarks bar). Clicking a chip
+     *  instantly tunes the active VFO to the bookmark's frequency. */
+    renderBookmarks() {
+        const container = document.getElementById('bookmarks-container');
+        if (!container) return;
+        if (!this.bookmarks.length) {
+            container.innerHTML = '<div class="text-muted" style="font-size:0.75rem;padding:6px 8px;">ยังไม่มี bookmark — กด “+ เพิ่ม” เพื่อบันทึกความถี่ที่ฟังอยู่</div>';
+            return;
+        }
+        container.innerHTML = this.bookmarks.map(bm => {
+            const mhz = (bm.freqHz / 1e6).toFixed(4);
+            const escName = this._esc(bm.name);
+            return `<button class="bookmark-chip" data-bm-id="${bm.id}" title="${escName} — ${mhz} MHz (${bm.mode || 'FM'})"
+                        onclick="App.gotoBookmark('${bm.id}')">
+                        <span class="bookmark-chip-name">${escName}</span>
+                        <span class="bookmark-chip-freq">${mhz}</span>
+                    </button>`;
+        }).join('');
+    },
+
+    /** Rows in the RIGHT panel ("ความถี่ที่บันทึกไว้"). Each row shows
+     *  name + frequency and is clickable. Also has small edit/delete actions. */
+    renderFreqList() {
+        const container = document.getElementById('freq-list-container');
+        const count = document.getElementById('freq-count');
+        if (count) count.textContent = this.bookmarks.length;
+        if (!container) return;
+        if (!this.bookmarks.length) {
+            container.innerHTML = '<div class="text-muted" style="font-size:0.75rem;padding:6px 12px;">ยังไม่มีความถี่ที่บันทึกไว้</div>';
+            return;
+        }
+        // Sort by frequency ascending for easy scanning.
+        const sorted = [...this.bookmarks].sort((a, b) => a.freqHz - b.freqHz);
+        container.innerHTML = sorted.map(bm => {
+            const mhz = (bm.freqHz / 1e6).toFixed(4);
+            const escName = this._esc(bm.name);
+            const mode = bm.mode || 'FM';
+            return `<div class="freq-item" data-bm-id="${bm.id}" onclick="App.gotoBookmark('${bm.id}')" title="คลิกเพื่อไปยัง ${mhz} MHz">
+                        <span class="signal-led"></span>
+                        <div class="freq-info">
+                            <div class="freq-value">${mhz} <span class="freq-unit">MHz</span></div>
+                            <div class="freq-name">${escName}</div>
+                        </div>
+                        <span class="freq-mode">${mode}</span>
+                        <span class="bm-actions">
+                            <button class="bm-act-btn" title="แก้ไข" onclick="event.stopPropagation(); App.editBookmark('${bm.id}')">✏️</button>
+                            <button class="bm-act-btn" title="ลบ" onclick="event.stopPropagation(); App.deleteBookmark('${bm.id}')">🗑️</button>
+                        </span>
+                    </div>`;
+        }).join('');
+    },
+
+    // === Bookmark signal detection ===
+    // Called every spectrum frame from drawWaterfall(). For each bookmark
+    // whose frequency falls inside the current passband, we sample the dB at
+    // that frequency and compare it to the squelch threshold. If above SQL,
+    // the corresponding chip + row get the `.signal-active` class so they
+    // flash green via CSS. A short hold (~400ms) keeps the flash lit through
+    // brief noise dips so the UI doesn't strobe.
+    _bmSignalUntil: {},   // bmId → timestamp until which the flash stays on
+    _updateBookmarkSignals(spectrum) {
+        if (!this.bookmarks.length || !spectrum || !spectrum.length) return;
+
+        const numBins = spectrum.length;
+        const sr = this._sampleRate || 2048000;
+        const binHz = sr / numBins;
+        const lowHz = this.currentFreq - sr / 2;
+        const highHz = this.currentFreq + sr / 2;
+
+        // Read the current squelch threshold.
+        const squelchInput = document.getElementById('squelch-input');
+        const squelchLevel = squelchInput ? parseFloat(squelchInput.value) : -120;
+        const sql = isFinite(squelchLevel) ? squelchLevel : -120;
+
+        const now = Date.now();
+        const HOLD_MS = 400;  // keep flash on through brief dips
+
+        for (const bm of this.bookmarks) {
+            const f = bm.freqHz;
+            // Skip bookmarks outside the current passband (can't measure).
+            if (f < lowHz || f > highHz) {
+                // Make sure a previously-active state is cleared.
+                this._setBookmarkSignal(bm.id, false);
+                continue;
+            }
+            // Map frequency → bin center. Average ±1 bin to reject spikes.
+            const bin = Math.round((f - lowHz) / binHz);
+            let sum = 0, cnt = 0;
+            for (let k = bin - 1; k <= bin + 1; k++) {
+                if (k >= 0 && k < numBins) { sum += spectrum[k]; cnt++; }
+            }
+            const db = cnt > 0 ? (sum / cnt) : -Infinity;
+
+            const active = db > sql;
+            if (active) {
+                this._bmSignalUntil[bm.id] = now + HOLD_MS;
+            }
+            const on = active || (this._bmSignalUntil[bm.id] || 0) > now;
+            this._setBookmarkSignal(bm.id, on);
+        }
+    },
+
+    /** Apply/remove the signal-active flash on a bookmark's chip + row. */
+    _setBookmarkSignal(bmId, on) {
+        const chip = document.querySelector(`.bookmark-chip[data-bm-id="${bmId}"]`);
+        if (chip) chip.classList.toggle('signal-active', on);
+        const row = document.querySelector(`.freq-item[data-bm-id="${bmId}"]`);
+        if (row) {
+            row.classList.toggle('signal-active', on);
+            const led = row.querySelector('.signal-led');
+            if (led) led.classList.toggle('on', on);
+        }
+    },
+
+    /** Tune the active VFO to a bookmark (and switch mode if needed). */
+    gotoBookmark(id) {
+        const bm = this.bookmarks.find(b => b.id === id);
+        if (!bm) return;
+        this.setVFO(bm.freqHz);
+        // Switch demod mode if the bookmark carries one and it differs.
+        if (bm.mode && bm.mode !== this.currentMode) {
+            const btn = document.querySelector(`.mode-btn[data-mode="${bm.mode}"]`);
+            if (btn) btn.click();
+        }
+        console.log(`🔖 → ${bm.name} @ ${(bm.freqHz/1e6).toFixed(4)} MHz`);
+    },
+
+    /** Add: opens a dialog pre-filled with the CURRENT active-VFO frequency. */
     showAddBookmark() {
-        const name = prompt('ชื่อ bookmark:');
-        if (!name) return;
-        const freqMHz = prompt('ความถี่ (MHz):', (this.currentFreq / 1e6).toFixed(3));
-        if (!freqMHz) return;
-        alert(`เพิ่ม bookmark "${name}" ที่ ${freqMHz} MHz (${this.currentMode}) - กำลังพัฒนา API`);
+        const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
+        this._openBookmarkDialog({
+            mode: 'add',
+            name: '',
+            freqHz: vfoHz,
+            demodMode: this.currentMode,
+        });
+    },
+
+    editBookmark(id) {
+        const bm = this.bookmarks.find(b => b.id === id);
+        if (!bm) return;
+        this._openBookmarkDialog({
+            mode: 'edit',
+            id: id,
+            name: bm.name,
+            freqHz: bm.freqHz,
+            demodMode: bm.mode || this.currentMode,
+        });
+    },
+
+    deleteBookmark(id) {
+        const bm = this.bookmarks.find(b => b.id === id);
+        if (!bm) return;
+        if (!confirm(`ลบ bookmark “${bm.name}” ใช่ไหม?`)) return;
+        this.bookmarks = this.bookmarks.filter(b => b.id !== id);
+        this._saveBookmarks();
+        this.renderBookmarks();
+        this.renderFreqList();
+        console.log('🔖 Deleted bookmark:', bm.name);
+    },
+
+    /** Shared dialog for add/edit. Pre-fills frequency from the active VFO,
+     *  but the user can freely change name / frequency / mode. */
+    _openBookmarkDialog({ mode, id, name, freqHz, demodMode }) {
+        const isEdit = mode === 'edit';
+        const overlay = document.createElement('div');
+        overlay.className = 'freq-input-overlay';
+        const modeOptions = this._BOOKMARK_MODES.map(m =>
+            `<option value="${m}" ${m === demodMode ? 'selected' : ''}>${m}</option>`
+        ).join('');
+        overlay.innerHTML = `
+            <div class="freq-input-box bm-dialog">
+                <h3>${isEdit ? '✏️ แก้ไข Bookmark' : '🔖 เพิ่ม Bookmark'}</h3>
+                <label class="bm-label">ชื่อ</label>
+                <input type="text" id="bm-name" value="${this._esc(name)}" placeholder="เช่น วิทยุตำรวจ" autofocus>
+                <label class="bm-label">ความถี่ (MHz)</label>
+                <input type="text" id="bm-freq" value="${(freqHz/1e6).toFixed(4)}">
+                <label class="bm-label">โหมด</label>
+                <select id="bm-mode">${modeOptions}</select>
+                <div class="freq-input-btns">
+                    <button class="btn btn-primary" id="bm-ok">${isEdit ? '💾 บันทึก' : '✅ เพิ่ม'}</button>
+                    <button class="btn" id="bm-cancel">ยกเลิก</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const nameEl = document.getElementById('bm-name');
+        const freqEl = document.getElementById('bm-freq');
+        nameEl.focus();
+        nameEl.select();
+
+        const close = () => overlay.remove();
+        const apply = () => {
+            const nm = nameEl.value.trim();
+            const fMHz = parseFloat(freqEl.value);
+            const md = document.getElementById('bm-mode').value;
+            if (!nm) { alert('กรุณาใส่ชื่อ bookmark'); nameEl.focus(); return; }
+            if (isNaN(fMHz) || fMHz < 0.5 || fMHz > 1766) {
+                alert('ความถี่ต้องอยู่ระหว่าง 0.5 – 1766 MHz');
+                freqEl.focus();
+                return;
+            }
+            const record = {
+                id: id || ('bm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7)),
+                name: nm,
+                freqHz: Math.round(fMHz * 1e6),
+                mode: md,
+                createdAt: isEdit ? (this.bookmarks.find(b => b.id === id) || {}).createdAt || Date.now() : Date.now(),
+            };
+            if (isEdit) {
+                const idx = this.bookmarks.findIndex(b => b.id === id);
+                if (idx >= 0) this.bookmarks[idx] = record;
+            } else {
+                this.bookmarks.push(record);
+            }
+            this._saveBookmarks();
+            this.renderBookmarks();
+            this.renderFreqList();
+            close();
+            console.log(`🔖 ${isEdit ? 'Updated' : 'Added'} bookmark:`, record.name);
+        };
+
+        document.getElementById('bm-ok').addEventListener('click', apply);
+        document.getElementById('bm-cancel').addEventListener('click', close);
+        [nameEl, freqEl].forEach(el => el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') apply();
+            if (e.key === 'Escape') close();
+        }));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    },
+
+    /** Toggle collapse of the right-panel frequency list. Persisted. */
+    toggleFreqListCollapse() {
+        const freqList = document.querySelector('.freq-list');
+        if (!freqList) return;
+        const collapsed = freqList.classList.toggle('collapsed');
+        const chev = document.getElementById('freq-list-chevron');
+        if (chev) chev.textContent = collapsed ? '▸' : '▾';
+        localStorage.setItem('freq_list_collapsed', String(collapsed));
+    },
+
+    /** Minimal HTML escaper for user-provided bookmark names.
+     *  Entity strings are built at runtime via charCode so that no HTML
+     *  entities appear literally in the source (some tooling decodes them). */
+    _esc(s) {
+        const A = String.fromCharCode(38); // ampersand char
+        const map = {};
+        map[String.fromCharCode(38)] = A + 'amp;';   // &  -> &
+        map[String.fromCharCode(60)] = A + 'lt;';    // <  -> <
+        map[String.fromCharCode(62)] = A + 'gt;';    // >  -> >
+        map[String.fromCharCode(34)] = A + 'quot;';  // "  -> "
+        map[String.fromCharCode(39)] = A + '#039;';  // '  -> &#039;
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => map[ch] || ch);
     },
 };
 

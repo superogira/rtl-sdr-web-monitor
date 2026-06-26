@@ -678,6 +678,170 @@ a:hover {
     font-family: var(--font-mono);
 }
 
+/* "MHz" unit label inside a freq-value, dimmed. */
+.freq-item .freq-unit {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+/* === Bookmarks: left-panel chips === */
+#bookmarks-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px 6px;
+    min-height: 24px;
+}
+
+.bookmark-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: var(--transition);
+    max-width: 100%;
+}
+.bookmark-chip:hover {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #fff;
+    box-shadow: 0 0 6px var(--accent-blue)50;
+}
+.bookmark-chip:active {
+    transform: scale(0.95);
+}
+.bookmark-chip-name {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90px;
+}
+.bookmark-chip-freq {
+    font-size: 0.62rem;
+    color: var(--text-accent);
+    opacity: 0.85;
+}
+.bookmark-chip:hover .bookmark-chip-freq {
+    color: #fff;
+    opacity: 1;
+}
+
+/* === Frequency List: collapse + header interaction === */
+.freq-list-header {
+    cursor: pointer;
+    user-select: none;
+}
+.freq-list-header:hover {
+    color: var(--text-primary);
+}
+.freq-list-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.freq-list-chevron {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    width: 10px;
+    display: inline-block;
+    text-align: center;
+}
+/* Collapsed state: hide the container rows. */
+.freq-list.collapsed #freq-list-container {
+    display: none;
+}
+
+/* === Bookmark row actions (edit / delete) === */
+.freq-item .bm-actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+    /* Hidden by default; revealed on row hover so the list stays clean. */
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.freq-item:hover .bm-actions {
+    opacity: 1;
+}
+.bm-act-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    line-height: 1;
+    color: var(--text-muted);
+    transition: var(--transition);
+}
+.bm-act-btn:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+}
+
+/* === Bookmark dialog (shares .freq-input-box base styling) === */
+.bm-dialog {
+    width: 320px;
+    max-width: 90vw;
+    text-align: left;
+}
+.bm-dialog h3 {
+    text-align: center;
+    margin-bottom: 16px;
+}
+.bm-dialog .bm-label {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin: 10px 0 4px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+}
+.bm-dialog input[type="text"] {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+}
+.bm-dialog input[type="text"]:focus {
+    border-color: var(--accent-blue);
+}
+.bm-dialog select {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    cursor: pointer;
+}
+.bm-dialog select:focus {
+    border-color: var(--accent-blue);
+}
+
 /* === Live Feed === */
 .live-feed {
     flex: 1;
@@ -1967,6 +2131,36 @@ a:hover {
 /* Respect reduced-motion: don't animate, just hold a steady green tint. */
 @media (prefers-reduced-motion: reduce) {
     .vfo-row.vfo-rx-active {
+        animation: none;
+        border-color: rgba(74, 222, 128, 0.8);
+        background: rgba(74, 222, 128, 0.20);
+    }
+}
+
+/* === Bookmark signal-active flash ===
+   When a bookmark's frequency has a signal above the squelch threshold,
+   both the chip (left panel) and the row (right panel) flash green so the
+   operator can spot active bookmarks at a glance. */
+.bookmark-chip.signal-active,
+.freq-item.signal-active {
+    animation: bm-signal-pulse 0.8s ease-in-out infinite;
+}
+@keyframes bm-signal-pulse {
+    0%, 100% {
+        border-color: rgba(74, 222, 128, 0.35);
+        background: rgba(74, 222, 128, 0.10);
+        box-shadow: 0 0 0 rgba(74, 222, 128, 0);
+    }
+    50% {
+        border-color: rgba(74, 222, 128, 1);
+        background: rgba(74, 222, 128, 0.28);
+        box-shadow: 0 0 12px rgba(74, 222, 128, 0.50);
+    }
+}
+/* Respect reduced-motion: hold a steady green tint instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+    .bookmark-chip.signal-active,
+    .freq-item.signal-active {
         animation: none;
         border-color: rgba(74, 222, 128, 0.8);
         background: rgba(74, 222, 128, 0.20);
