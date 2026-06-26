@@ -205,14 +205,22 @@ const App = {
             }
             this.updateFreqDisplay();
         }
-        // Sync channel bandwidth button active state (buttons in header)
+        // Sync channel bandwidth button active state (buttons in header).
+        // While listening live, channel bandwidth is PER-LISTENER (sent via
+        // the audio WS), so the global `data.channel_bw` is NOT this user's
+        // value. Adopting it here would snap the active BW button back to the
+        // global value every ~1s (the "เด้งกลับ" symptom). Only adopt it when
+        // NOT listening live.
         if (data.channel_bw !== undefined) {
-            this._channelBw = data.channel_bw;
-            const bwButtons = document.getElementById('bw-buttons');
-            if (bwButtons) {
-                bwButtons.querySelectorAll('.bw-btn').forEach(b =>
-                    b.classList.toggle('active', parseInt(b.dataset.bw) === data.channel_bw)
-                );
+            const listeningBw = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+            if (!listeningBw) {
+                this._channelBw = data.channel_bw;
+                const bwButtons = document.getElementById('bw-buttons');
+                if (bwButtons) {
+                    bwButtons.querySelectorAll('.bw-btn').forEach(b =>
+                        b.classList.toggle('active', parseInt(b.dataset.bw) === data.channel_bw)
+                    );
+                }
             }
         }
         // Sync gain slider + numeric input — but NOT while the user is editing
@@ -1535,10 +1543,19 @@ const App = {
                 this.updateFreqDisplay();
             }
             if (data.mode) {
-                this.currentMode = data.mode;
-                document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === data.mode));
-                const rm = document.getElementById('radio-mode');
-                if (rm) rm.textContent = data.mode;
+                // While listening live, the demod mode is PER-LISTENER (each
+                // user picks their own mode via the audio WS). The global
+                // center-channel `data.mode` is NOT this user's mode, so
+                // adopting it here would snap the active mode button back to
+                // the global value every ~1s (the "เด้งกลับ" symptom). Only
+                // adopt the global mode when NOT listening live.
+                const listeningMode = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+                if (!listeningMode) {
+                    this.currentMode = data.mode;
+                    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === data.mode));
+                    const rm = document.getElementById('radio-mode');
+                    if (rm) rm.textContent = data.mode;
+                }
             }
             // Apply per-device waterfall dB range (overrides global when set)
             this._applyDeviceWaterfallRange(data);
