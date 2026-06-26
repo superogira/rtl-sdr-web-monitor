@@ -2,7 +2,10 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.26-v1',  // Per-VFO SOLO / Priority: long-press a VFO's
+    VERSION: '2026.06.26-v2',  // Waterfall AUTO (once/cont) fix: no longer
+                               // clobbered by periodic status sync. AUTO
+                               // values now persist until the user changes
+                               // them or the active device changes.
                                // mute/speaker button to listen to ONLY that
                                // VFO (others auto-muted). Click again (or
                                // long-press the same VFO) to restore each
@@ -2698,7 +2701,31 @@ const App = {
     //   1. Active device config (waterfall_db_min/max from backend)
     //   2. localStorage (Display tab global setting)
     //   3. Hardcoded default (-110 / -55)
+    //
+    // GUARDS (to avoid clobbering user/AUTO adjustments every ~1s):
+    //   A. If AUTO mode is active ('once' or 'cont'), do NOT overwrite — the
+    //      AUTO logic in _renderWaterfall() owns _dbMin/_dbMax until it's done.
+    //   B. If the active device hasn't changed since the last call, do NOT
+    //      overwrite — device config is static, so re-applying it every status
+    //      tick would just snap back any manual/AUTO adjustment. We only apply
+    //      when the device actually changes (or on the very first call).
     _applyDeviceWaterfallRange(status) {
+        // Guard A: AUTO mode owns the dB range while active.
+        if (this._autoMode === 'once' || this._autoMode === 'cont') {
+            return;
+        }
+        // Guard B: only (re)apply when the active device changes.
+        const devId = status && status.device_id != null ? String(status.device_id) : null;
+        if (devId !== null && devId === this._lastAppliedDeviceId) {
+            // Same device as before — don't clobber manual/AUTO values.
+            // Still keep the per-device-override flag in sync for rendering.
+            const devMin0 = status && status.waterfall_db_min != null ? Number(status.waterfall_db_min) : null;
+            const devMax0 = status && status.waterfall_db_max != null ? Number(status.waterfall_db_max) : null;
+            this._deviceWaterfallActive = (devMin0 != null && devMax0 != null);
+            return;
+        }
+        if (devId !== null) this._lastAppliedDeviceId = devId;
+
         const devMin = status && status.waterfall_db_min != null ? Number(status.waterfall_db_min) : null;
         const devMax = status && status.waterfall_db_max != null ? Number(status.waterfall_db_max) : null;
         // Mark whether a per-device override is active. When active,
