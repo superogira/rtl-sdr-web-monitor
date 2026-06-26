@@ -383,8 +383,22 @@ const LiveAudio = {
     // ------------------------------------------------------------------
     setVolume(vol) {
         this.volume = Math.max(0, Math.min(1, vol));
-        if (this.masterGain) this.masterGain.gain.value = this.volume;
+        // When muted, keep the stored volume but leave the gain at 0.
+        if (!this._muted && this.masterGain) {
+            this.masterGain.gain.value = this.volume;
+        }
         localStorage.setItem("audio_volume", String(this.volume));
+    },
+
+    /** Mute toggle. Muting preserves the real volume so unmuting restores it
+     *  and never overwrites the saved volume in localStorage. */
+    get muted() { return !!this._muted; },
+    setMuted(muted) {
+        muted = !!muted;
+        this._muted = muted;
+        if (this.masterGain) {
+            this.masterGain.gain.value = muted ? 0 : (this.volume || 0);
+        }
     },
 
     // ------------------------------------------------------------------

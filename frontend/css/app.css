@@ -1097,8 +1097,18 @@ a:hover {
 
 .volume-control .volume-icon {
     font-size: 1rem;
-    cursor: default;
+    cursor: pointer;
     user-select: none;
+    transition: color 0.15s, opacity 0.15s;
+}
+
+.volume-control .volume-icon:hover {
+    opacity: 0.8;
+}
+
+.volume-control.muted .volume-icon {
+    color: var(--accent-red, #ef4444);
+    opacity: 0.85;
 }
 
 .volume-control input[type="range"] {

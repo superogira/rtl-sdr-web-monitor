@@ -1563,6 +1563,7 @@ const App = {
         const slider = document.getElementById('volume-slider');
         const pct = document.getElementById('volume-pct');
         const icon = document.getElementById('volume-icon');
+        const ctrl = document.getElementById('volume-control');
         if (!slider) return;
 
         const savedVol = parseFloat(localStorage.getItem('audio_volume'));
@@ -1576,14 +1577,67 @@ const App = {
             LiveAudio.volume = initialPct / 100;
         }
 
+        // Click the speaker icon to toggle mute. We keep a snapshot of the
+        // real volume (_preMutePct) so unmuting restores it exactly, and we
+        // never persist volume=0 from muting (the saved volume stays intact).
+        this._masterMuted = false;
+        this._preMutePct = initialPct;
+        if (icon) {
+            icon.addEventListener('click', () => this._toggleMasterMute());
+        }
+
         slider.addEventListener('input', (e) => {
             const val = parseInt(e.target.value);
             if (pct) pct.textContent = val + '%';
+            // Dragging the slider away from 0 clears mute.
+            if (val > 0 && this._masterMuted) this._clearMasterMute();
+            if (val === 0 && !this._masterMuted) this._applyMasterMute();
             this._updateVolumeIcon(val, icon);
             if (typeof LiveAudio !== 'undefined') {
                 LiveAudio.setVolume(val / 100);
             }
         });
+    },
+
+    _toggleMasterMute() {
+        if (this._masterMuted) this._clearMasterMute();
+        else this._applyMasterMute();
+    },
+
+    _applyMasterMute() {
+        const slider = document.getElementById('volume-slider');
+        const icon = document.getElementById('volume-icon');
+        const ctrl = document.getElementById('volume-control');
+        // Remember the real volume before silencing.
+        if (slider && parseInt(slider.value) > 0) {
+            this._preMutePct = parseInt(slider.value);
+        }
+        this._masterMuted = true;
+        if (slider) slider.value = 0;
+        const pct = document.getElementById('volume-pct');
+        if (pct) pct.textContent = '0%';
+        if (icon) icon.textContent = '🔇';
+        if (ctrl) ctrl.classList.add('muted');
+        if (typeof LiveAudio !== 'undefined') LiveAudio.setMuted(true);
+        console.log('🔇 Master muted');
+    },
+
+    _clearMasterMute() {
+        const slider = document.getElementById('volume-slider');
+        const icon = document.getElementById('volume-icon');
+        const ctrl = document.getElementById('volume-control');
+        this._masterMuted = false;
+        const restore = Math.max(1, this._preMutePct || 80);
+        if (slider) slider.value = restore;
+        const pct = document.getElementById('volume-pct');
+        if (pct) pct.textContent = restore + '%';
+        if (ctrl) ctrl.classList.remove('muted');
+        this._updateVolumeIcon(restore, icon);
+        if (typeof LiveAudio !== 'undefined') {
+            LiveAudio.setMuted(false);
+            LiveAudio.setVolume(restore / 100);
+        }
+        console.log('🔊 Master unmuted → ' + restore + '%');
     },
 
     _updateVolumeIcon(pct, icon) {
