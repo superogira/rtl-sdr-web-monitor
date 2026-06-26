@@ -2353,8 +2353,25 @@ const App = {
         // Draw at the given VFO position (center + offset) within the current
         // zoom view. offsetHz is per-VFO (A or B).
         const cx = this._wfFreqToX(this.currentFreq + (offsetHz || 0), w);
-        const left = cx - bwPx / 2;
-        const right = cx + bwPx / 2;
+
+        // Bandwidth rectangle depends on the demodulation mode:
+        //  - FM / AM : symmetrical around the carrier (full double-sideband)
+        //  - USB     : upper sideband only → rectangle extends to the RIGHT of cx
+        //  - LSB     : lower sideband only → rectangle extends to the LEFT of cx
+        // This matches the backend SSB phasing demodulator, which shifts up
+        // (USB) or down (LSB) and keeps only one sideband.
+        let left, right;
+        const mode = (this.currentMode || '').toUpperCase();
+        if (mode === 'USB') {
+            left = cx;
+            right = cx + bwPx;
+        } else if (mode === 'LSB') {
+            left = cx - bwPx;
+            right = cx;
+        } else {
+            left = cx - bwPx / 2;
+            right = cx + bwPx / 2;
+        }
 
         ctx.save();
 
