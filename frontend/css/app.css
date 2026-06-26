@@ -2038,6 +2038,18 @@ a:hover {
     color: var(--accent-red);
     background: rgba(239, 68, 68, 0.12);
 }
+/* Solo/Priority (long-press) active state — gold/amber pulse so it's
+   visually distinct from the plain mute state. */
+.vfo-mute-btn.vfo-solo {
+    border-color: var(--accent-yellow);
+    color: var(--accent-yellow);
+    background: rgba(234, 179, 8, 0.14);
+    animation: vfo-solo-pulse 1.4s infinite;
+}
+@keyframes vfo-solo-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.5); }
+    50%      { box-shadow: 0 0 10px rgba(234, 179, 8, 0.9); }
+}
 
 /* VFO count control (+/- buttons + label) in the header. */
 .vfo-count-ctrl {

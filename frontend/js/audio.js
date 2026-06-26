@@ -318,6 +318,67 @@ const LiveAudio = {
     isMuted(idx) { const v = this._vfos[idx]; return v ? v.muted : false; },
 
     // ------------------------------------------------------------------
+    // Per-VFO SOLO / Priority (client-side)
+    // ------------------------------------------------------------------
+    // When a VFO is "soloed", ONLY that VFO is audible; every other enabled
+    // VFO is auto-muted. The original mute state of each VFO is snapshotted
+    // before soloing so exiting solo restores the user's prior per-VFO mute
+    // settings (open stays open, closed stays closed).
+    /** Index of the currently-soloed VFO, or null if no solo is active. */
+    _soloIdx: null,
+    /** Snapshot of per-VFO `muted` flags captured when entering solo, used to
+     *  restore the previous mute state when leaving solo. */
+    _soloSavedMuted: [],
+
+    /** Enter solo mode for a VFO: snapshot everyone's mute state, then unmute
+     *  only this VFO and mute all other enabled VFOs. If `idx` is already the
+     *  soloed VFO, this exits solo (toggle). */
+    soloVfo(idx) {
+        if (!this._vfos[idx]) return;
+        // Toggle off if already soloing this VFO.
+        if (this._soloIdx === idx) { this.exitSolo(); return; }
+        // If switching solo to a different VFO, first restore the previous
+        // snapshot so the new snapshot reflects the user's real preferences.
+        if (this._soloIdx !== null) this._restoreSoloSnapshot();
+        this._soloIdx = idx;
+        // Snapshot current mute flags (so exitSolo can restore them exactly).
+        this._soloSavedMuted = this._vfos.map(v => v ? !!v.muted : false);
+        // Unmute the soloed VFO, mute every other enabled VFO.
+        for (let i = 0; i < this._vfos.length; i++) {
+            const v = this._vfos[i];
+            if (!v || !v.enabled) continue;
+            this.setMute(i, i !== idx);
+        }
+        console.log(`🔊 [audio] SOLO → VFO ${this._vfos[idx].id} (others muted)`);
+    },
+
+    /** Exit solo mode and restore each VFO's mute state to what it was before
+     *  soloing. Safe to call when no solo is active (no-op). */
+    exitSolo() {
+        if (this._soloIdx === null) return;
+        console.log(`🔊 [audio] SOLO off (restoring mute state)`);
+        this._restoreSoloSnapshot();
+        this._soloIdx = null;
+        this._soloSavedMuted = [];
+    },
+
+    /** Internal: apply the snapshotted mute flags back to each VFO. */
+    _restoreSoloSnapshot() {
+        for (let i = 0; i < this._vfos.length; i++) {
+            if (!this._vfos[i]) continue;
+            const saved = this._soloSavedMuted[i];
+            this.setMute(i, saved === undefined ? false : saved);
+        }
+    },
+
+    /** True if `idx` is the currently-soloed VFO. */
+    isSolo(idx) { return this._soloIdx === idx; },
+    /** True if any VFO is currently soloed. */
+    get anySolo() { return this._soloIdx !== null; },
+    /** The index of the soloed VFO, or null. */
+    get soloIdx() { return this._soloIdx; },
+
+    // ------------------------------------------------------------------
     // Volume (shared master)
     // ------------------------------------------------------------------
     setVolume(vol) {

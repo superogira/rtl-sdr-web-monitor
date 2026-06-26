@@ -2,11 +2,11 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.25-v2',  // 3D Waterfall: signal frequency labels (Sprite
-                               // + stick) above peaks, mirrors the 2D Signal
-                               // Tag feature. Billboard labels face the camera
-                               // at any orbit angle; capped at 10 simultaneous
-                               // labels with ±50 kHz dedup.
+    VERSION: '2026.06.26-v1',  // Per-VFO SOLO / Priority: long-press a VFO's
+                               // mute/speaker button to listen to ONLY that
+                               // VFO (others auto-muted). Click again (or
+                               // long-press the same VFO) to restore each
+                               // VFO's previous mute state.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -837,7 +837,7 @@ const App = {
             const sp = document.getElementById(`vfo-${lo}-speaker`);
             if (sp) sp.addEventListener('change', (e) => this.setVfoSpeaker(i, e.target.value));
             const mu = document.getElementById(`vfo-${lo}-mute`);
-            if (mu) mu.addEventListener('click', () => this.toggleVfoMute(i));
+            if (mu) this._bindVfoMuteButton(mu, i);
         }
         // Initial state.
         this._updateVfoCountBtn();
@@ -1277,12 +1277,21 @@ const App = {
             // Speaker dropdown.
             const sp = document.getElementById(`vfo-${lo}-speaker`);
             if (sp && typeof LiveAudio !== 'undefined') sp.value = LiveAudio.getSpeaker(i);
-            // Mute button.
+            // Mute button. Reflects SOLO state first (priority), else mute.
             const m = document.getElementById(`vfo-${lo}-mute`);
             if (m && typeof LiveAudio !== 'undefined') {
+                const solo = LiveAudio.isSolo(i);
+                const anySolo = LiveAudio.anySolo;
                 const muted = LiveAudio.isMuted(i);
-                m.textContent = muted ? '🔇' : '🔊';
-                m.classList.toggle('muted', muted);
+                if (solo) {
+                    m.textContent = '🎧';
+                    m.classList.add('vfo-solo');
+                    m.classList.remove('muted');
+                } else {
+                    m.classList.remove('vfo-solo');
+                    m.textContent = (anySolo || muted) ? '🔇' : '🔊';
+                    m.classList.toggle('muted', muted);
+                }
             }
             // Keep the green "RX active" flash in sync (clears when a VFO
             // stops playing, or lights up if its squelch just opened).
@@ -1327,17 +1336,63 @@ const App = {
         if (typeof LiveAudio !== 'undefined') LiveAudio.setSpeaker(idx, mode);
     },
 
+    /** Bind a VFO mute button to BOTH click + long-press (solo/priority).
+     *  - LONG-PRESS (≥500ms): toggle SOLO for this VFO (listen to ONLY this
+     *    VFO, auto-mute the others). Long-pressing the same soloed VFO again
+     *    exits solo and restores each VFO's previous mute state.
+     *  - QUICK CLICK: if a solo is active, exit solo (restore prior mute
+     *    state). Otherwise toggle this VFO's mute normally. */
+    _bindVfoMuteButton(btn, idx) {
+        if (!btn) return;
+        let holdTimer = null;
+        let didHold = false;
+        const HOLD_MS = 500;
+
+        const startHold = () => {
+            didHold = false;
+            holdTimer = setTimeout(() => {
+                didHold = true;
+                if (typeof LiveAudio === 'undefined') return;
+                // Toggle solo for this VFO (soloVfo auto-exits if already solo).
+                LiveAudio.soloVfo(idx);
+                this._updateVfoRows();
+                const id = this._vfoId(idx);
+                console.log(`🎧 VFO ${id} ${LiveAudio.isSolo(idx) ? 'SOLO on' : 'SOLO off (restored)'}`);
+            }, HOLD_MS);
+        };
+
+        const endHold = () => {
+            if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        };
+
+        const onClick = (e) => {
+            if (didHold) { didHold = false; return; }  // swallow click after long-press
+            if (typeof LiveAudio === 'undefined') return;
+            // If a solo is active, a quick click exits solo (restore state).
+            if (LiveAudio.anySolo) {
+                LiveAudio.exitSolo();
+                this._updateVfoRows();
+                console.log('🎧 SOLO off via click (restored mute state)');
+                return;
+            }
+            this.toggleVfoMute(idx);
+        };
+
+        // Mouse
+        btn.addEventListener('mousedown', startHold);
+        btn.addEventListener('mouseup', endHold);
+        btn.addEventListener('mouseleave', endHold);
+        btn.addEventListener('click', onClick);
+        // Touch (mobile)
+        btn.addEventListener('touchstart', () => startHold(), { passive: true });
+        btn.addEventListener('touchend', () => endHold(), { passive: true });
+    },
+
     /** Toggle a VFO's mute. Updates the button icon + the audio graph. */
     toggleVfoMute(idx) {
         if (typeof LiveAudio === 'undefined') return;
-        const muted = LiveAudio.toggleMute(idx);
-        const lo = this._vfoLower(idx);
-        const btn = document.getElementById(`vfo-${lo}-mute`);
-        if (btn) {
-            btn.textContent = muted ? '🔇' : '🔊';
-            btn.classList.toggle('muted', muted);
-            btn.title = muted ? `เปิดเสียง VFO ${this._vfoId(idx)}` : `ปิดเสียง VFO ${this._vfoId(idx)}`;
-        }
+        LiveAudio.toggleMute(idx);
+        this._updateVfoRows();
     },
 
     // Server confirmed THIS listener's per-listener squelch (the value the
