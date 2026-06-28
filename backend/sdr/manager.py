@@ -1566,6 +1566,12 @@ class SDRManager:
                         rec_info_copy["stt_duration"] = stt_dur
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
                         logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
+                        # Enqueue keyword-alert evaluation (non-blocking).
+                        try:
+                            from backend.alerts.jobs import enqueue_alert_job
+                            await enqueue_alert_job(rec_id)
+                        except Exception as e:
+                            logger.warning(f"Alert enqueue failed for {rec_id}: {e}")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         # Store error in DB so user can see what went wrong
@@ -1752,6 +1758,12 @@ class SDRManager:
                         rec_info_copy["stt_duration"] = stt_dur
                         self._new_recordings.append({**rec_info_copy, "_transcribed": True})
                         logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
+                        # Enqueue keyword-alert evaluation (non-blocking).
+                        try:
+                            from backend.alerts.jobs import enqueue_alert_job
+                            await enqueue_alert_job(rec_id)
+                        except Exception as e:
+                            logger.warning(f"Alert enqueue failed for {rec_id}: {e}")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                         try:

@@ -89,6 +89,9 @@ class Recording(Base):
     quality_rated_by = relationship("User", foreign_keys=[quality_rated_by_user_id], lazy="selectin")
     # Relationship to the SDR device used
     device = relationship("SdrDevice", foreign_keys=[device_id], lazy="selectin")
+    # Alert events produced by keyword alert rules (new alerting system).
+    alert_events = relationship("AlertEvent", back_populates="recording",
+                                cascade="all, delete-orphan", lazy="selectin")
 
     def __repr__(self):
         return f"<Recording(id={self.id}, freq={self.frequency_mhz}MHz, mode={self.mode}, status={self.status})>"

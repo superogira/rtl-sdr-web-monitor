@@ -314,7 +314,66 @@ const API = {
             return API.request('PUT', '/api/recording-jobs/server-timezone', { timezone });
         },
     },
+
+    // Keyword alerting (keywords, groups, channels, rules, alerts, stats)
+    keywordGroups: {
+        async list() { try { return (await API.request('GET','/api/keyword-groups')).items || []; } catch { return []; } },
+        async create(data) { return API.request('POST','/api/keyword-groups', data); },
+        async update(id, data) { return API.request('PUT',`/api/keyword-groups/${id}`, data); },
+        async remove(id) { return API.request('DELETE',`/api/keyword-groups/${id}`); },
+    },
+    keywords: {
+        async list() { try { return (await API.request('GET','/api/keywords')).items || []; } catch { return []; } },
+        async create(data) { return API.request('POST','/api/keywords', data); },
+        async update(id, data) { return API.request('PUT',`/api/keywords/${id}`, data); },
+        async remove(id) { return API.request('DELETE',`/api/keywords/${id}`); },
+    },
+    channels: {
+        async list() { try { return await API.request('GET','/api/channels'); } catch { return { items: [], app_types: {} }; } },
+        async create(data) { return API.request('POST','/api/channels', data); },
+        async update(id, data) { return API.request('PUT',`/api/channels/${id}`, data); },
+        async remove(id) { return API.request('DELETE',`/api/channels/${id}`); },
+        async test(id) { return API.request('POST',`/api/channels/${id}/test`); },
+    },
+    notifGroups: {
+        async list() { try { return (await API.request('GET','/api/notification-groups')).items || []; } catch { return []; } },
+        async create(data) { return API.request('POST','/api/notification-groups', data); },
+        async update(id, data) { return API.request('PUT',`/api/notification-groups/${id}`, data); },
+        async remove(id) { return API.request('DELETE',`/api/notification-groups/${id}`); },
+    },
+    alertRules: {
+        async list() { try { return (await API.request('GET','/api/alert-rules')).items || []; } catch { return []; } },
+        async create(data) { return API.request('POST','/api/alert-rules', data); },
+        async update(id, data) { return API.request('PUT',`/api/alert-rules/${id}`, data); },
+        async remove(id) { return API.request('DELETE',`/api/alert-rules/${id}`); },
+        async test(id, text) { return API.request('POST',`/api/alert-rules/${id}/test`, { text }); },
+        async options() { try { return await API.request('GET','/api/alert-rules/meta/options'); } catch { return {}; } },
+    },
+    alerts: {
+        async list(params={}) {
+            const qs=new URLSearchParams();
+            qs.set('limit', params.limit||50);
+            if (params.offset!=null) qs.set('offset', params.offset);
+            if (params.severity) qs.set('severity', params.severity);
+            if (params.verdict) qs.set('verdict', params.verdict);
+            try { return await API.request('GET',`/api/alerts?${qs.toString()}`); }
+            catch { return { items: [], total: 0 }; }
+        },
+        async get(id) { return API.request('GET',`/api/alerts/${id}`); },
+        async ack(id, acknowledged=true) { return API.request('POST',`/api/alerts/${id}/ack`, { acknowledged }); },
+        async verdict(id, verdict) { return API.request('POST',`/api/alerts/${id}/verdict`, { verdict }); },
+        async notes(id, notes) { return API.request('POST',`/api/alerts/${id}/notes`, { notes }); },
+        async resend(id, channel_ids) { return API.request('POST',`/api/alerts/${id}/resend`, { channel_ids }); },
+    },
+    alertStats: {
+        async get() { try { return await API.request('GET','/api/alert-stats'); } catch { return {}; } },
+        async timeseries(days=30, bucket='day') {
+            try { return await API.request('GET',`/api/alert-stats/timeseries?days=${days}&bucket=${bucket}`); }
+            catch { return { buckets: [], total: 0, bucket_type: bucket }; }
+        },
+    },
 };
+
 
 // === Helper Functions ===
 

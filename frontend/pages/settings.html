@@ -495,51 +495,30 @@
             </div>
         </div>
 
-        <!-- Telegram Settings -->
+        <!-- Telegram Settings (now managed in the Alert Rules page) -->
         <div class="tab-content" id="tab-telegram" style="display:none;">
             <div class="settings-section">
-                <h2>📨 แจ้งเตือน Telegram</h2>
-                <div class="form-group">
-                    <label>สถานะ: <span id="tg-status" class="status-badge status-off">ปิด</span></label>
-                    <select id="tg-enabled">
-                        <option value="false">ปิด</option>
-                        <option value="true">เปิด</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Bot Token</label>
-                    <input type="password" id="tg-token" placeholder="123456:ABC-DEF...">
-                </div>
-                <div class="form-group">
-                    <label>Chat ID</label>
-                    <input type="text" id="tg-chatid" placeholder="-100123456789">
-                </div>
-                <div class="form-actions">
-                    <button class="btn btn-sm" onclick="Settings.testTelegram()">🧪 ทดสอบส่งข้อความ</button>
-                    <button class="btn btn-primary" onclick="Settings.saveTelegram()">💾 บันทึก</button>
+                <h2>📨 ช่องทางแจ้งเตือน</h2>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">
+                    ระบบแจ้งเตือนถูกอัพเกรดแล้ว — จัดการช่องทางแจ้งเตือน (Telegram/แอปอื่น), กลุ่ม, คีย์เวิร์ด, กฎ, และดูประวัติการแจ้งเตือนได้ที่หน้าใหม่:
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <a href="/alert-rules" class="btn btn-primary">⚙️ จัดการกฎ &amp; ช่องทาง</a>
+                    <a href="/alerts" class="btn btn-sm">📋 ดูการแจ้งเตือนทั้งหมด</a>
                 </div>
             </div>
         </div>
 
-        <!-- Keywords Settings -->
+        <!-- Keywords Settings (now managed in the Alert Rules page) -->
         <div class="tab-content" id="tab-keywords" style="display:none;">
             <div class="settings-section">
                 <h2>🔑 Keywords สำหรับแจ้งเตือน</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:8px;">
-                    เมื่อถอดเสียงแล้วพบคำเหล่านี้ ระบบจะส่งแจ้งเตือน Telegram
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">
+                    ระบบแจ้งเตือนถูกอัพเกรดแล้ว — จัดการคีย์เวิร์ด (รวมกลุ่ม/ประเภท/คะแนน ±), สร้างกฎแจ้งเตือน และดูประวัติได้ที่หน้าใหม่:
                 </p>
-                <div class="form-group">
-                    <label>เพิ่ม Keyword</label>
-                    <div style="display:flex; gap:8px;">
-                        <input type="text" id="kw-input" placeholder="พิมพ์คำที่ต้องการ..." style="flex:1;">
-                        <button class="btn btn-sm btn-primary" onclick="Settings.addKeyword()">เพิ่ม</button>
-                    </div>
-                </div>
-                <div class="tag-list" id="kw-list">
-                    <!-- Keywords rendered here -->
-                </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveKeywords()">💾 บันทึก</button>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <a href="/alert-rules" class="btn btn-primary">⚙️ จัดการ Keywords &amp; กฎ</a>
+                    <a href="/alerts" class="btn btn-sm">📋 ดูการแจ้งเตือนทั้งหมด</a>
                 </div>
             </div>
         </div>
@@ -730,7 +709,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="/js/api.js?v=9"></script>
+    <script src="/js/api.js?v=12"></script>
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/recording_jobs.js?v=5"></script>
     <script>
@@ -1535,33 +1514,13 @@
                 alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
             }
         },
-        saveTelegram() { alert('✅ บันทึก Telegram settings แล้ว'); },
-        testTelegram() { alert('🧪 กำลังทดสอบ... (ต้องตั้ง Bot Token และ Chat ID ก่อน)'); },
-
-        addKeyword() {
-            const input = document.getElementById('kw-input');
-            const word = input.value.trim();
-            if (word && !this.keywords.includes(word)) {
-                this.keywords.push(word);
-                this.renderKeywords();
-            }
-            input.value = '';
-        },
-
-        removeKeyword(word) {
-            this.keywords = this.keywords.filter(k => k !== word);
-            this.renderKeywords();
-        },
-
-        renderKeywords() {
-            const el = document.getElementById('kw-list');
-            if (!el) return;
-            el.innerHTML = this.keywords.map(k =>
-                `<div class="tag">${k} <span class="remove" onclick="Settings.removeKeyword('${k}')">×</span></div>`
-            ).join('');
-        },
-
-        saveKeywords() { alert('✅ บันทึก Keywords แล้ว: ' + this.keywords.join(', ')); },
+        // Telegram/Keywords tabs now redirect to the dedicated Alert Rules page.
+        saveTelegram() { window.location.href = '/alert-rules'; },
+        testTelegram() { window.location.href = '/alert-rules'; },
+        addKeyword() { window.location.href = '/alert-rules'; },
+        removeKeyword() {},
+        renderKeywords() {},
+        saveKeywords() { window.location.href = '/alert-rules'; },
 
         // === Display / Waterfall Settings ===
         loadDisplaySettings() {

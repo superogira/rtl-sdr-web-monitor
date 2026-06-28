@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alerts - RTL-SDR Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css?v=24">
+<script>(function(){try{var t=localStorage.getItem('ui_theme');if(t==='v2')document.documentElement.setAttribute('data-theme','v2');}catch(e){}})();</script>
+<style>
+.ad-page{max-width:1200px;margin:0 auto;padding:20px;}
+.ad-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
+.ad-header h1{font-size:1.4rem;color:var(--accent-cyan);margin:0;}
+.ad-back{color:var(--text-secondary);text-decoration:none;font-size:0.85rem;}
+.ad-back:hover{color:var(--accent-cyan);}
+.ad-layout{display:grid;grid-template-columns:1fr 1.4fr;gap:16px;align-items:start;}
+@media(max-width:900px){.ad-layout{grid-template-columns:1fr;}}
+.ad-section{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;}
+.ad-section h2{font-size:0.95rem;color:var(--accent-cyan);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.ad-filter{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.ad-filter select,.ad-filter button{padding:5px 10px;border-radius:5px;background:var(--surface-1);color:var(--text-primary);border:1px solid var(--border);font-size:0.78rem;cursor:pointer;}
+.ad-list{max-height:70vh;overflow-y:auto;}
+.ad-item{padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--surface-1);margin-bottom:8px;cursor:pointer;transition:border-color .15s;}
+.ad-item:hover{border-color:var(--accent-cyan);}
+.ad-item.selected{border-color:var(--accent-cyan);background:rgba(34,211,238,0.06);}
+.ad-item .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+.ad-item .meta{font-size:0.72rem;color:var(--text-muted);margin-top:4px;}
+.ad-item .kws{font-size:0.74rem;margin-top:4px;color:var(--text-secondary);}
+.badge{display:inline-block;padding:2px 7px;border-radius:9px;font-size:0.66rem;font-weight:600;}
+.sev-info{background:rgba(59,130,246,0.2);color:#93c5fd;}
+.sev-warning{background:rgba(245,158,11,0.2);color:#fcd34d;}
+.sev-high{background:rgba(249,115,22,0.2);color:#fdba74;}
+.sev-critical{background:rgba(239,68,68,0.2);color:#fca5a5;}
+.sev-other{background:rgba(148,163,184,0.2);color:#cbd5e1;}
+.verd-unconfirmed{background:rgba(148,163,184,0.15);color:#cbd5e1;}
+.verd-confirmed{background:rgba(34,197,94,0.2);color:#86efac;}
+.verd-false_alarm{background:rgba(239,68,68,0.2);color:#fca5a5;}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:14px;}
+.stat-card{background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center;}
+.stat-card .n{font-size:1.3rem;font-weight:700;color:var(--accent-cyan);}
+.stat-card .l{font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;}
+.fg{margin-bottom:10px;}
+.fg label{display:block;font-size:0.76rem;color:var(--text-secondary);margin-bottom:3px;}
+.fg input,.fg select,.fg textarea{width:100%;padding:6px 10px;background:var(--surface-1);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-size:0.82rem;font-family:inherit;}
+.btn{background:var(--surface-1);border:1px solid var(--border);color:var(--text-primary);padding:6px 12px;border-radius:5px;font-size:0.78rem;cursor:pointer;}
+.btn:hover{background:var(--surface-3);}
+.btn-primary{background:var(--accent-cyan);color:#000;font-weight:600;border:none;}
+.btn-green{background:rgba(34,197,94,0.18);color:#86efac;border:1px solid rgba(34,197,94,0.35);}
+.btn-red{background:rgba(239,68,68,0.18);color:#fca5a5;border:1px solid rgba(239,68,68,0.35);}
+.btn-sm{padding:3px 8px;font-size:0.7rem;}
+.del-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px dashed var(--border);font-size:0.76rem;}
+.del-row:last-child{border-bottom:none;}
+.del-status-pending{color:#fcd34d;}
+.del-status-sent{color:var(--accent-green);}
+.del-status-failed{color:#fca5a5;}
+.kw-pill{display:inline-block;background:var(--surface-1);border:1px solid var(--border);padding:2px 7px;border-radius:9px;font-size:0.7rem;margin:2px 2px 0 0;}
+.kw-pill .sc{opacity:0.7;font-size:0.64rem;margin-left:2px;}
+.actions-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.empty{padding:30px;text-align:center;color:var(--text-muted);font-size:0.85rem;}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:1000;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:18px;max-width:500px;width:90%;}
+.modal h3{color:var(--accent-cyan);margin-bottom:12px;}
+</style>
+</head>
+<body>
+<div class="ad-page">
+<div class="ad-header">
+<div>
+<a href="/dashboard" class="ad-back">← กลับ Dashboard</a>
+<h1>📋 Alerts Dashboard (แจ้งเตือน)</h1>
+</div>
+<div style="display:flex;gap:6px;">
+<a href="/alert-rules" class="btn">⚙️ ตั้งกฎ</a>
+<a href="/stats" class="btn">📊 สถิติ</a>
+</div>
+</div>
+
+<div class="ad-section" id="ad-stats-section">
+<div id="stat-grid" class="stat-grid"><span class=\"empty\">กำลังโหลดสถิติ...</span></div>
+</div>
+
+<div class="ad-layout">
+<div>
+<div class="ad-section">
+<div class="ad-filter">
+<select id="ad-filter-sev" onchange="Alerts.load()">
+<option value="">ทุกระดับ</option>
+<option value="critical">🔴 Critical</option>
+<option value="high">🟠 High</option>
+<option value="warning">⚠️ Warning</option>
+<option value="info">ℹ️ Info</option>
+<option value="other">📌 Other</option>
+</select>
+<select id="ad-filter-dev" onchange="Alerts.load()">
+<option value="">📡 ทุกอุปกรณ์</option>
+</select>
+<select id="ad-filter-verd" onchange="Alerts.load()">
+<option value="">ทุกสถานะ</option>
+<option value="unconfirmed">ยังไม่ยืนยัน</option>
+<option value="confirmed">เหตุจริง</option>
+<option value="false_alarm">False alarm</option>
+</select>
+<button class="btn btn-sm" onclick="Alerts.load()">🔄 รีเฟรช</button>
+</div>
+<div class="ad-list" id="ad-list"><div class="empty">กำลังโหลด...</div></div>
+</div>
+</div>
+
+<div>
+<div class="ad-section" id="ad-detail">
+<div class="empty">← เลือกแจ้งเตือนทางซ้ายเพื่อดูรายละเอียด</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="modal-overlay" id="resend-modal">
+<div class="modal">
+<h3>📤 ส่งซ้ำไปยังช่องทาง...</h3>
+<p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:10px;">เลือกช่องทางที่จะส่งซ้ำ (ว่างไว้ = ส่งซ้ำทุกช่องเดิม)</p>
+<div id="resend-channel-list" class="chip-row" style="display:flex;flex-direction:column;gap:6px;"></div>
+<div style="display:flex;justify-content:flex-end;gap:6px;margin-top:14px;">
+<button class="btn" onclick="document.getElementById('resend-modal').classList.remove('show')">ยกเลิก</button>
+<button class="btn btn-primary" onclick="Alerts.doResend()">📤 ส่งซ้ำ</button>
+</div>
+</div>
+</div>
+
+<script src="/js/api.js?v=12"></script>
+<script src="/js/auth.js?v=5"></script>
+<script>
+const Alerts = {
+    items: [], current: null, channels: [], selResend: new Set(),
+    pendingResendEventId: null,
+
+    async init() {
+        if (!Auth.requireAuth()) return;
+        try {
+            const ch = await API.channels.list();
+            this.channels = ch.items || [];
+        } catch(e){ this.channels = []; }
+        await this.loadStats();
+        await this.load();
+        // auto-refresh every 15s so delivery status updates
+        setInterval(()=>{ this.loadStats(); this.load(true); }, 15000);
+    },
+
+    _esc(s){return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));},
+
+    async loadStats() {
+        try {
+            const st = await API.alertStats.get();
+            const sev = (st.by_severity||[]);
+            const total = sev.reduce((a,b)=>a+b.count,0);
+            const sent = (st.by_delivery_status||[]).find(x=>x.status==='sent')?.count || 0;
+            const failed = (st.by_delivery_status||[]).find(x=>x.status==='failed')?.count || 0;
+            const pending = (st.by_delivery_status||[]).find(x=>x.status==='pending')?.count || 0;
+            const conf = (st.by_verdict||[]).find(x=>x.verdict==='confirmed')?.count || 0;
+            const fa = (st.by_verdict||[]).find(x=>x.verdict==='false_alarm')?.count || 0;
+            const cards = [
+                {n:total,l:'ทั้งหมด'},{n:sent,l:'ส่งแล้ว'},{n:pending,l:'รอส่ง'},
+                {n:failed,l:'ส่งไม่สำเร็จ'},{n:conf,l:'เหตุจริง'},{n:fa,l:'False alarm'},
+            ];
+            document.getElementById('stat-grid').innerHTML = cards.map(c=>`<div class="stat-card"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join('');
+        } catch(e){ console.warn('stats', e); }
+    },
+
+    async load(silent) {
+        const sev = document.getElementById('ad-filter-sev').value;
+        const verd = document.getElementById('ad-filter-verd').value;
+        const dev = document.getElementById('ad-filter-dev').value;
+        try {
+            const r = await API.alerts.list({limit:100, severity:sev||undefined, verdict:verd||undefined, device_id:dev||undefined});
+            this.items = r.items || [];
+            this.render();
+        } catch(e) { if(!silent) alert('โหลดไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    render() {
+        const el = document.getElementById('ad-list');
+        if (!this.items.length) { el.innerHTML = '<div class="empty">ยังไม่มีการแจ้งเตือน</div>'; return; }
+        el.innerHTML = this.items.map(e => {
+            const sel = (this.current && this.current.id===e.id) ? 'selected' : '';
+            const dt = e.recorded_at ? this._fmt(e.recorded_at) : this._fmt(e.created_at);
+            const kws = (e.matched_keywords||[]).map(m=>`<span class="kw-pill">${this._esc(m.keyword)}<span class="sc">${m.score>=0?'+':''}${m.score}</span></span>`).join('');
+            return `<div class="ad-item ${sel}" onclick="Alerts.select('${e.id}')">
+<div class="top">
+<div><span class="badge sev-${e.severity}">${e.severity}</span> ${e.verdict!=='unconfirmed'?`<span class="badge verd-${e.verdict}">${e.verdict}</span>`:''} <b style="font-size:0.82rem;">${this._esc(e.rule_name||'—')}</b></div>
+<b style="font-size:0.85rem;color:var(--accent-cyan);">${e.total_score}</b>
+</div>
+<div class="meta">${e.frequency_mhz||'—'} MHz · ${e.mode||''} · 📡 ${this._esc(e.device_name||'ไม่ระบุ')} · ${dt}</div>
+<div class="kws">${kws}</div>
+</div>`;
+        }).join('');
+    },
+
+    _fmt(iso){ try { return new Date(iso).toLocaleString('th-TH',{timeZone:getUserTimezone()}); } catch(e){ return iso; } },
+
+    async select(id) {
+        try { this.current = await API.alerts.get(id); this.renderDetail(); this.render(); }
+        catch(e){ alert('โหลดรายละเอียดไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    renderDetail() {
+        const e = this.current;
+        if (!e) { document.getElementById('ad-detail').innerHTML = '<div class="empty">← เลือกแจ้งเตือนทางซ้าย</div>'; return; }
+        const isAdmin = Auth.isAdmin();
+        const kws = (e.matched_keywords||[]).map(m=>`<span class="kw-pill">${this._esc(m.keyword)} (${this._esc(m.group||'-')} · ${this._esc(m.type||'other')}) <span class="sc">${m.score>=0?'+':''}${m.score}</span></span>`).join('');
+        const deliveries = (e.deliveries||[]).map(d=>`<div class="del-row"><span>${this._esc(d.channel_name||d.channel_id)} <span style="opacity:0.6;font-size:0.7rem;">(${this._esc(d.channel_app_type)})</span></span><span class="del-status-${d.status}">${d.status}${d.app_message_id?` #${d.app_message_id}`:''}${d.last_error?` — ${this._esc(d.last_error).slice(0,40)}`:''}</span></div>`).join('') || '<div style="font-size:0.78rem;color:var(--text-muted);">—</div>';
+        const ackBtn = isAdmin ? (e.acknowledged_by_user_id
+            ? `<button class="btn btn-sm" onclick="Alerts.ack(false)">↩️ ยกเลิกผู้รับทราบ</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="Alerts.ack(true)">👤 รับทราบ</button>`) : '';
+        const verdictBtns = isAdmin ? `
+<button class="btn btn-sm ${e.verdict==='confirmed'?'btn-green':''}" onclick="Alerts.verdict('confirmed')">✅ เหตุจริง</button>
+<button class="btn btn-sm ${e.verdict==='false_alarm'?'btn-red':''}" onclick="Alerts.verdict('false_alarm')">❌ False alarm</button>
+<button class="btn btn-sm" onclick="Alerts.verdict('unconfirmed')">↩️ ยกเลิก</button>` : '';
+        const resendBtn = isAdmin ? `<button class="btn btn-sm" onclick="Alerts.openResend()">📤 ส่งซ้ำ</button>` : '';
+        document.getElementById('ad-detail').innerHTML = `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+<h2 style="margin:0;border:none;padding:0;">${this._esc(e.rule_name||'Alert')} <span class="badge sev-${e.severity}">${e.severity}</span></h2>
+<b style="color:var(--accent-cyan);font-size:1.1rem;">คะแนน ${e.total_score}</b>
+</div>
+<div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:8px;">
+🔄 ${this._esc(e.frequency_mhz||'-')} MHz · 📻 ${this._esc(e.mode||'-')} · 📡 ${this._esc(e.device_name||'ไม่ระบุ')} · 🕒 ${this._fmt(e.recorded_at||e.created_at)}<br>
+📋 กฎ: ${this._esc(e.rule_name)} · 🔑 ${kws||'<span style=\"color:var(--text-muted);\">—</span>'}
+</div>
+<div class="fg"><label>สถานะการรับทราบ</label><div style="font-size:0.78rem;">${e.acknowledged_by_user_id?('ผู้รับทราบ: '+this._esc(e.acknowledged_by_username)+' @ '+this._fmt(e.acknowledged_at)):'<span style=\"color:var(--text-muted);\">ยังไม่มีผู้รับทราบ</span>'} ${ackBtn}</div></div>
+<div class="fg"><label>ผลการตรวจสอบ</label><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span class="badge verd-${e.verdict}">${e.verdict}</span> ${e.verdict_by_user_id?('<span style=\"font-size:0.72rem;color:var(--text-muted);\">โดย '+this._esc(e.verdict_by_username)+'</span>'):''} ${verdictBtns}</div></div>
+<div class="fg"><label>การส่ง (แต่ละช่องทาง)</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;">${deliveries}</div> ${resendBtn}</div>
+<div class="fg"><label>หมายเหตุ</label><textarea id="ad-notes" rows="2" ${isAdmin?'':'disabled'}>${this._esc(e.notes||'')}</textarea>${isAdmin?'<div class="actions-row"><button class="btn btn-sm btn-primary" onclick="Alerts.saveNotes()">💾 บันทึกหมายเหตุ</button></div>':''}</div>
+<div class="fg"><label>ข้อความที่ถูกถอดเสียง</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:0.8rem;max-height:160px;overflow-y:auto;white-space:pre-wrap;">${this._esc(e.snippet||'')}</div></div>
+<div class="actions-row">${isAdmin?`<a class="btn btn-sm" href="/recordings" target="_blank">🔗 ไปหน้าไฟล์เสียง</a>`:''}</div>
+`;
+    },
+
+    async ack(val) {
+        try { await API.alerts.ack(this.current.id, val); this.current = await API.alerts.get(this.current.id); this.renderDetail(); this.load(true); }
+        catch(e){ alert('ไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    async verdict(v) {
+        try { await API.alerts.verdict(this.current.id, v); this.current = await API.alerts.get(this.current.id); this.renderDetail(); this.load(true); this.loadStats(); }
+        catch(e){ alert('ไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    async saveNotes() {
+        const v = document.getElementById('ad-notes').value;
+        try { await API.alerts.notes(this.current.id, v); this.current.notes = v; }
+        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    openResend() {
+        this.selResend.clear();
+        this.pendingResendEventId = this.current.id;
+        const list = document.getElementById('resend-channel-list');
+        list.innerHTML = this.channels.length ? this.channels.map(c=>`<label style="font-size:0.8rem;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" value="${c.id}" onchange="Alerts._toggleResend('${c.id}', this.checked)"> ${this._esc(c.name)} <span style="opacity:0.6;">(${this._esc(c.app_type)})</span></label>`).join('') : '<span style="color:var(--text-muted);font-size:0.8rem;">ยังไม่มี channel — สร้างที่ Settings → Channels</span>';
+        document.getElementById('resend-modal').classList.add('show');
+    },
+
+    _toggleResend(id, on){ if(on) this.selResend.add(id); else this.selResend.delete(id); },
+
+    async doResend() {
+        const ids = [...this.selResend];
+        try {
+            const r = await API.alerts.resend(this.pendingResendEventId, ids.length?ids:null);
+            document.getElementById('resend-modal').classList.remove('show');
+            alert(`✅ จัดคิวส่งซ้ำ ${r.queued} ช่องทาง`);
+            setTimeout(()=>{ this.select(this.current.id); this.load(true); }, 1500);
+        } catch(e){ alert('ส่งซ้ำไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+};
+Alerts.init();
+</script>
+</body>
+</html>

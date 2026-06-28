@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Statistics - RTL-SDR Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css?v=24">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>(function(){try{var t=localStorage.getItem('ui_theme');if(t==='v2')document.documentElement.setAttribute('data-theme','v2');}catch(e){}})();</script>
+<style>
+.st-page{max-width:1200px;margin:0 auto;padding:20px;}
+.st-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
+.st-header h1{font-size:1.4rem;color:var(--accent-cyan);margin:0;}
+.st-back{color:var(--text-secondary);text-decoration:none;font-size:0.85rem;}
+.st-back:hover{color:var(--accent-cyan);}
+.st-toolbar{display:flex;gap:6px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
+.st-toolbar select,.st-toolbar button{padding:5px 12px;border-radius:5px;background:var(--surface-1);color:var(--text-primary);border:1px solid var(--border);font-size:0.8rem;cursor:pointer;}
+.st-toolbar button.primary{background:var(--accent-cyan);color:#000;font-weight:600;border:none;}
+.st-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;}
+.st-card{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;}
+.st-card .n{font-size:1.6rem;font-weight:700;color:var(--accent-cyan);}
+.st-card .l{font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;margin-top:2px;}
+.st-card.warn .n{color:var(--accent-red);}
+.st-card.good .n{color:var(--accent-green);}
+.st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+@media(max-width:900px){.st-grid{grid-template-columns:1fr;}}
+.st-section{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;}
+.st-section h2{font-size:0.9rem;color:var(--accent-cyan);margin-bottom:10px;}
+.st-section.full{grid-column:1/-1;}
+.chart-box{position:relative;height:240px;}
+.chart-box.tall{height:280px;}
+.empty{padding:30px;text-align:center;color:var(--text-muted);font-size:0.85rem;}
+.legend-note{font-size:0.72rem;color:var(--text-muted);margin-top:6px;}
+</style>
+</head>
+<body>
+<div class="st-page">
+<div class="st-header">
+<div>
+<a href="/dashboard" class="st-back">&larr; กลับ Dashboard</a>
+<h1>📊 สถิติการแจ้งเตือน</h1>
+</div>
+<a href="/alerts" class="st-back" style="background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);padding:6px 14px;border-radius:6px;">📋 หน้าแจ้งเตือน</a>
+</div>
+
+<div class="st-toolbar">
+<span style="font-size:0.8rem;color:var(--text-secondary);">ช่วงเวลา:</span>
+<select id="st-range" onchange="Stats.load()">
+<option value="7">7 วัน</option>
+<option value="30" selected>30 วัน</option>
+<option value="90">90 วัน</option>
+<option value="365">1 ปี</option>
+</select>
+<select id="st-bucket" onchange="Stats.load()">
+<option value="day">รายวัน</option>
+<option value="month">รายเดือน</option>
+</select>
+<button class="primary" onclick="Stats.load()">🔄 รีเฟรช</button>
+</div>
+
+<div class="st-cards" id="st-cards"><span class="empty">กำลังโหลด...</span></div>
+
+<div class="st-grid">
+<div class="st-section full">
+<h2>📈 Trend การแจ้งเตือนตามช่วงเวลา</h2>
+<div class="chart-box tall"><canvas id="chart-trend"></canvas></div>
+</div>
+<div class="st-section">
+<h2>🔴 ตามระดับ (Severity)</h2>
+<div class="chart-box"><canvas id="chart-severity"></canvas></div>
+</div>
+<div class="st-section">
+<h2>⚖️ ผลการตรวจสอบ (Verdict)</h2>
+<div class="chart-box"><canvas id="chart-verdict"></canvas></div>
+</div>
+<div class="st-section">
+<h2>🔑 Keyword ที่พบบ่อย</h2>
+<div class="chart-box tall"><canvas id="chart-keywords"></canvas></div>
+</div>
+<div class="st-section">
+<h2>📨 การส่งต่อแอป (by App Type)</h2>
+<div class="chart-box"><canvas id="chart-apps"></canvas></div>
+</div>
+<div class="st-section full">
+<h2>📦 สถานะการส่ง (Delivery Status)</h2>
+<div class="chart-box"><canvas id="chart-delivery"></canvas></div>
+<div class="legend-note" id="st-queue-note"></div>
+</div>
+</div>
+</div>
+
+<script src="/js/api.js?v=12"></script>
+<script src="/js/auth.js?v=5"></script>
+<script>
+const Stats = {
+    charts: {},
+    data: {},
+
+    async init() {
+        if (!Auth.requireAuth()) return;
+        await this.load();
+        // auto-refresh every 60s
+        setInterval(()=>this.load(true), 60000);
+    },
+
+    _colors: {
+        info: '#3b82f6', warning: '#f59e0b', high: '#f97316',
+        critical: '#ef4444', other: '#94a3b8',
+        confirmed: '#22c55e', false_alarm: '#ef4444', unconfirmed: '#94a3b8',
+        sent: '#22c55e', failed: '#ef4444', pending: '#f59e0b',
+    },
+    _c(s, a=0.7){ return this._colors[s] || '#22d3ee'; },
+    _cA(s, a=0.7){ const hex=this._colors[s]||'#22d3ee'; return this._hexA(hex,a); },
+    _hexA(hex,a){ const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); return `rgba(${r},${g},${b},${a})`; },
+
+    async load(silent) {
+        const days = parseInt(document.getElementById('st-range').value);
+        const bucket = document.getElementById('st-bucket').value;
+        try {
+            const [agg, ts] = await Promise.all([
+                API.alertStats.get(),
+                API.alertStats.timeseries(days, bucket),
+            ]);
+            this.data = { agg, ts };
+            this._renderCards();
+            this._renderTrend();
+            this._renderSeverity();
+            this._renderVerdict();
+            this._renderKeywords();
+            this._renderApps();
+            this._renderDelivery();
+        } catch(e) { if(!silent) alert('โหลดสถิติไม่สำเร็จ: '+(e.detail||e.message||e)); }
+    },
+
+    _safe(elId){ return document.getElementById(elId); },
+    _destroy(name){ if(this.charts[name]){ this.charts[name].destroy(); delete this.charts[name]; } },
+    _grid(){ return { color:'rgba(148,163,184,0.1)' }; },
+    _ticks(){ return { color:'#94a3b8', font:{size:10} }; },
+
+    _renderCards() {
+        const a = this.data.agg || {};
+        const sev = (a.by_severity||[]);
+        const total = sev.reduce((x,s)=>x+s.count,0);
+        const sent = (a.by_delivery_status||[]).find(x=>x.status==='sent')?.count||0;
+        const failed = (a.by_delivery_status||[]).find(x=>x.status==='failed')?.count||0;
+        const pending = (a.by_delivery_status||[]).find(x=>x.status==='pending')?.count||0;
+        const conf = (a.by_verdict||[]).find(x=>x.verdict==='confirmed')?.count||0;
+        const fa = (a.by_verdict||[]).find(x=>x.verdict==='false_alarm')?.count||0;
+        const uniqKw = (a.top_keywords||[]).length;
+        const cards = [
+            {n:total, l:'แจ้งเตือนทั้งหมด'},
+            {n:sent, l:'ส่งสำเร็จ', cls:'good'},
+            {n:pending, l:'รอส่ง'},
+            {n:failed, l:'ส่งไม่สำเร็จ', cls:'warn'},
+            {n:conf, l:'เหตุจริง', cls:'good'},
+            {n:fa, l:'False alarm', cls:'warn'},
+            {n:uniqKw, l:'Keyword ที่พบ'},
+        ];
+        this._safe('st-cards').innerHTML = cards.map(c=>`<div class="st-card ${c.cls||''}"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join('');
+    },
+
+    _renderTrend() {
+        const buckets = (this.data.ts||{}).buckets || [];
+        const labels = buckets.map(b=>b.period);
+        const counts = buckets.map(b=>b.count);
+        this._destroy('trend');
+        const ctx = this._safe('chart-trend');
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูลในช่วงนี้</div>'; return; }
+        this.charts.trend = new Chart(ctx, {
+            type:'bar',
+            data:{ labels, datasets:[{ label:'จำนวนแจ้งเตือน', data:counts, backgroundColor:this._hexA('#22d3ee',0.6), borderColor:'#22d3ee', borderWidth:1, borderRadius:3 }], },
+            options:{ responsive:true, maintainAspectRatio:false,
+                plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.parsed.y} ครั้ง`}} },
+                scales:{ x:{grid:this._grid(),ticks:this._ticks()}, y:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true} } },
+        });
+    },
+
+    _renderSeverity() {
+        const rows = (this.data.agg||{}).by_severity || [];
+        this._destroy('severity');
+        const ctx = this._safe('chart-severity');
+        const labels = rows.map(r=>r.severity);
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        this.charts.severity = new Chart(ctx, {
+            type:'doughnut',
+            data:{ labels, datasets:[{ data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.severity,0.8)), borderColor:'#0f172a', borderWidth:2 }], },
+            options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'right',labels:{color:'#cbd5e1',font:{size:10},boxWidth:12}} } },
+        });
+    },
+
+    _renderVerdict() {
+        const rows = (this.data.agg||{}).by_verdict || [];
+        this._destroy('verdict');
+        const ctx = this._safe('chart-verdict');
+        const labels = rows.map(r=>r.verdict);
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        this.charts.verdict = new Chart(ctx, {
+            type:'doughnut',
+            data:{ labels, datasets:[{ data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.verdict,0.8)), borderColor:'#0f172a', borderWidth:2 }], },
+            options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'right',labels:{color:'#cbd5e1',font:{size:10},boxWidth:12}} } },
+        });
+    },
+
+    _renderKeywords() {
+        const rows = (this.data.agg||{}).top_keywords || [];
+        this._destroy('keywords');
+        const ctx = this._safe('chart-keywords');
+        const labels = rows.map(r=>r.keyword);
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มี keyword ที่พบ</div>'; return; }
+        this.charts.keywords = new Chart(ctx, {
+            type:'bar',
+            data:{ labels, datasets:[{ label:'ครั้งที่พบ', data:rows.map(r=>r.count), backgroundColor:this._hexA('#a855f7',0.6), borderColor:'#a855f7', borderWidth:1, borderRadius:3 }], },
+            options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+                plugins:{ legend:{display:false} },
+                scales:{ x:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true}, y:{grid:{display:false},ticks:this._ticks()} } },
+        });
+    },
+
+    _renderApps() {
+        const rows = (this.data.agg||{}).by_app_type || [];
+        this._destroy('apps');
+        const ctx = this._safe('chart-apps');
+        const labels = rows.map(r=>r.app_type);
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีการส่งสำเร็จ</div>'; return; }
+        const palette = ['#22d3ee','#a855f7','#f59e0b','#22c55e','#ef4444','#3b82f6'];
+        this.charts.apps = new Chart(ctx, {
+            type:'doughnut',
+            data:{ labels, datasets:[{ data:rows.map(r=>r.count), backgroundColor:labels.map((_,i)=>this._hexA(palette[i%palette.length],0.8)), borderColor:'#0f172a', borderWidth:2 }], },
+            options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'right',labels:{color:'#cbd5e1',font:{size:10},boxWidth:12}} } },
+        });
+    },
+
+    _renderDelivery() {
+        const a = this.data.agg || {};
+        const rows = a.by_delivery_status || [];
+        this._destroy('delivery');
+        const ctx = this._safe('chart-delivery');
+        const labels = rows.map(r=>r.status);
+        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        this.charts.delivery = new Chart(ctx, {
+            type:'bar',
+            data:{ labels, datasets:[{ label:'จำนวน', data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.status,0.6)), borderColor:rows.map(r=>this._c(r.status)), borderWidth:1, borderRadius:3 }], },
+            options:{ responsive:true, maintainAspectRatio:false,
+                plugins:{ legend:{display:false} },
+                scales:{ x:{grid:this._grid(),ticks:this._ticks()}, y:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true} } },
+        });
+        const q = a.job_queue || [];
+        const note = q.length ? `คิว worker: ${q.map(x=>`${x.status}=${x.count}`).join(', ')}` : 'คิว worker: ว่าง';
+        this._safe('st-queue-note').textContent = note;
+    },
+};
+Stats.init();
+</script>
+</body>
+</html>

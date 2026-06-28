@@ -62,7 +62,6 @@ const App = {
 
         await this.loadRecentRecordings();
         this.initBookmarks();
-        this._showVersionBadge();
         console.log('✅ App initialized v' + this.VERSION);
     },
 
@@ -80,22 +79,6 @@ const App = {
         btn.textContent = labels[this._autoMode] || labels.off;
         btn.classList.toggle('active', this._autoMode === 'once');
         btn.classList.toggle('auto-active', this._autoMode === 'cont');
-    },
-
-    _showVersionBadge() {
-        // Display version so users can confirm they have the latest code.
-        let el = document.getElementById('app-version');
-        if (!el) {
-            el = document.createElement('span');
-            el.id = 'app-version';
-            el.style.cssText = 'font-size:0.6rem;color:var(--text-muted);padding:0 6px;opacity:0.7;white-space:nowrap;';
-            // Insert into header-right (near settings/logout)
-            const headerRight = document.querySelector('.header-right');
-            if (headerRight) {
-                headerRight.insertBefore(el, headerRight.firstChild);
-            }
-        }
-        el.textContent = 'v' + this.VERSION;
     },
 
     // === Theme (Classic / V2) ===
@@ -159,16 +142,13 @@ const App = {
     updateUI() {
         const btnConnect = document.getElementById('btn-connect');
         const btnStream = document.getElementById('btn-stream');
-        const statusLed = document.getElementById('connection-status');
 
         if (this.isConnected) {
             if (btnConnect) { btnConnect.style.display = 'none'; }
             if (btnStream) { btnStream.style.display = ''; }
-            if (statusLed) { statusLed.style.background = 'var(--led-green)'; statusLed.style.boxShadow = '0 0 6px var(--led-green)'; }
         } else {
             if (btnConnect) { btnConnect.style.display = ''; btnConnect.textContent = '🔗 เชื่อมต่อ'; btnConnect.disabled = false; }
             if (btnStream) { btnStream.style.display = 'none'; }
-            if (statusLed) { statusLed.style.background = 'var(--led-red)'; statusLed.style.boxShadow = 'none'; }
         }
 
         if (this.isStreaming) {
@@ -283,9 +263,6 @@ const App = {
             btn.textContent = '✅ เชื่อมต่อแล้ว';
             btn.style.display = 'none';
             document.getElementById('btn-stream').style.display = '';
-
-            const status = document.getElementById('connection-status');
-            if (status) { status.style.background = 'var(--led-green)'; status.style.boxShadow = '0 0 6px var(--led-green)'; }
         } catch (err) {
             btn.textContent = '🔗 เชื่อมต่อ';
             btn.disabled = false;
@@ -828,11 +805,14 @@ const App = {
         if (btnAutoRec) btnAutoRec.addEventListener('click', () => this.toggleAutoRecord());
 
         // === Multi-VFO controls (1-4 VFOs: A/B/C/D) ===
-        // +VFO / -VFO count buttons.
+        // +VFO / -VFO count buttons. NOTE: these now live INSIDE
+        // #freq-display-box, whose own click handler opens the freq-input
+        // modal. Stop propagation so clicking +/- only adjusts the count
+        // (doesn't also pop the modal).
         const btnVfoAdd = document.getElementById('btn-vfo-add');
-        if (btnVfoAdd) btnVfoAdd.addEventListener('click', () => this.adjustVfoCount(+1));
+        if (btnVfoAdd) btnVfoAdd.addEventListener('click', (e) => { e.stopPropagation(); this.adjustVfoCount(+1); });
         const btnVfoSub = document.getElementById('btn-vfo-sub');
-        if (btnVfoSub) btnVfoSub.addEventListener('click', () => this.adjustVfoCount(-1));
+        if (btnVfoSub) btnVfoSub.addEventListener('click', (e) => { e.stopPropagation(); this.adjustVfoCount(-1); });
         // Per-VFO select / speaker / mute — wired by index so all 4 rows work.
         for (let i = 0; i < this._MAX_VFOS; i++) {
             const lo = this._vfoLower(i);

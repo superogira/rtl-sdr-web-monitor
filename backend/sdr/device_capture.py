@@ -1027,6 +1027,12 @@ class DeviceCapture:
                             f"✅ [job={self.job_id}] Auto-transcribed {rec_id}: "
                             f"{len(text)} chars"
                         )
+                        # Enqueue keyword-alert evaluation (non-blocking).
+                        try:
+                            from backend.alerts.jobs import enqueue_alert_job
+                            await enqueue_alert_job(rec_id)
+                        except Exception as e:
+                            logger.warning(f"Alert enqueue failed for {rec_id}: {e}")
                     except Exception as e:
                         logger.error(f"Auto-transcribe failed for {rec_id}: {e}")
                 asyncio.create_task(_do())

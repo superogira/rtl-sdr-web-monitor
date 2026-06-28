@@ -213,6 +213,42 @@ def _run_migrations(conn):
                 print(f"[migration] Converted {result.rowcount} quality_rating "
                       f"'{old_val}' → {new_val}")
 
+    # === keywords table: add group_id, type, score columns (keyword alerting) ===
+    result = conn.execute(text("PRAGMA table_info(keywords)"))
+    kw_columns = [row[1] for row in result]
+    kw_migrations = [
+        ("group_id", "VARCHAR(36)"),
+        ("type", "VARCHAR(30) DEFAULT 'other' NOT NULL"),
+        ("score", "INTEGER DEFAULT 1 NOT NULL"),
+    ]
+    for col_name, col_type in kw_migrations:
+        if col_name not in kw_columns:
+            conn.execute(text(
+                f"ALTER TABLE keywords ADD COLUMN {col_name} {col_type}"
+            ))
+            print(f"[migration] Added '{col_name}' column to keywords table")
+    # Index on group_id for efficient group lookups.
+    existing_idx = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='keywords'")
+        )
+    }
+    if "ix_keywords_group_id" not in existing_idx:
+        conn.execute(text("CREATE INDEX ix_keywords_group_id ON keywords (group_id)"))
+        print("[migration] Created index 'ix_keywords_group_id' on keywords(group_id)")
+
+    # === alert_events: add device_name snapshot column ===
+    # Lets alerts carry the SDR device name they were recorded on, shown in the
+    # Telegram message and the alerts/stats pages.
+    result = conn.execute(text("PRAGMA table_info(alert_events)"))
+    ev_columns = [row[1] for row in result]
+    if "device_name" not in ev_columns:
+        conn.execute(text(
+            "ALTER TABLE alert_events ADD COLUMN device_name VARCHAR(100)"
+        ))
+        print("[migration] Added 'device_name' column to alert_events table")
+
 
 def _seed_app_settings(conn):
     """Seed default global app settings (STT config, etc.) if not present.
@@ -311,6 +347,11 @@ async def init_db():
     from backend.models import recording  # noqa: F401  (register Recording model)
     from backend.models import sdr_device  # noqa: F401  (register SdrDevice model)
     from backend.models import recording_job  # noqa: F401  (register RecordingJob models)
+    from backend.models import keyword  # noqa: F401  (register Keyword model)
+    from backend.models import keyword_group  # noqa: F401  (register KeywordGroup model)
+    from backend.models import notification_channel  # noqa: F401  (NotificationChannel/Group)
+    from backend.models import alert_rule  # noqa: F401  (AlertRule + association tables)
+    from backend.models import alert_event  # noqa: F401  (AlertJob/Event/Delivery)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

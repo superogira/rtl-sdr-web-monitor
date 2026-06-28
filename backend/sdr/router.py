@@ -902,6 +902,14 @@ async def transcribe_recording(
         await db.commit()
 
         logger.info(f"Transcribed {rec_id}: {len(text)} chars (lang={lang}, provider={provider}, model={result.get('model')}, duration={stt_dur}s)")
+
+        # Enqueue keyword-alert evaluation (non-blocking; worker handles it).
+        try:
+            from backend.alerts.jobs import enqueue_alert_job
+            await enqueue_alert_job(rec_id)
+        except Exception as e:
+            logger.warning(f"Alert enqueue failed for {rec_id}: {e}")
+
         return {
             "success": True,
             "id": rec_id,

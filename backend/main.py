@@ -53,6 +53,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ JobScheduler start failed (will retry on next tick): {e}")
 
+    # Start the keyword-alert worker (DB queue consumer). Evaluates alert rules
+    # against newly transcribed recordings and delivers notifications. Failure to
+    # start is non-fatal — transcription still works, just no alerts go out.
+    from backend.alerts.worker import alert_worker
+    try:
+        await alert_worker.start()
+    except Exception as e:
+        print(f"⚠️ AlertWorker start failed: {e}")
+
     # Auto-start streaming in background (24/7 operation)
     if settings.AUTO_START_STREAMING:
         import asyncio
@@ -100,6 +109,11 @@ async def lifespan(app: FastAPI):
         await job_scheduler.stop()
     except Exception as e:
         print(f"⚠️ JobScheduler stop error: {e}")
+    from backend.alerts.worker import alert_worker
+    try:
+        await alert_worker.stop()
+    except Exception as e:
+        print(f"⚠️ AlertWorker stop error: {e}")
 
 
 # Create FastAPI app
@@ -120,6 +134,19 @@ app.include_router(recordings_router)
 app.include_router(settings_router)
 app.include_router(devices_router)
 app.include_router(recording_jobs_router)
+
+# Keyword alerting routers (keywords, channels, rules, alerts, stats).
+from backend.alerts.router import (
+    keyword_groups_router, keywords_router, channels_router,
+    notif_groups_router, alert_rules_router, alerts_router, alert_stats_router,
+)
+app.include_router(keyword_groups_router)
+app.include_router(keywords_router)
+app.include_router(channels_router)
+app.include_router(notif_groups_router)
+app.include_router(alert_rules_router)
+app.include_router(alerts_router)
+app.include_router(alert_stats_router)
 
 
 # === Health Check ===
@@ -693,6 +720,21 @@ async def serve_settings():
     #   2) API: all config-mutating endpoints under /api/settings/* and
     #      /api/sdr/recording-config require admin (require_admin dependency).
     return FileResponse(str(frontend_dir / "pages" / "settings.html"))
+
+
+@app.get("/alert-rules")
+async def serve_alert_rules():
+    return FileResponse(str(frontend_dir / "pages" / "alert_rules.html"))
+
+
+@app.get("/alerts")
+async def serve_alerts():
+    return FileResponse(str(frontend_dir / "pages" / "alerts.html"))
+
+
+@app.get("/stats")
+async def serve_stats():
+    return FileResponse(str(frontend_dir / "pages" / "stats.html"))
 
 
 @app.get("/admin/users")

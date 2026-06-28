@@ -133,6 +133,10 @@ a:hover {
 }
 
 /* === Header === */
+/* Dashboard uses two regions: .header-center + .header-right.
+   Other pages (recordings, admin) still use .header-left with a
+   clickable .header-logo to return to the dashboard. */
+
 .header-left {
     display: flex;
     align-items: center;
@@ -146,15 +150,6 @@ a:hover {
     font-weight: 700;
     font-size: 1.1rem;
     color: var(--accent-blue);
-}
-
-.header-logo .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--led-green);
-    box-shadow: var(--led-glow-green);
-    animation: pulse-led 2s infinite;
 }
 
 @keyframes pulse-led {
@@ -574,6 +569,15 @@ a:hover {
     text-align: center;
     background: var(--bg-card);
     border-bottom: 1px solid var(--border-color);
+}
+
+/* Branding title, moved from the header to sit directly above the clock. */
+.clock-title {
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.5px;
+    color: var(--accent-blue);
+    margin-bottom: 6px;
 }
 
 .clock-time {
@@ -2255,22 +2259,49 @@ a:hover {
     50%      { box-shadow: 0 0 10px rgba(234, 179, 8, 0.9); }
 }
 
-/* VFO count control (+/- buttons + label) in the header. */
+/* VFO count control (+/- buttons + label). Now placed inside the main
+   frequency display (.radio-display) as a compact vertical spinner:
+   top button = +, label = "VFO N", bottom button = −. */
 .vfo-count-ctrl {
     display: inline-flex;
+    flex-direction: column;
     align-items: center;
-    gap: 4px;
-    font-size: 0.75rem;
+    justify-content: center;
+    gap: 2px;
+    padding: 2px 4px;
+    font-size: 0.62rem;
     color: var(--text-secondary);
+    /* Subtle separator from the MODE/BW info to its left. */
+    border-left: 1px solid var(--border-color);
+    margin-left: 4px;
+    padding-left: 10px;
+    user-select: none;
 }
+/* Clicking the +/- buttons must NOT trigger the freq-input modal that
+   the parent .radio-display opens on click. */
+.vfo-count-ctrl button { cursor: pointer; }
 .vfo-count-ctrl .btn-sm {
-    padding: 1px 8px;
-    min-width: 28px;
+    padding: 0 6px;
+    min-width: 26px;
+    height: 22px;
     font-weight: 700;
-    line-height: 1.4;
+    font-size: 0.9rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .vfo-count-ctrl .btn-sm:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+.vfo-count-ctrl #vfo-count-label {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.62rem;
+    color: var(--accent-yellow);
+    letter-spacing: 0.5px;
+    line-height: 1.2;
+    white-space: nowrap;
 }
 
