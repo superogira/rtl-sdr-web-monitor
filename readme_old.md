@@ -434,8 +434,6 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 
 **ระบบตรวจสอบ Software-Defined Radio (SDR) แบบเรียลไทม์ พร้อมการแสดงผลสเปกตรัม (waterfall) บนเว็บ, ระบบฟังเสียงสดสำหรับผู้ใช้หลายคน, ระบบแปลงเสียงเป็นข้อความ (STT) และการตั้งเวลาบันทึกเสียง**
 
-[English](https://www.google.com/search?q=%23english) · [ภาษาไทย](https://www.google.com/search?q=%23%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B9%84%E0%B8%97%E0%B8%A2)
-
 ---
 
 # RTL-SDR Web Monitor (ภาษาไทย)
