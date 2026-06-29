@@ -1299,8 +1299,17 @@ const App = {
         if (next === this._vfoCount) return;
         this._vfoCount = next;
         if (typeof LiveAudio !== 'undefined') LiveAudio.setVfoCount(next);
-        // Keep active index in range.
-        if (this._activeVfoIdx >= next) this._activeVfoIdx = next - 1;
+        if (delta > 0) {
+            // Adding a VFO: auto-select the newly-added VFO (last slot) so the
+            // user can tune it immediately without having to click its row
+            // first. Otherwise clicks/tune/input would still target the old VFO.
+            this._activeVfoIdx = next - 1;
+            if (typeof LiveAudio !== 'undefined') LiveAudio.setActive(this._activeVfoIdx);
+        } else if (this._activeVfoIdx >= next) {
+            // Removing a VFO: keep active index in valid range.
+            this._activeVfoIdx = next - 1;
+            if (typeof LiveAudio !== 'undefined') LiveAudio.setActive(this._activeVfoIdx);
+        }
         this._updateVfoCountBtn();
         this._updateVfoRows();
         this.updateFreqDisplay();
