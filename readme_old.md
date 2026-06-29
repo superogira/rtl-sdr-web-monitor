@@ -12,7 +12,7 @@
 
 <a id="english"></a>
 
-# RTL-SDR Monitor (English)
+# RTL-SDR Web Monitor (English)
 
 A self-hosted web-based RTL-SDR receiver, recorder, and intelligent monitoring platform. Listen to live radio in your browser, schedule background recordings, auto-transcribe audio to text with Whisper, and get instant Telegram alerts when your keywords are detected — all from a clean, bilingual (Thai/English) web UI.
 
@@ -428,13 +428,19 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 
 </div>
 
-<a id="ภาษาไทย"></a>
+<div align="center">
 
 # 📡 RTL-SDR Web Monitor
 
 **ระบบตรวจสอบ Software-Defined Radio (SDR) แบบเรียลไทม์ พร้อมการแสดงผลสเปกตรัม (waterfall) บนเว็บ, ระบบฟังเสียงสดสำหรับผู้ใช้หลายคน, ระบบแปลงเสียงเป็นข้อความ (STT) และการตั้งเวลาบันทึกเสียง**
 
+[English](#english) · [ภาษาไทย](#ภาษาไทย)
+
+</div>
+
 ---
+
+<a id="ภาษาไทย"></a>
 
 # RTL-SDR Web Monitor (ภาษาไทย)
 
