@@ -56,9 +56,9 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 - **Alert history & statistics** — triage events, resend, test channels, and view analytics
 
 ### Authentication & Users
-- **JWT authentication** with access and refresh tokens
+- **JWT authentication** - with access and refresh tokens
 - **Role-based access** — `admin` and `user` roles (admin-only settings & recording controls)
-- **Per-user timezone** for correct local-time display
+- **Per-user timezone** - for correct local-time display
 - **CLI user management** — create superusers and regular users from the terminal
 
 ### 🔖 Bookmarks
@@ -356,7 +356,7 @@ Then log in at the web UI with those credentials.
 
 ### First Login
 1. Open **http://localhost:8000** in your browser
-2. Log in with the admin credentials created during installation
+2. Log in with the admin credentials created.
 3. You'll see the **Dashboard** with waterfall display
 
 ### Dashboard Controls
