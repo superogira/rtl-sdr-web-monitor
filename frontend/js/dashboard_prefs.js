@@ -11,12 +11,20 @@
  * Values are scoped per-user via a username prefix when available.
  */
 (function (global) {
+    // VERSION — bump on every code change so the console log confirms the
+    // browser loaded the latest file (catches stale-cache issues).
+    const VERSION = '2026.06.29-v2';
+
     const STORAGE_KEY = 'rtl_sdr_dashboard_prefs_v2';
 
     function userScope() {
+        // auth.js stores the logged-in user under localStorage key 'user'
+        // (NOT 'rtl_sdr_auth'). Read it here so per-user prefs are scoped
+        // correctly and don't collide between users sharing one browser.
         try {
-            const auth = JSON.parse(localStorage.getItem('rtl_sdr_auth') || '{}');
-            return auth.username ? String(auth.username) : '_global';
+            const user = JSON.parse(localStorage.getItem('user') || 'null');
+            if (user && user.username) return String(user.username);
+            return '_global';
         } catch { return '_global'; }
     }
 
@@ -45,6 +53,7 @@
 
     // ---- Core API ----
     const Prefs = {
+        VERSION,
         STORAGE_KEY,
         load: loadAll,
         save: saveAll,
@@ -77,43 +86,72 @@
 
         apply() {
             const p = loadAll();
-            const app = global.App;
-            const audio = global.LiveAudio;
+            // app.js / audio.js declare 'const App' / 'const LiveAudio' at the
+            // top level of their <script>. These create SCRIPT-scope globals
+            // that are NOT properties of window (unlike 'var' would be), so
+            // 'global.App' is undefined here. Resolve via the bare identifier
+            // first, falling back to global.* for safety.
+            const app = (typeof App !== 'undefined') ? App : global.App;
+            const audio = (typeof LiveAudio !== 'undefined') ? LiveAudio : global.LiveAudio;
             const keyCount = Object.keys(p).length;
-            console.log(`[DashboardPrefs] apply() — key=${scopedKey()} keys=${keyCount}`, p);
+            console.log(
+                `%c[DashboardPrefs v${VERSION}] apply()`,
+                'color:#4af;font-weight:bold',
+                `\n  scope=${userScope()}\n  key=${scopedKey()}\n  keys=${keyCount}`,
+                p
+            );
+            if (keyCount === 0) {
+                console.warn(`[DashboardPrefs v${VERSION}] No saved prefs found — nothing to restore. (First visit on this browser/user, or localStorage was cleared.)`);
+            }
             try { this._applyApp(p, app); } catch (e) { console.warn('Prefs.apply app:', e); }
             try { this._applyAudio(p, audio); } catch (e) { console.warn('Prefs.apply audio:', e); }
             return p;
         },
 
         _applyApp(p, app) {
-            if (!app) return;
+            if (!app) {
+                console.warn(`[DashboardPrefs v${VERSION}] App not available — skipping app prefs`);
+                return;
+            }
             // Theme
             if (p.theme && typeof app.setTheme === 'function') {
+                console.log(`[DashboardPrefs] restore theme=${p.theme}`);
                 try { app.setTheme(p.theme); } catch {}
             }
             // Step size
             if (p.stepSize !== undefined && app._stepSize !== undefined) {
+                console.log(`[DashboardPrefs] restore stepSize=${p.stepSize}`);
                 app._stepSize = p.stepSize;
                 const btn = document.querySelector(`.step-btn[data-step="${p.stepSize}"]`);
                 if (btn) document.querySelectorAll('.step-btn').forEach(b => b.classList.toggle('active', b === btn));
             }
             // Channel bandwidth
             if (p.channelBw !== undefined && app._channelBw !== undefined) {
+                console.log(`[DashboardPrefs] restore channelBw=${p.channelBw}`);
                 app._channelBw = p.channelBw;
                 const btn = document.querySelector(`.bw-btn[data-bw="${p.channelBw}"]`);
                 if (btn) document.querySelectorAll('.bw-btn').forEach(b => b.classList.toggle('active', b === btn));
             }
             // Mode (demodulator)
             if (p.mode && typeof app.setMode === 'function') {
+                console.log(`[DashboardPrefs] restore mode=${p.mode}`);
                 try { app.setMode(p.mode); } catch {}
             }
             // Signal tag
-            if (p.signalTag !== undefined) app.signalTagEnabled = !!p.signalTag;
+            if (p.signalTag !== undefined) {
+                console.log(`[DashboardPrefs] restore signalTag=${p.signalTag}`);
+                app.signalTagEnabled = !!p.signalTag;
+            }
             // Auto-record
-            if (p.autoRecord !== undefined) app._autoRecordOn = !!p.autoRecord;
+            if (p.autoRecord !== undefined) {
+                console.log(`[DashboardPrefs] restore autoRecord=${p.autoRecord}`);
+                app._autoRecordOn = !!p.autoRecord;
+            }
             // Auto-squelch
-            if (p.autoSquelch !== undefined) app._autoSquelchOn = !!p.autoSquelch;
+            if (p.autoSquelch !== undefined) {
+                console.log(`[DashboardPrefs] restore autoSquelch=${p.autoSquelch}`);
+                app._autoSquelchOn = !!p.autoSquelch;
+            }
 
             // --- Waterfall settings (dB range + FFT size) ---
             // These also live in their own localStorage keys for the settings
@@ -132,6 +170,7 @@
 
             // --- Gain (global) ---
             if (p.gain !== undefined) {
+                console.log(`[DashboardPrefs] restore gain=${p.gain}`);
                 const gs = document.getElementById('gain-slider');
                 const gi = document.getElementById('gain-input');
                 if (gs) gs.value = p.gain;
@@ -144,6 +183,7 @@
             // Remember as the user's pending SQL so it applies on next listen,
             // and push to any currently-connected audio WS.
             if (p.squelch !== undefined) {
+                console.log(`[DashboardPrefs] restore squelch=${p.squelch}`);
                 const ss = document.getElementById('squelch-slider');
                 const si = document.getElementById('squelch-input');
                 if (ss) ss.value = p.squelch;
@@ -161,6 +201,7 @@
 
             // --- PPM / Frequency correction ---
             if (p.ppm !== undefined) {
+                console.log(`[DashboardPrefs] restore ppm=${p.ppm}`);
                 const ps = document.getElementById('ppm-slider');
                 const pi = document.getElementById('ppm-input');
                 if (ps) ps.value = Math.max(-100, Math.min(100, p.ppm));
@@ -170,6 +211,7 @@
 
             // VFO count (1-4). Applied BEFORE per-VFO settings.
             if (p.vfoCount !== undefined) {
+                console.log(`[DashboardPrefs] restore vfoCount=${p.vfoCount}`);
                 const target = Math.max(1, Math.min(app._MAX_VFOS || 4, p.vfoCount | 0));
                 const delta = target - (app._vfoCount || 1);
                 if (delta !== 0 && typeof app.adjustVfoCount === 'function') {
@@ -181,14 +223,23 @@
             // Per-VFO offsets + active VFO. We set offsets directly on the
             // internal _vfos array, then refresh the UI.
             if (Array.isArray(p.vfoOffsets)) {
+                console.log(`[DashboardPrefs] restore vfoOffsets=`, p.vfoOffsets);
                 p.vfoOffsets.forEach((off, i) => {
                     if (app._vfos[i] && typeof off === 'number') {
                         app._setVfoOffset(i, off);
                     }
                 });
+                // Having saved offsets means THIS client owns its VFO cursor
+                // (the user previously tuned). Mark it so the periodic WS
+                // status broadcast (!this._vfoUserTouched in app.js) does NOT
+                // overwrite the restored offsets with the stale GLOBAL
+                // vfo_offset_hz (typically 0) right after a page refresh.
+                app._vfoUserTouched = true;
+                console.log(`[DashboardPrefs] set _vfoUserTouched=true (owns cursor)`);
             }
             // Active VFO
             if (p.activeVfo !== undefined && typeof app.selectActiveVfo === 'function') {
+                console.log(`[DashboardPrefs] restore activeVfo=${p.activeVfo}`);
                 try { app.selectActiveVfo(p.activeVfo); } catch {}
             }
             // Refresh VFO rows + freq display after restoring offsets/count.
@@ -200,17 +251,20 @@
             if (!audio) return;
             // Master volume
             if (p.masterVolume !== undefined && typeof audio.setVolume === 'function') {
+                console.log(`[DashboardPrefs] restore masterVolume=${p.masterVolume}`);
                 try { audio.setVolume(p.masterVolume); } catch {}
             }
             // Global mute
             if (p.muted !== undefined && typeof audio.setMuted === 'function') {
+                console.log(`[DashboardPrefs] restore muted=${p.muted}`);
                 try { audio.setMuted(p.muted); } catch {}
             }
             // Per-VFO mute + speaker. Also sync the DOM dropdown so the UI
             // matches the restored routing (the <select> value is independent
             // of the Web Audio graph, which only exists while listening).
             if (Array.isArray(p.perVfo)) {
-                const appRef = global.App;
+                // Resolve App via Script Scope (see note in apply()).
+                const appRef = (typeof App !== 'undefined') ? App : global.App;
                 const lo = (i) => appRef && appRef._vfoLower ? appRef._vfoLower(i) : String.fromCharCode(97 + i);
                 p.perVfo.forEach((v, i) => {
                     if (!v) return;
@@ -228,6 +282,10 @@
             }
         },
     };
+
+    // Log on load so the console shows exactly which version is running
+    // (makes it easy to spot a stale cached copy).
+    console.log(`%c[DashboardPrefs v${VERSION}] script loaded`, 'color:#4af');
 
     global.DashboardPrefs = Prefs;
 })(window);
