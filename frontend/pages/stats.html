@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Statistics - RTL-SDR Monitor</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/css/app.css?v=24">
+<script src="/js/i18n.js?v=1"></script>
+    <link rel="stylesheet" href="/css/app.css?v=24">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>(function(){try{var t=localStorage.getItem('ui_theme');if(t==='v2')document.documentElement.setAttribute('data-theme','v2');}catch(e){}})();</script>
 <style>
@@ -38,52 +39,53 @@
 <div class="st-page">
 <div class="st-header">
 <div>
-<a href="/dashboard" class="st-back">&larr; กลับ Dashboard</a>
-<h1>📊 สถิติการแจ้งเตือน</h1>
+<a href="/dashboard" class="st-back" data-i18n="nav.backDashboard">&larr; กลับ Dashboard</a>
+            <button class="lang-toggle-btn" onclick="I18n.toggle()" data-i18n="lang.toggle">🌐 EN</button>
+<h1 data-i18n="st.alertTitle">📊 สถิติการแจ้งเตือน</h1>
 </div>
-<a href="/alerts" class="st-back" style="background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);padding:6px 14px;border-radius:6px;">📋 หน้าแจ้งเตือน</a>
+<a href="/alerts" class="st-back" style="background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);padding:6px 14px;border-radius:6px;" data-i18n="nav.alertsTitle">📋 Alerts</a>
 </div>
 
 <div class="st-toolbar">
-<span style="font-size:0.8rem;color:var(--text-secondary);">ช่วงเวลา:</span>
+<span style="font-size:0.8rem;color:var(--text-secondary);" data-i18n="st.rangeLabel">ช่วงเวลา:</span>
 <select id="st-range" onchange="Stats.load()">
-<option value="7">7 วัน</option>
-<option value="30" selected>30 วัน</option>
-<option value="90">90 วัน</option>
-<option value="365">1 ปี</option>
+<option value="7" data-i18n="st.range7">7 วัน</option>
+<option value="30" selected data-i18n="st.range30">30 วัน</option>
+<option value="90" data-i18n="st.range90">90 วัน</option>
+<option value="365" data-i18n="st.range365">1 ปี</option>
 </select>
 <select id="st-bucket" onchange="Stats.load()">
-<option value="day">รายวัน</option>
-<option value="month">รายเดือน</option>
+<option value="day" data-i18n="st.bucketDay">รายวัน</option>
+<option value="month" data-i18n="st.bucketMonth">รายเดือน</option>
 </select>
-<button class="primary" onclick="Stats.load()">🔄 รีเฟรช</button>
+<button class="primary" onclick="Stats.load()" data-i18n="st.refresh">🔄 รีเฟรช</button>
 </div>
 
-<div class="st-cards" id="st-cards"><span class="empty">กำลังโหลด...</span></div>
+<div class="st-cards" id="st-cards"><span class="empty" data-i18n="common.loading">กำลังโหลด...</span></div>
 
 <div class="st-grid">
 <div class="st-section full">
-<h2>📈 Trend การแจ้งเตือนตามช่วงเวลา</h2>
+<h2 data-i18n="st.trendTitle">📈 Trend การแจ้งเตือนตามช่วงเวลา</h2>
 <div class="chart-box tall"><canvas id="chart-trend"></canvas></div>
 </div>
 <div class="st-section">
-<h2>🔴 ตามระดับ (Severity)</h2>
+<h2 data-i18n="st.bySeverity">🔴 ตามระดับ (Severity)</h2>
 <div class="chart-box"><canvas id="chart-severity"></canvas></div>
 </div>
 <div class="st-section">
-<h2>⚖️ ผลการตรวจสอบ (Verdict)</h2>
+<h2 data-i18n="st.byVerdict">⚖️ ผลการตรวจสอบ (Verdict)</h2>
 <div class="chart-box"><canvas id="chart-verdict"></canvas></div>
 </div>
 <div class="st-section">
-<h2>🔑 Keyword ที่พบบ่อย</h2>
+<h2 data-i18n="st.alertTopKeywords">🔑 Keyword ที่พบบ่อย</h2>
 <div class="chart-box tall"><canvas id="chart-keywords"></canvas></div>
 </div>
 <div class="st-section">
-<h2>📨 การส่งต่อแอป (by App Type)</h2>
+<h2 data-i18n="st.byAppType">📨 การส่งต่อแอป (by App Type)</h2>
 <div class="chart-box"><canvas id="chart-apps"></canvas></div>
 </div>
 <div class="st-section full">
-<h2>📦 สถานะการส่ง (Delivery Status)</h2>
+<h2 data-i18n="st.deliveryStatus">📦 สถานะการส่ง (Delivery Status)</h2>
 <div class="chart-box"><canvas id="chart-delivery"></canvas></div>
 <div class="legend-note" id="st-queue-note"></div>
 </div>
@@ -130,7 +132,7 @@ const Stats = {
             this._renderKeywords();
             this._renderApps();
             this._renderDelivery();
-        } catch(e) { if(!silent) alert('โหลดสถิติไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        } catch(e) { if(!silent) alert(I18n.t('st.alertLoadFail')+(e.detail||e.message||e)); }
     },
 
     _safe(elId){ return document.getElementById(elId); },
@@ -149,13 +151,13 @@ const Stats = {
         const fa = (a.by_verdict||[]).find(x=>x.verdict==='false_alarm')?.count||0;
         const uniqKw = (a.top_keywords||[]).length;
         const cards = [
-            {n:total, l:'แจ้งเตือนทั้งหมด'},
-            {n:sent, l:'ส่งสำเร็จ', cls:'good'},
-            {n:pending, l:'รอส่ง'},
-            {n:failed, l:'ส่งไม่สำเร็จ', cls:'warn'},
-            {n:conf, l:'เหตุจริง', cls:'good'},
-            {n:fa, l:'False alarm', cls:'warn'},
-            {n:uniqKw, l:'Keyword ที่พบ'},
+            {n:total, l:I18n.t('st.totalAlerts')},
+            {n:sent, l:I18n.t('st.sentOk'), cls:'good'},
+            {n:pending, l:I18n.t('st.pending')},
+            {n:failed, l:I18n.t('st.failed'), cls:'warn'},
+            {n:conf, l:I18n.t('st.confirmed'), cls:'good'},
+            {n:fa, l:I18n.t('st.falseAlarm'), cls:'warn'},
+            {n:uniqKw, l:I18n.t('st.keywordHits')},
         ];
         this._safe('st-cards').innerHTML = cards.map(c=>`<div class="st-card ${c.cls||''}"><div class="n">${c.n}</div><div class="l">${c.l}</div></div>`).join('');
     },
@@ -166,12 +168,12 @@ const Stats = {
         const counts = buckets.map(b=>b.count);
         this._destroy('trend');
         const ctx = this._safe('chart-trend');
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูลในช่วงนี้</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noDataRange')}</div>`; return; }
         this.charts.trend = new Chart(ctx, {
             type:'bar',
-            data:{ labels, datasets:[{ label:'จำนวนแจ้งเตือน', data:counts, backgroundColor:this._hexA('#22d3ee',0.6), borderColor:'#22d3ee', borderWidth:1, borderRadius:3 }], },
+            data:{ labels, datasets:[{ label:I18n.t('st.trendLabel'), data:counts, backgroundColor:this._hexA('#22d3ee',0.6), borderColor:'#22d3ee', borderWidth:1, borderRadius:3 }], },
             options:{ responsive:true, maintainAspectRatio:false,
-                plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.parsed.y} ครั้ง`}} },
+                plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.parsed.y} ${I18n.t('st.trendUnit')}`}} },
                 scales:{ x:{grid:this._grid(),ticks:this._ticks()}, y:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true} } },
         });
     },
@@ -181,7 +183,7 @@ const Stats = {
         this._destroy('severity');
         const ctx = this._safe('chart-severity');
         const labels = rows.map(r=>r.severity);
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noData')}</div>`; return; }
         this.charts.severity = new Chart(ctx, {
             type:'doughnut',
             data:{ labels, datasets:[{ data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.severity,0.8)), borderColor:'#0f172a', borderWidth:2 }], },
@@ -194,7 +196,7 @@ const Stats = {
         this._destroy('verdict');
         const ctx = this._safe('chart-verdict');
         const labels = rows.map(r=>r.verdict);
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noData')}</div>`; return; }
         this.charts.verdict = new Chart(ctx, {
             type:'doughnut',
             data:{ labels, datasets:[{ data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.verdict,0.8)), borderColor:'#0f172a', borderWidth:2 }], },
@@ -207,10 +209,10 @@ const Stats = {
         this._destroy('keywords');
         const ctx = this._safe('chart-keywords');
         const labels = rows.map(r=>r.keyword);
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มี keyword ที่พบ</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noKeywordHits')}</div>`; return; }
         this.charts.keywords = new Chart(ctx, {
             type:'bar',
-            data:{ labels, datasets:[{ label:'ครั้งที่พบ', data:rows.map(r=>r.count), backgroundColor:this._hexA('#a855f7',0.6), borderColor:'#a855f7', borderWidth:1, borderRadius:3 }], },
+            data:{ labels, datasets:[{ label:I18n.t('st.keywordCount'), data:rows.map(r=>r.count), backgroundColor:this._hexA('#a855f7',0.6), borderColor:'#a855f7', borderWidth:1, borderRadius:3 }], },
             options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
                 plugins:{ legend:{display:false} },
                 scales:{ x:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true}, y:{grid:{display:false},ticks:this._ticks()} } },
@@ -222,7 +224,7 @@ const Stats = {
         this._destroy('apps');
         const ctx = this._safe('chart-apps');
         const labels = rows.map(r=>r.app_type);
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีการส่งสำเร็จ</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noAppSends')}</div>`; return; }
         const palette = ['#22d3ee','#a855f7','#f59e0b','#22c55e','#ef4444','#3b82f6'];
         this.charts.apps = new Chart(ctx, {
             type:'doughnut',
@@ -237,20 +239,23 @@ const Stats = {
         this._destroy('delivery');
         const ctx = this._safe('chart-delivery');
         const labels = rows.map(r=>r.status);
-        if(!labels.length){ ctx.parentElement.innerHTML='<div class="empty">ยังไม่มีข้อมูล</div>'; return; }
+        if(!labels.length){ ctx.parentElement.innerHTML=`<div class="empty">${I18n.t('st.noData')}</div>`; return; }
         this.charts.delivery = new Chart(ctx, {
             type:'bar',
-            data:{ labels, datasets:[{ label:'จำนวน', data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.status,0.6)), borderColor:rows.map(r=>this._c(r.status)), borderWidth:1, borderRadius:3 }], },
+            data:{ labels, datasets:[{ label:I18n.t('st.deliveryCount'), data:rows.map(r=>r.count), backgroundColor:rows.map(r=>this._cA(r.status,0.6)), borderColor:rows.map(r=>this._c(r.status)), borderWidth:1, borderRadius:3 }], },
             options:{ responsive:true, maintainAspectRatio:false,
                 plugins:{ legend:{display:false} },
                 scales:{ x:{grid:this._grid(),ticks:this._ticks()}, y:{grid:this._grid(),ticks:{...this._ticks(),precision:0},beginAtZero:true} } },
         });
         const q = a.job_queue || [];
-        const note = q.length ? `คิว worker: ${q.map(x=>`${x.status}=${x.count}`).join(', ')}` : 'คิว worker: ว่าง';
+        const note = q.length ? I18n.t('st.workerQueue', q.map(x=>`${x.status}=${x.count}`).join(', ')) : I18n.t('st.workerQueueEmpty');
         this._safe('st-queue-note').textContent = note;
     },
 };
 Stats.init();
+
+// Re-render when language changes
+document.addEventListener('languagechange', () => Stats.load(true));
 </script>
 </body>
 </html>

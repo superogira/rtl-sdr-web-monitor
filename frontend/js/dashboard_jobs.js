@@ -83,12 +83,12 @@
             wrap.className = 'dj-device-select-wrap';
             wrap.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:0.75rem;';
             wrap.innerHTML = `
-                <span style="opacity:0.7;">📡 อุปกรณ์:</span>
+                <span style="opacity:0.7;">📡 ${I18n.t('rj.device')}</span>
                 <select id="dj-device-select"
                         style="background:var(--bg-card);color:var(--text-primary);
                                border:1px solid var(--border-color);border-radius:4px;
                                padding:2px 6px;font-size:0.75rem;max-width:140px;">
-                    <option value="">กำลังโหลด…</option>
+                    <option value="">${I18n.t('rj.loadingDevice')}</option>
                 </select>
             `;
             const settingsBtn = document.getElementById('btn-settings');
@@ -99,7 +99,7 @@
             sel.addEventListener('change', async (e) => {
                 const id = e.target.value;
                 if (!id) return;
-                if (!confirm('สลับไปใช้อุปกรณ์ SDR นี้สำหรับการรับสัญญาณสด?')) {
+                if (!confirm(I18n.t('rj.switchConfirm'))) {
                     this._renderDeviceSelector();
                     return;
                 }
@@ -109,7 +109,7 @@
                     await this.refresh();
                     if (typeof App !== 'undefined' && App.syncState) await App.syncState();
                 } catch (err) {
-                    alert('ไม่สามารถสลับอุปกรณ์ได้: ' + (err.detail || err.message || err));
+                    alert(I18n.t('rj.switchFail') + (err.detail || err.message || err));
                 } finally {
                     sel.disabled = false;
                 }
@@ -126,7 +126,7 @@
                     ? devices
                     : (devices.items || devices.devices || []);
                 if (list.length === 0) {
-                    sel.innerHTML = '<option value="">— ไม่มีอุปกรณ์ —</option>';
+                    sel.innerHTML = '<option value="">' + I18n.t('rj.noDevice') + '</option>';
                     return;
                 }
                 // Build a set of device_ids currently used by active jobs.
@@ -134,12 +134,12 @@
                     (this.runtime.active_captures || []).map(c => c.device_id)
                 );
                 sel.innerHTML = list.map(d => {
-                    const used = usedDeviceIds.has(d.id) ? ' 🔒อัดอยู่' : '';
+                    const used = usedDeviceIds.has(d.id) ? ' 🔒' + I18n.t('rj.recordingInUse') : '';
                     const active = (this.activeDeviceId && d.id === this.activeDeviceId) ? ' selected' : '';
                     return `<option value="${d.id}"${active}>${this._esc(d.name)}${used}</option>`;
                 }).join('');
             } catch (e) {
-                sel.innerHTML = '<option value="">— โหลดล้มเหลว —</option>';
+                sel.innerHTML = '<option value="">' + I18n.t('rj.loadFailed') + '</option>';
             }
         },
 
@@ -160,7 +160,7 @@
             panel.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             font-weight:600;color:var(--text-secondary);margin-bottom:4px;">
-                    <span>🔴 การอัดเสียงอัตโนมัติ</span>
+                    <span>🔴 ${I18n.t('rj.autoRecordTitle')}</span>
                     <span id="dj-jobs-count" style="font-weight:400;opacity:0.7;"></span>
                 </div>
                 <div id="dj-jobs-list"></div>
@@ -174,10 +174,10 @@
             if (!listEl) return;
 
             const captures = this.runtime.active_captures || [];
-            if (countEl) countEl.textContent = captures.length ? `${captures.length} งาน` : '';
+            if (countEl) countEl.textContent = captures.length ? I18n.t('rj.tasks', captures.length) : '';
 
             if (captures.length === 0) {
-                listEl.innerHTML = `<div style="opacity:0.55;padding:4px 0;">ไม่มีการอัดเสียงอัตโนมัติที่กำลังทำงาน</div>`;
+                listEl.innerHTML = `<div style="opacity:0.55;padding:4px 0;">${I18n.t('rj.noActiveRecordings')}</div>`;
                 return;
             }
 
@@ -189,7 +189,7 @@
             }
 
             if (rows.length === 0) {
-                listEl.innerHTML = `<div style="opacity:0.55;padding:4px 0;">ไม่มีความถี่ที่ตั้งอัดไว้</div>`;
+                listEl.innerHTML = `<div style="opacity:0.55;padding:4px 0;">${I18n.t('rj.noScheduledFreqs')}</div>`;
                 return;
             }
             listEl.innerHTML = rows.join('');
@@ -213,11 +213,11 @@
             // Badge: show actual recording status from runtime
             let badge;
             if (stateText === 'PAUSED') {
-                badge = `<span style="color:var(--accent-yellow);">⏸️ หยุดชั่วคราว</span>`;
+                badge = `<span style="color:var(--accent-yellow);">⏸️ ${I18n.t('rj.paused')}</span>`;
             } else if (isRec) {
-                badge = `<span class="dj-rec-dot"></span><span style="color:var(--accent-red);font-weight:600;">กำลังอัด</span>`;
+                badge = `<span class="dj-rec-dot"></span><span style="color:var(--accent-red);font-weight:600;">${I18n.t('rj.recordingInUse')}</span>`;
             } else {
-                badge = `<span style="color:var(--text-secondary);opacity:0.7;">รอสัญญาณ</span>`;
+                badge = `<span style="color:var(--text-secondary);opacity:0.7;">${I18n.t('rj.waitingSignal')}</span>`;
             }
             const label = f.label ? ` <span style="opacity:0.7;">(${this._esc(f.label)})</span>` : '';
             return `
@@ -277,4 +277,18 @@
     } else {
         boot();
     }
+
+    // Re-render the dynamically-injected panel text on language change.
+    document.addEventListener('languagechange', () => {
+        if (window.DashboardJobs) {
+            window.DashboardJobs._renderJobsPanel();
+            // Re-inject device selector label
+            const wrap = document.getElementById('dj-device-select-wrap');
+            if (wrap) {
+                const span = wrap.querySelector('span');
+                if (span) span.innerHTML = '📡 ' + I18n.t('rj.device');
+            }
+            window.DashboardJobs._renderDeviceSelector();
+        }
+    });
 })();

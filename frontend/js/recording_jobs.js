@@ -13,7 +13,7 @@ const RecordingJobsUI = {
     _editingJobId: null,
     _serverTimezone: 'Asia/Bangkok',
 
-    DAY_LABELS: ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'], // 0=Mon..6=Sun (Thai short)
+    DAY_LABELS: ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'], // 0=Mon..6=Sun (Thai short) — replaced by I18n.t('rje.dayLabels') at render time
     DEMOD_MODES: ['FM', 'AM', 'USB', 'LSB'],
     BW_PRESETS: [
         { v: 6000, label: '6 kHz' },
@@ -108,13 +108,13 @@ const RecordingJobsUI = {
     async saveServerTimezone() {
         const el = document.getElementById('server-timezone');
         const tz = (el && el.value || '').trim();
-        if (!tz) { alert('กรุณาใส่เขตเวลา'); return; }
+        if (!tz) { alert(I18n.t('rje.enterTz')); return; }
         try {
             await API.recordingJobs.setServerTimezone(tz);
             this._serverTimezone = tz;
-            alert('✅ บันทึกเขตเวลาเรียบร้อย');
+            alert(I18n.t('rje.tzSaved'));
         } catch (e) {
-            alert('บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+            alert(I18n.t('rje.saveFail') + (e.detail || e.message || e));
         }
     },
 
@@ -135,7 +135,7 @@ const RecordingJobsUI = {
         const el = document.getElementById('recording-jobs-list');
         if (!el) return;
         if (!this._jobs.length) {
-            el.innerHTML = '<div class="text-center text-muted" style="padding:16px;">ยังไม่มีการตั้งค่าการอัดเสียงของอุปกรณ์</div>';
+            el.innerHTML = '<div class="text-center text-muted" style="padding:16px;">' + I18n.t('rje.emptyList') + '</div>';
             return;
         }
         el.innerHTML = this._jobs.map(j => this._renderJobCard(j)).join('');
@@ -143,15 +143,15 @@ const RecordingJobsUI = {
 
     _deviceName(id) {
         const d = this._devices.find(x => x.id === id);
-        return d ? d.name : '(ไม่พบอุปกรณ์)';
+        return d ? d.name : I18n.t('rje.deviceNotFound');
     },
 
     _renderJobCard(j) {
         const devName = this._escape(this._deviceName(j.device_id));
         const enabledBadge = j.enabled
-            ? '<span class="status-badge status-on">เปิดใช้งาน</span>'
-            : '<span class="status-badge status-off">ปิดอยู่</span>';
-        const modeLabel = j.mode === 'scheduled' ? 'ตามช่วงเวลา' : 'ตลอดเวลา';
+            ? '<span class="status-badge status-on">' + I18n.t('rje.enabled') + '</span>'
+            : '<span class="status-badge status-off">' + I18n.t('rje.disabled') + '</span>';
+        const modeLabel = j.mode === 'scheduled' ? I18n.t('rje.modeScheduled') : I18n.t('rje.modeAlways');
 
         // Summarize windows
         const winSummary = (j.windows || []).map(w => {
@@ -159,16 +159,17 @@ const RecordingJobsUI = {
             const hi = lo + w.sample_rate;
             const timeStr = (j.mode === 'scheduled')
                 ? `${w.start_time || '?'}–${w.end_time || '?'}`
-                : 'ตลอดเวลา';
+                : I18n.t('rje.always');
+            const dayLabels = I18n.t('rje.dayLabels');
             const days = (j.mode === 'scheduled' && w.days && w.days.length)
-                ? w.days.map(d => this.DAY_LABELS[d]).join(',')
-                : 'ทุกวัน';
+                ? w.days.map(d => dayLabels[d]).join(',')
+                : I18n.t('rje.everyDay');
             const freqs = (w.frequencies || []).map(f =>
                 `${this._hzToMhz(f.frequency_hz)} MHz (${f.demod_mode}, BW ${(f.bandwidth_hz/1000)}kHz, ${f.auto_squelch ? 'SQ AUTO' : 'SQ ' + f.squelch_db + 'dB'})`
             ).join('; ');
             return `<div style="font-size:0.74rem; color:var(--text-secondary); margin-top:4px;">
-                <b>${timeStr}</b> [${days}] · ช่วง ${this._hzToMhz(lo)}–${this._hzToMhz(hi)} MHz · center ${this._hzToMhz(w.center_freq_hz)} MHz<br>
-                📻 ${freqs || '(ไม่มีความถี่)'}
+                <b>${timeStr}</b> [${days}] · ${I18n.t('rje.freqRangeInfo', this._hzToMhz(lo), this._hzToMhz(hi), this._hzToMhz(w.center_freq_hz))}<br>
+                📻 ${freqs || I18n.t('rje.noFreq')}
             </div>`;
         }).join('');
 
@@ -183,10 +184,10 @@ const RecordingJobsUI = {
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     <button class="btn btn-sm" onclick="RecordingJobsUI.toggleEnabled('${j.id}', ${!j.enabled})">
-                        ${j.enabled ? '⏸️ ปิดใช้งาน' : '▶️ เปิดใช้งาน'}
+                        ${j.enabled ? I18n.t('rje.pauseAction') : I18n.t('rje.startAction')}
                     </button>
-                    <button class="btn btn-sm" onclick="RecordingJobsUI.openEditor('${j.id}')">✏️ แก้ไข</button>
-                    <button class="btn btn-sm" style="color:var(--accent-red);" onclick="RecordingJobsUI.remove('${j.id}')">🗑️ ลบ</button>
+                    <button class="btn btn-sm" onclick="RecordingJobsUI.openEditor('${j.id}')">${I18n.t('rje.edit')}</button>
+                    <button class="btn btn-sm" style="color:var(--accent-red);" onclick="RecordingJobsUI.remove('${j.id}')">${I18n.t('rje.delete')}</button>
                 </div>
             </div>
             ${winSummary}
@@ -198,17 +199,17 @@ const RecordingJobsUI = {
             await API.recordingJobs.setEnabled(id, enabled);
             await this.refresh();
         } catch (e) {
-            alert('ไม่สามารถเปลี่ยนสถานะ: ' + (e.detail || e.message || e));
+            alert(I18n.t('rje.toggleFail') + (e.detail || e.message || e));
         }
     },
 
     async remove(id) {
-        if (!confirm('ต้องการลบการตั้งค่าการอัดเสียงนี้?')) return;
+        if (!confirm(I18n.t('rje.deleteConfirm'))) return;
         try {
             await API.recordingJobs.remove(id);
             await this.refresh();
         } catch (e) {
-            alert('ลบไม่สำเร็จ: ' + (e.detail || e.message || e));
+            alert(I18n.t('rje.deleteFail') + (e.detail || e.message || e));
         }
     },
 
@@ -230,9 +231,9 @@ const RecordingJobsUI = {
             opts.push(`<option value="${d.id}" ${sel}>${this._escape(d.name)}</option>`);
         }
         if (!opts.length) {
-            return '<option value="">— ไม่มีอุปกรณ์ที่ว่างให้เลือกใช้งาน —</option>';
+            return '<option value="">' + I18n.t('rje.noFreeDevice') + '</option>';
         }
-        return '<option value="">— เลือกอุปกรณ์ —</option>' + opts.join('');
+        return '<option value="">' + I18n.t('rje.selectDevice') + '</option>' + opts.join('');
     },
 
     _showEditorModal(job) {
@@ -260,26 +261,26 @@ const RecordingJobsUI = {
         modal.innerHTML = `
         <div style="background:var(--surface-2); border:1px solid var(--border); border-radius:8px; width:100%; max-width:760px; padding:16px; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                <h2 style="margin:0; font-size:1.1rem; color:var(--accent-cyan);">${editing ? '✏️ แก้ไขการอัดเสียง' : '➕ เพิ่มการอัดเสียง'}</h2>
-                <button class="btn btn-sm" onclick="RecordingJobsUI.closeEditor()">✖ ปิด</button>
+                <h2 style="margin:0; font-size:1.1rem; color:var(--accent-cyan);">${editing ? I18n.t('rje.editTitle') : I18n.t('rje.addTitle')}</h2>
+                <button class="btn btn-sm" onclick="RecordingJobsUI.closeEditor()">${I18n.t('rje.close')}</button>
             </div>
 
             <div class="form-group">
-                <label>ชื่อการอัดเสียง (ไม่บังคับ)</label>
-                <input type="text" id="rj-name" value="${this._escape(name)}" placeholder="เช่น อัด VHF ช่วงเช้า">
+                <label>${I18n.t('rje.jobName')}</label>
+                <input type="text" id="rj-name" value="${this._escape(name)}" placeholder="${I18n.t('rje.jobNamePh')}">
             </div>
 
             <div class="form-row">
                 <div class="form-group">
-                    <label>อุปกรณ์ SDR</label>
+                    <label>${I18n.t('rje.sdrDevice')}</label>
                     <select id="rj-device" onchange="RecordingJobsUI.onDeviceChange()">${this._availableDeviceOptions(deviceId, deviceId)}</select>
                     <p id="rj-device-defaults-hint" style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;"></p>
                 </div>
                 <div class="form-group">
-                    <label>โหมดการอัด</label>
+                    <label>${I18n.t('rje.recordMode')}</label>
                     <select id="rj-mode" onchange="RecordingJobsUI.onModeChange()">
-                        <option value="always" ${mode==='always'?'selected':''}>ตลอดเวลา</option>
-                        <option value="scheduled" ${mode==='scheduled'?'selected':''}>ตามช่วงเวลา</option>
+                        <option value="always" ${mode==='always'?'selected':''}>${I18n.t('rje.modeAlways')}</option>
+                        <option value="scheduled" ${mode==='scheduled'?'selected':''}>${I18n.t('rje.modeScheduled')}</option>
                     </select>
                 </div>
             </div>
@@ -287,8 +288,8 @@ const RecordingJobsUI = {
             <div id="rj-windows"></div>
 
             <div class="form-actions">
-                <button class="btn btn-sm" onclick="RecordingJobsUI.addWindow()">➕ เพิ่มช่วงเวลา</button>
-                <button class="btn btn-primary" onclick="RecordingJobsUI.save()">💾 บันทึก</button>
+                <button class="btn btn-sm" onclick="RecordingJobsUI.addWindow()">${I18n.t('rje.addWindow')}</button>
+                <button class="btn btn-primary" onclick="RecordingJobsUI.save()">${I18n.t('rje.save')}</button>
             </div>
         </div>`;
 
@@ -317,7 +318,7 @@ const RecordingJobsUI = {
         if (!el) return;
         if (!deviceId) { el.textContent = ''; return; }
         const def = this._getDeviceDefaults(deviceId);
-        el.textContent = `ค่าเริ่มต้นจากอุปกรณ์: Gain ${def.gain} dB · PPM ${def.freq_correction_ppm} (ใช้กรอกอัตโนมัติด้านล่าง แก้ไขเองได้)`;
+        el.textContent = I18n.t('rje.deviceDefaults', def.gain, def.freq_correction_ppm);
     },
 
     closeEditor() {
@@ -468,7 +469,7 @@ const RecordingJobsUI = {
         if (!container) return;
         const mode = this._editorMode;
         const addWindowBtn = (mode === 'scheduled')
-            ? `<button class="btn btn-sm" onclick="RecordingJobsUI.addWindow()">➕ เพิ่มช่วงเวลา</button>`
+            ? `<button class="btn btn-sm" onclick="RecordingJobsUI.addWindow()">${I18n.t('rje.addWindow')}</button>`
             : '';
         container.innerHTML = this._editorWindows.map((w, idx) => this._renderWindow(w, idx, mode)).join('') + addWindowBtn;
     },
@@ -478,24 +479,25 @@ const RecordingJobsUI = {
         const hi = lo + w.sample_rate;
         const center = lo + Math.floor(w.sample_rate / 2);
 
+        const dayLabels = I18n.t('rje.dayLabels');
         const timeBlock = (mode === 'scheduled') ? `
             <div class="form-row">
                 <div class="form-group">
-                    <label>เวลาเริ่ม (HH:MM)</label>
+                    <label>${I18n.t('rje.startTime')}</label>
                     <input type="time" id="w-${w._tempId}-st" value="${this._escape(w.start_time || '08:00')}">
                 </div>
                 <div class="form-group">
-                    <label>เวลาสิ้นสุด (HH:MM)</label>
+                    <label>${I18n.t('rje.endTime')}</label>
                     <input type="time" id="w-${w._tempId}-et" value="${this._escape(w.end_time || '10:00')}">
                 </div>
             </div>
             <div class="form-group">
-                <label>วันในสัปดาห์</label>
+                <label>${I18n.t('rje.weekdays')}</label>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     ${[0,1,2,3,4,5,6].map(d => {
                         const checked = (w.days || []).includes(d) ? 'checked' : '';
                         return `<label style="font-size:0.8rem; display:flex; align-items:center; gap:2px;">
-                            <input type="checkbox" id="w-${w._tempId}-day-${d}" ${checked}> ${this.DAY_LABELS[d]}
+                            <input type="checkbox" id="w-${w._tempId}-day-${d}" ${checked}> ${dayLabels[d]}
                         </label>`;
                     }).join('')}
                 </div>
@@ -503,21 +505,21 @@ const RecordingJobsUI = {
         ` : '';
 
         const removeWinBtn = (mode === 'scheduled')
-            ? `<button class="btn btn-sm" style="color:var(--accent-red); margin-left:8px;" onclick="RecordingJobsUI.removeWindow('${w._tempId}')">🗑️ ลบช่วงเวลา</button>`
+            ? `<button class="btn btn-sm" style="color:var(--accent-red); margin-left:8px;" onclick="RecordingJobsUI.removeWindow('${w._tempId}')">${I18n.t('rje.deleteWindow')}</button>`
             : '';
 
         const freqsHtml = w.frequencies.map(f => this._renderFreq(f, w._tempId, lo, hi)).join('');
         const freqsBlock = `
             <div style="margin-top:8px;">
-                <label style="font-size:0.8rem; color:var(--text-secondary);">ความถี่ที่จะอัด (ต้องอยู่ในช่วง ${this._hzToMhz(lo)}–${this._hzToMhz(hi)} MHz)</label>
+                <label style="font-size:0.8rem; color:var(--text-secondary);">${I18n.t('rje.recordFreqs', this._hzToMhz(lo), this._hzToMhz(hi))}</label>
                 ${freqsHtml}
-                <button class="btn btn-sm" style="margin-top:6px;" onclick="RecordingJobsUI.addFreq('${w._tempId}')">➕ เพิ่มความถี่</button>
+                <button class="btn btn-sm" style="margin-top:6px;" onclick="RecordingJobsUI.addFreq('${w._tempId}')">${I18n.t('rje.addFreq')}</button>
             </div>`;
 
         return `
         <div style="border:1px dashed var(--border); border-radius:6px; padding:10px; margin-bottom:10px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <strong style="font-size:0.85rem;">ช่วงเวลา #${idx + 1}</strong>
+                <strong style="font-size:0.85rem;">${I18n.t('rje.windowNum', idx + 1)}</strong>
                 ${removeWinBtn}
             </div>
             ${timeBlock}
@@ -533,14 +535,14 @@ const RecordingJobsUI = {
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>ความถี่เริ่มต้น (MHz)</label>
+                    <label>${I18n.t('rje.startFreq')}</label>
                     <input type="number" id="w-${w._tempId}-start" value="${this._hzToMhz(w.start_freq_hz)}" step="0.0001" onchange="RecordingJobsUI._renderWindows()">
                     <div style="font-size:0.72rem; color:var(--text-secondary);">${w.start_freq_hz.toLocaleString()} Hz</div>
                 </div>
                 <div class="form-group">
                     <label>Sample Rate (Hz)</label>
                     <input type="number" id="w-${w._tempId}-sr" value="${w.sample_rate}" onchange="RecordingJobsUI._renderWindows()">
-                    <div style="font-size:0.72rem; color:var(--text-secondary);">ช่วง ${this._hzToMhz(lo)}–${this._hzToMhz(hi)} MHz · center ${this._hzToMhz(center)} MHz</div>
+                    <div style="font-size:0.72rem; color:var(--text-secondary);">${I18n.t('rje.freqRangeInfo', this._hzToMhz(lo), this._hzToMhz(hi), this._hzToMhz(center))}</div>
                 </div>
             </div>
             ${freqsBlock}
@@ -549,12 +551,12 @@ const RecordingJobsUI = {
 
     _renderFreq(f, winTempId, lo, hi) {
         const inBand = (f.frequency_hz >= lo && f.frequency_hz <= hi);
-        const warn = inBand ? '' : `<div style="font-size:0.72rem; color:var(--accent-red);">⚠️ เกินช่วงความถี่ — จะบันทึกไม่ได้</div>`;
+        const warn = inBand ? '' : `<div style="font-size:0.72rem; color:var(--accent-red);">${I18n.t('rje.outOfRangeWarn')}</div>`;
         return `
         <div style="background:var(--surface-1); border:1px solid var(--border); border-radius:4px; padding:8px; margin-top:6px;">
             <div class="form-row" style="grid-template-columns: 1fr 1fr 1fr 1fr;">
                 <div class="form-group" style="margin-bottom:4px;">
-                    <label style="font-size:0.72rem;">ความถี่ (MHz)</label>
+                    <label style="font-size:0.72rem;">${I18n.t('rje.freqLabel')}</label>
                     <input type="number" id="f-${f._tempId}-freq" value="${this._hzToMhz(f.frequency_hz)}" step="0.0001" onchange="RecordingJobsUI._renderWindows()" style="font-size:0.78rem;">
                 </div>
                 <div class="form-group" style="margin-bottom:4px;">
@@ -580,11 +582,11 @@ const RecordingJobsUI = {
             </div>
             <div class="form-row" style="grid-template-columns: 1fr auto;">
                 <div class="form-group" style="margin-bottom:0;">
-                    <label style="font-size:0.72rem;">หมายเหตุ (ไม่บังคับ)</label>
-                    <input type="text" id="f-${f._tempId}-label" value="${this._escape(f.label || '')}" placeholder="เช่น 144.825" style="font-size:0.78rem;">
+                    <label style="font-size:0.72rem;">${I18n.t('rje.noteLabel')}</label>
+                    <input type="text" id="f-${f._tempId}-label" value="${this._escape(f.label || '')}" placeholder="${I18n.t('rje.notePh')}" style="font-size:0.78rem;">
                 </div>
                 <div class="form-group" style="margin-bottom:0; display:flex; align-items:flex-end;">
-                    <button class="btn btn-sm" style="color:var(--accent-red);" onclick="RecordingJobsUI.removeFreq('${winTempId}','${f._tempId}')">ลบ</button>
+                    <button class="btn btn-sm" style="color:var(--accent-red);" onclick="RecordingJobsUI.removeFreq('${winTempId}','${f._tempId}')">${I18n.t('rje.deleteFreq')}</button>
                 </div>
             </div>
             ${warn}
@@ -598,7 +600,7 @@ const RecordingJobsUI = {
         const deviceId = document.getElementById('rj-device').value;
         const mode = this._editorMode;
         if (!deviceId) {
-            alert('กรุณาเลือกอุปกรณ์ SDR (หรือไม่มีอุปกรณ์ที่ว่าง)');
+            alert(I18n.t('rje.selectDeviceWarn'));
             return;
         }
         const payload = {
@@ -633,10 +635,17 @@ const RecordingJobsUI = {
             this.closeEditor();
             await this.refresh();
         } catch (e) {
-            alert('บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+            alert(I18n.t('rje.saveFail') + (e.detail || e.message || e));
         }
     },
 };
+
+// Re-render the list when the language changes (editor modal re-renders on open)
+document.addEventListener('languagechange', () => {
+    if (window.RecordingJobsUI && document.getElementById('recording-jobs-list')) {
+        RecordingJobsUI._renderList();
+    }
+});
 
 // Expose globally for inline onclick handlers
 window.RecordingJobsUI = RecordingJobsUI;

@@ -174,7 +174,7 @@ const LiveAudio = {
             return true;
         } catch (e) {
             console.error("AudioContext creation failed:", e);
-            alert("เบราว์เซอร์ไม่รองรับ Web Audio API");
+            alert(I18n.t('audio.noWebAudio'));
             return false;
         }
     },
@@ -223,17 +223,17 @@ const LiveAudio = {
         // manager level so two VFOs don't double-trigger connect/stream).
         if (typeof App === 'undefined') { this._updateStatus("❌ App?"); return; }
         if (!App.isConnected) {
-            this._updateStatus("🔗 เชื่อมต่อ...");
+            this._updateStatus(I18n.t('audio.connecting'));
             try { await App.connectSDR(); } catch (e) {
-                this._updateStatus("❌ ต่อไม่ได้");
-                alert("เชื่อมต่อ RTL-TCP ไม่ได้: " + (e.message || e));
+                this._updateStatus(I18n.t('audio.connectFail'));
+                alert(I18n.t('audio.connectFailMsg') + (e.message || e));
                 return;
             }
-            if (!App.isConnected) { this._updateStatus("❌ ต่อไม่ได้"); return; }
+            if (!App.isConnected) { this._updateStatus(I18n.t('audio.notConnected')); return; }
         }
         if (!App.isStreaming) {
-            this._updateStatus("📡 เริ่มรับ...");
-            try { await App.toggleStream(); } catch (e) { this._updateStatus("❌ รับไม่ได้"); return; }
+            this._updateStatus(I18n.t('audio.starting'));
+            try { await App.toggleStream(); } catch (e) { this._updateStatus(I18n.t('audio.startFail')); return; }
             await new Promise(r => setTimeout(r, 800));
         }
 
@@ -496,10 +496,10 @@ const LiveAudio = {
             v.ws.onclose = (ev) => {
                 console.log(`🔊 [audio] VFO ${v.id} WS onclose (code=${ev.code})`);
                 if (ev.code === 1013) {
-                    this._updateStatus("🔴 เต็ม");
+                    this._updateStatus(I18n.t('audio.full'));
                     v.isPlaying = false;
                     this._updateUI();
-                    alert("ขณะนี้มีผู้ใช้งานเต็มจำนวนแล้ว กรุณาลองใหม่ในภายหลัง");
+                    alert(I18n.t('audio.fullMsg'));
                     return;
                 }
                 this._updateStatus("🔴 " + ev.code);
@@ -508,7 +508,7 @@ const LiveAudio = {
 
             v.ws.onerror = (err) => {
                 console.error(`🔊 [audio] VFO ${v.id} WS onerror:`, err);
-                this._updateStatus("🔴 ERR");
+                this._updateStatus(I18n.t('audio.connError'));
             };
         } catch (e) {
             console.error(`VFO ${v.id} WS connect error:`, e);
@@ -698,8 +698,8 @@ const LiveAudio = {
         const indicator = document.getElementById("listen-indicator");
         const playing = this.anyPlaying;
         if (btn) {
-            if (playing) { btn.textContent = "🔊 กำลังฟัง"; btn.classList.add("active"); }
-            else { btn.textContent = "🔈 ฟังสด"; btn.classList.remove("active"); }
+            if (playing) { btn.textContent = I18n.t('dash.listening'); btn.classList.add("active"); }
+            else { btn.textContent = I18n.t('dash.listenLive'); btn.classList.remove("active"); }
         }
         if (indicator) indicator.style.display = playing ? "" : "none";
         if (typeof App !== 'undefined' && App._updateVfoRows) App._updateVfoRows();
@@ -738,3 +738,8 @@ const LiveAudio = {
         };
     },
 };
+
+// Re-render the listen button label when language changes.
+document.addEventListener('languagechange', () => {
+    if (typeof LiveAudio !== 'undefined') LiveAudio._updateUI();
+});

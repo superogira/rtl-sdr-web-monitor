@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ตั้งค่า - RTL-SDR Monitor</title>
+    <title data-i18n="set.title">ตั้งค่า - RTL-SDR Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
+    <script src="/js/i18n.js?v=1"></script>
     <link rel="stylesheet" href="/css/app.css?v=24">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
@@ -66,27 +67,28 @@
     <div class="settings-page">
         <div class="settings-header">
             <div>
-                <a href="/dashboard" class="back-link">← กลับ Dashboard</a>
-                <h1>⚙️ ตั้งค่าระบบ</h1>
+                <a href="/dashboard" class="back-link" data-i18n="nav.backDashboard">← กลับ Dashboard</a>
+                <h1 data-i18n="set.pageTitle">⚙️ ตั้งค่าระบบ</h1>
             </div>
             <div class="settings-user-box">
                 <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
                 <span class="text-muted" style="font-size:0.6rem; padding:0 6px; opacity:0.7; white-space:nowrap;">v2026.06.26-v3</span>
-                <a href="/recordings" class="recordings-link">📂 รายการทั้งหมด</a>
-                <button class="logout-btn" onclick="Auth.logout()">ออกจากระบบ</button>
+                <a href="/recordings" class="recordings-link" data-i18n="set.allRecordings">📂 รายการทั้งหมด</a>
+                <button class="lang-toggle-btn" onclick="I18n.toggle()" data-i18n="lang.toggle">🌐 EN</button>
+                <button class="logout-btn" onclick="Auth.logout()" data-i18n="nav.logout">ออกจากระบบ</button>
             </div>
         </div>
 
         <!-- Tabs -->
         <div class="nav-tabs">
-            <div class="nav-tab" onclick="Settings.showTab('general')">🌐 ทั่วไป</div>
-            <div class="nav-tab" onclick="Settings.showTab('devices')">🔌 อุปกรณ์และการตั้งค่า</div>
-            <div class="nav-tab" onclick="Settings.showTab('recording')">🎙️ การอัดเสียง</div>
-            <div class="nav-tab" onclick="Settings.showTab('stt')">📝 ถอดเสียง</div>
-            <div class="nav-tab" onclick="Settings.showTab('telegram')">📨 Telegram</div>
-            <div class="nav-tab" onclick="Settings.showTab('keywords')">🔑 Keywords</div>
-            <div class="nav-tab" onclick="Settings.showTab('display')">🎨 แสดงผล</div>
-            <div class="nav-tab" onclick="Settings.showTab('users')">👥 ผู้ใช้งาน</div>
+            <div class="nav-tab" onclick="Settings.showTab('general')" data-i18n="set.tab.general">🌐 ทั่วไป</div>
+            <div class="nav-tab" onclick="Settings.showTab('devices')" data-i18n="set.tab.devices">🔌 อุปกรณ์และการตั้งค่า</div>
+            <div class="nav-tab" onclick="Settings.showTab('recording')" data-i18n="set.tab.recording">🎙️ การอัดเสียง</div>
+            <div class="nav-tab" onclick="Settings.showTab('stt')" data-i18n="set.tab.stt">📝 ถอดเสียง</div>
+            <div class="nav-tab" onclick="Settings.showTab('telegram')" data-i18n="set.tab.telegram">📨 Telegram</div>
+            <div class="nav-tab" onclick="Settings.showTab('keywords')" data-i18n="set.tab.keywords">🔑 Keywords</div>
+            <div class="nav-tab" onclick="Settings.showTab('display')" data-i18n="set.tab.display">🎨 แสดงผล</div>
+            <div class="nav-tab" onclick="Settings.showTab('users')" data-i18n="set.tab.users">👥 ผู้ใช้งาน</div>
         </div>
 
         <!-- Devices (Admin) -->
@@ -95,14 +97,14 @@
             <div id="devices-list-view">
                 <div class="settings-section">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                        <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0;">🔌 อุปกรณ์ SDR</h2>
-                        <button class="btn btn-sm btn-primary" onclick="Settings.showDeviceWizard(null)">＋ เพิ่มอุปกรณ์</button>
+                        <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0;" data-i18n="set.dev.sdrDevices">🔌 อุปกรณ์ SDR</h2>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.showDeviceWizard(null)" data-i18n="set.dev.addDevice">＋ เพิ่มอุปกรณ์</button>
                     </div>
-                    <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                    <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.dev.manageHint">
                         จัดการอุปกรณ์ SDR ที่เชื่อมต่อกับระบบ สามารถตั้งค่าอุปกรณ์หลายตัวและเลือกอุปกรณ์ที่จะใช้งานได้
                     </p>
                     <div id="devices-list" style="display:grid; gap:8px;">
-                        <div class="text-center text-muted">กำลังโหลด...</div>
+                        <div class="text-center text-muted" data-i18n="common.loading">กำลังโหลด...</div>
                     </div>
                 </div>
             </div>
@@ -111,37 +113,37 @@
             <div id="devices-wizard-view" style="display:none;">
                 <!-- Status section (shown only when viewing an existing device) -->
                 <div class="settings-section" id="device-status-section" style="display:none;">
-                    <h2>📊 สถานะการเชื่อมต่อ</h2>
-                    <div id="sdr-status" style="font-size:0.85rem;">กำลังโหลด...</div>
+                    <h2 data-i18n="set.dev.connStatus">📊 สถานะการเชื่อมต่อ</h2>
+                    <div id="sdr-status" style="font-size:0.85rem;" data-i18n="common.loading">กำลังโหลด...</div>
                     <div id="sdr-status-actions" class="form-actions"></div>
                 </div>
                 <!-- Step 1: Name + Type -->
                 <div class="settings-section" id="device-step1">
-                    <h2 id="device-wizard-title">➕ เพิ่มอุปกรณ์ใหม่</h2>
+                    <h2 id="device-wizard-title" data-i18n="set.dev.wizardTitle">➕ เพิ่มอุปกรณ์ใหม่</h2>
                     <div class="form-group">
-                        <label>ชื่ออุปกรณ์</label>
-                        <input type="text" id="device-name" placeholder="เช่น RTL-TCP ห้องเซิร์ฟเวอร์">
+                        <label data-i18n="set.dev.deviceNameLabel">ชื่ออุปกรณ์</label>
+                        <input type="text" id="device-name" placeholder="เช่น RTL-TCP ห้องเซิร์ฟเวอร์" data-i18n-ph="set.dev.deviceNamePh">
                     </div>
                     <div class="form-group">
-                        <label>รูปแบบของอุปกรณ์ / การเชื่อมต่อ</label>
+                        <label data-i18n="set.dev.deviceTypeLabel">รูปแบบของอุปกรณ์ / การเชื่อมต่อ</label>
                         <select id="device-type" onchange="Settings.onDeviceTypeChange()">
-                            <option value="">— เลือกประเภท —</option>
+                            <option value="" data-i18n="set.selectType">— เลือกประเภท —</option>
                         </select>
                     </div>
                     <div id="device-type-desc" style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px; display:none;"></div>
                     <div class="form-actions">
-                        <button class="btn btn-sm" onclick="Settings.cancelDeviceWizard()">ยกเลิก</button>
-                        <button class="btn btn-sm btn-primary" onclick="Settings.deviceWizardNext()">ถัดไป →</button>
+                        <button class="btn btn-sm" onclick="Settings.cancelDeviceWizard()" data-i18n="set.dev.cancel">ยกเลิก</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.deviceWizardNext()" data-i18n="set.dev.next">ถัดไป →</button>
                     </div>
                 </div>
 
                 <!-- Step 2: Config (RTL-TCP) -->
                 <div class="settings-section" id="device-step2" style="display:none;">
-                    <h2>⚙️ ตั้งค่าการเชื่อมต่อ <span id="device-step2-name" style="color:var(--text-secondary);"></span></h2>
+                    <h2 data-i18n="set.dev.configTitle">⚙️ ตั้งค่าการเชื่อมต่อ</h2> <span id="device-step2-name" style="color:var(--text-secondary);"></span>
                     <div id="device-config-fields"></div>
                     <div class="form-actions">
-                        <button class="btn btn-sm" onclick="Settings.deviceWizardBack()">← ย้อนกลับ</button>
-                        <button class="btn btn-sm btn-primary" onclick="Settings.saveDeviceFromWizard()">💾 บันทึกอุปกรณ์</button>
+                        <button class="btn btn-sm" onclick="Settings.deviceWizardBack()" data-i18n="set.dev.back">← ย้อนกลับ</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.saveDeviceFromWizard()" data-i18n="set.dev.saveDevice">💾 บันทึกอุปกรณ์</button>
                     </div>
                 </div>
             </div>
@@ -150,122 +152,116 @@
         <!-- Recording Settings -->
         <div class="tab-content" id="tab-recording" style="display:none;">
             <div class="settings-section">
-                <h2>🎚️ สิทธิ์การบันทึกของผู้ใช้</h2>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
-                    ควบคุมว่าผู้ใช้ทั่วไป (role=user) จะสามารถกดบันทึกเสียงแบบ manual ได้หรือไม่
-                    <br>ผู้ดูแลระบบ (admin) สามารถบันทึกได้เสมอ ไม่ว่าจะตั้งค่านี้อย่างไร
-                </p>
+                <h2 data-i18n="set.rec.permTitle">🎚️ สิทธิ์การบันทึกของผู้ใช้</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n-html="set.rec.permHint1">ควบคุมว่าผู้ใช้ทั่วไป (role=user) จะสามารถกดบันทึกเสียงแบบ manual ได้หรือไม่</p>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.permHint2">ผู้ดูแลระบบ (admin) สามารถบันทึกได้เสมอ ไม่ว่าจะตั้งค่านี้อย่างไร</p>
                 <div class="form-group">
-                    <label>อนุญาตให้ผู้ใช้ทั่วไปกดบันทึกเอง</label>
+                    <label data-i18n="set.rec.allowUserLabel">อนุญาตให้ผู้ใช้ทั่วไปกดบันทึกเอง</label>
                     <select id="rec-manual-enabled">
-                        <option value="true">เปิด (ผู้ใช้ทั่วไปกดบันทึกได้)</option>
-                        <option value="false">ปิด (ผู้ใช้ทั่วไปกดบันทึกไม่ได้)</option>
+                        <option value="true" data-i18n="set.rec.allowUserOn">เปิด (ผู้ใช้ทั่วไปกดบันทึกได้)</option>
+                        <option value="false" data-i18n="set.rec.allowUserOff">ปิด (ผู้ใช้ทั่วไปกดบันทึกไม่ได้)</option>
                     </select>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveRecordingEnabled()">💾 บันทึก</button>
+                    <button class="btn btn-primary" onclick="Settings.saveRecordingEnabled()" data-i18n="set.save">💾 บันทึก</button>
                 </div>
             </div>
 
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>🎙️ การบันทึกเสียงความถี่กลาง (Center) อัตโนมัติ</h2>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
-                    บันทึกเสียงที่ <b>ความถี่กลาง (Center Frequency)</b> ที่ตั้งไว้ในระบบอัตโนมัติเมื่อมีสัญญาณเข้าเกณฑ์ Squelch (ทำงานเป็น background ไม่ต้องมีใครฟังสด)
-                    <br>แยกจากการอัดเสียงของผู้ใช้ตอนฟังสด (ซึ่งเปิด/ปิดได้ที่ Dashboard รายบุคคล)
-                    <br>ค่า Silence / Min / Max Duration ด้านล่างนี้ใช้ <b>ร่วม</b> กับทั้งการบันทึกกลางอัตโนมัติและการอัดอัตโนมัติของผู้ใช้ตอนฟังสด
-                </p>
+                <h2 data-i18n="set.rec.centerTitle">🎙️ การบันทึกเสียงความถี่กลาง (Center) อัตโนมัติ</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n-html="set.rec.centerHint1">บันทึกเสียงที่ <b>ความถี่กลาง (Center Frequency)</b> ที่ตั้งไว้ในระบบอัตโนมัติเมื่อมีสัญญาณเข้าเกณฑ์ Squelch (ทำงานเป็น background ไม่ต้องมีใครฟังสด)</p>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.centerHint2">แยกจากการอัดเสียงของผู้ใช้ตอนฟังสด (ซึ่งเปิด/ปิดได้ที่ Dashboard รายบุคคล)</p>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n-html="set.rec.centerHint3">ค่า Silence / Min / Max Duration ด้านล่างนี้ใช้ <b>ร่วม</b> กับทั้งการบันทึกกลางอัตโนมัติและการอัดอัตโนมัติของผู้ใช้ตอนฟังสด</p>
                 <div class="form-group">
-                    <label>บันทึกเสียงความถี่กลางอัตโนมัติ (Center Auto-Record)</label>
+                    <label data-i18n="set.rec.centerLabel">บันทึกเสียงความถี่กลางอัตโนมัติ (Center Auto-Record)</label>
                     <select id="rec-auto">
-                        <option value="true">เปิด (บันทึกกลางอัตโนมัติเมื่อจับสัญญาณเกิน Squelch)</option>
-                        <option value="false">ปิด (ไม่บันทึกกลางอัตโนมัติ)</option>
+                        <option value="true" data-i18n="set.rec.centerOn">เปิด (บันทึกกลางอัตโนมัติเมื่อจับสัญญาณเกิน Squelch)</option>
+                        <option value="false" data-i18n="set.rec.centerOff">ปิด (ไม่บันทึกกลางอัตโนมัติ)</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Squelch (dB) — บันทึกเมื่อสัญญาณเกินค่านี้</label>
+                    <label data-i18n="set.rec.squelchLabel">Squelch (dB) — บันทึกเมื่อสัญญาณเกินค่านี้</label>
                     <input type="number" id="rec-squelch" value="-70" step="1" min="-150" max="0">
-                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.rec.squelchHint">
                         ค่าต่ำ = ไวต่อสัญญาณ (บันทึกง่าย อาจเก็บเสียงรบกวน) · ค่าสูง = เข้มงวด (บันทึกเฉพาะสัญญาณแรง)
                     </p>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Silence Timeout (วินาที) - หยุดอัดเมื่อเงียบเกิน</label>
+                        <label data-i18n="set.rec.silenceLabel">Silence Timeout (วินาที) - หยุดอัดเมื่อเงียบเกิน</label>
                         <input type="number" id="rec-silence" value="5">
                     </div>
                     <div class="form-group">
-                        <label>Min Recording Duration (วินาที)</label>
+                        <label data-i18n="set.rec.minDurLabel">Min Recording Duration (วินาที)</label>
                         <input type="number" id="rec-min" value="2">
                     </div>
                     <div class="form-group">
-                        <label>Max Recording Duration (วินาที)</label>
+                        <label data-i18n="set.rec.maxDurLabel">Max Recording Duration (วินาที)</label>
                         <input type="number" id="rec-max" value="300">
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึกการตั้งค่า</button>
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()" data-i18n="set.rec.saveSettings">💾 บันทึกการตั้งค่า</button>
                 </div>
             </div>
 
             <!-- การตั้งค่าการอัดเสียงของอุปกรณ์ (Recording Jobs) -->
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>📡 การตั้งค่าการอัดเสียงของอุปกรณ์</h2>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
-                    ตั้งค่าให้อุปกรณ์ SDR อัดเสียงที่ความถี่ที่ต้องการอัตโนมัติ (ทำงานเป็น background)
-                    <br>อุปกรณ์หนึ่งใช้ได้ครั้งละหนึ่งการตั้งค่าการอัด และสามารถอัดได้หลายความถี่พร้อมกันในช่วงความถี่ที่กำหนด
-                    <br>เวลาในตารางเวลาใช้ <b>เขตเวลาของเซิร์ฟเวอร์</b> (ตั้งค่าได้ที่ส่วน "เขตเวลาของเซิร์ฟเวอร์" ด้านล่าง)
-                </p>
+                <h2 data-i18n="set.rec.jobsTitle">📡 การตั้งค่าการอัดเสียงของอุปกรณ์</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.jobsHint1">ตั้งค่าให้อุปกรณ์ SDR อัดเสียงที่ความถี่ที่ต้องการอัตโนมัติ (ทำงานเป็น background)</p>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.jobsHint2">อุปกรณ์หนึ่งใช้ได้ครั้งละหนึ่งการตั้งค่าการอัด และสามารถอัดได้หลายความถี่พร้อมกันในช่วงความถี่ที่กำหนด</p>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n-html="set.rec.jobsHint3">เวลาในตารางเวลาใช้ <b>เขตเวลาของเซิร์ฟเวอร์</b> (ตั้งค่าได้ที่ส่วน "เขตเวลาของเซิร์ฟเวอร์" ด้านล่าง)</p>
                 <div id="recording-jobs-list" style="margin-bottom:1rem;"></div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" id="btn-add-recording-job" onclick="RecordingJobsUI.openEditor()">➕ เพิ่มการอัดเสียง</button>
+                    <button class="btn btn-primary" id="btn-add-recording-job" onclick="RecordingJobsUI.openEditor()" data-i18n="set.rec.addJob">➕ เพิ่มการอัดเสียง</button>
                 </div>
             </div>
 
             <!-- เขตเวลาของเซิร์ฟเวอร์ -->
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>🌍 เขตเวลาของเซิร์ฟเวอร์</h2>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                <h2 data-i18n="set.rec.serverTzTitle">🌍 เขตเวลาของเซิร์ฟเวอร์</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.serverTzHint">
                     กำหนดเขตเวลาที่ใช้สำหรับตารางเวลาการอัดเสียงของอุปกรณ์ (เช่น 08:00–10:30 จะหมายถึงเวลาในเขตเวลานี้)
                 </p>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>เขตเวลา (IANA Timezone)</label>
+                        <label data-i18n="set.rec.serverTzLabel">เขตเวลา (IANA Timezone)</label>
                         <input type="text" id="server-timezone" value="Asia/Bangkok" placeholder="Asia/Bangkok">
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="RecordingJobsUI.saveServerTimezone()">💾 บันทึกเขตเวลา</button>
+                    <button class="btn btn-primary" onclick="RecordingJobsUI.saveServerTimezone()" data-i18n="set.rec.saveServerTz">💾 บันทึกเขตเวลา</button>
                 </div>
             </div>
 
             <div class="settings-section" style="margin-top:1.5rem;">
-                <h2>🗂️ การเก็บรักษา (Retention)</h2>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+                <h2 data-i18n="set.rec.retentionTitle">🗂️ การเก็บรักษา (Retention)</h2>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;" data-i18n="set.rec.retentionHint">
                     ระบบจะลบรายการเก่าอัตโนมัติตามเงื่อนไขด้านล่าง (อันไหนเข้าเงื่อนไขก่อนก็ลบก่อน) ค่า 0 = ไม่จำกัด
                 </p>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>จำนวนรายการสูงสุด (0 = ไม่จำกัด)</label>
+                        <label data-i18n="set.rec.maxCountLabel">จำนวนรายการสูงสุด (0 = ไม่จำกัด)</label>
                         <input type="number" id="retention-max-count" value="0" min="0">
                     </div>
                     <div class="form-group">
-                        <label>เวลารวมสูงสุด — วินาที (0 = ไม่จำกัด)</label>
+                        <label data-i18n="set.rec.maxSecondsLabel">เวลารวมสูงสุด — วินาที (0 = ไม่จำกัด)</label>
                         <input type="number" id="retention-max-duration" value="0" min="0">
                     </div>
                     <div class="form-group">
-                        <label>อายุสูงสุด — วัน (0 = ไม่จำกัด)</label>
+                        <label data-i18n="set.rec.maxAgeLabel">อายุสูงสุด — วัน (0 = ไม่จำกัด)</label>
                         <input type="number" id="retention-max-age" value="0" min="0">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>เมื่อถึงเงื่อนไขการเก็บรักษา</label>
+                    <label data-i18n="set.rec.retentionActionLabel">เมื่อถึงเงื่อนไขการเก็บรักษา</label>
                     <select id="retention-action">
-                        <option value="keep_transcript">เก็บข้อความถอดเสียงไว้ (ลบเฉพาะไฟล์เสียง)</option>
-                        <option value="delete_record">ลบ record ทั้งหมด (ไฟล์เสียง + ข้อมูล)</option>
+                        <option value="keep_transcript" data-i18n="set.rec.keepTranscript">เก็บข้อความถอดเสียงไว้ (ลบเฉพาะไฟล์เสียง)</option>
+                        <option value="delete_record" data-i18n="set.rec.deleteRecord">ลบ record ทั้งหมด (ไฟล์เสียง + ข้อมูล)</option>
                     </select>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveRecording()">💾 บันทึก</button>
+                    <button class="btn btn-primary" onclick="Settings.saveRecording()" data-i18n="set.save">💾 บันทึก</button>
                 </div>
             </div>
         </div>
@@ -274,58 +270,58 @@
         <div class="tab-content" id="tab-stt" style="display:none;">
             <!-- STT Usage Charts (above global config) -->
             <div class="settings-section">
-                <h2>📊 เวลาการถอดเสียง (STT Usage)</h2>
+                <h2 data-i18n="set.stt.usageTitle">📊 เวลาการถอดเสียง (STT Usage)</h2>
                 <div class="stt-stats-controls" style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; margin-bottom:16px;">
                     <div class="form-group" style="margin:0; flex:1; min-width:160px;">
-                        <label>จากวันที่/เวลา</label>
+                        <label data-i18n="set.stt.fromLabel">จากวันที่/เวลา</label>
                         <input type="datetime-local" id="stt-stats-start" style="font-size:0.8rem;">
                     </div>
                     <div class="form-group" style="margin:0; flex:1; min-width:160px;">
-                        <label>ถึงวันที่/เวลา</label>
+                        <label data-i18n="set.stt.toLabel">ถึงวันที่/เวลา</label>
                         <input type="datetime-local" id="stt-stats-end" style="font-size:0.8rem;">
                     </div>
                     <div class="form-group" style="margin:0; display:flex; gap:4px; flex-wrap:wrap;">
-                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('today')">วันนี้</button>
-                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('7d')">7 วัน</button>
-                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('30d')">30 วัน</button>
-                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('all')">ทั้งหมด</button>
-                        <button class="btn btn-sm btn-primary" onclick="Settings.loadSTTStats()">🔄 แสดง</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('today')" data-i18n="set.stt.today">วันนี้</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('7d')" data-i18n="set.stt.7d">7 วัน</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('30d')" data-i18n="set.stt.30d">30 วัน</button>
+                        <button class="btn btn-sm" onclick="Settings.setSTTStatsRange('all')" data-i18n="set.stt.all">ทั้งหมด</button>
+                        <button class="btn btn-sm btn-primary" onclick="Settings.loadSTTStats()" data-i18n="set.stt.show">🔄 แสดง</button>
                     </div>
                 </div>
                 <div class="stt-charts-wrap" style="display:flex; flex-direction:column; gap:24px;">
                     <div>
-                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;" data-i18n="set.stt.chartProviderTitle">
                             ความยาวเสียงรวมที่ถอดได้ แยกตามผู้ให้บริการ (นาที)
                         </div>
                         <div style="position:relative; height:240px;">
                             <canvas id="stt-chart-provider"></canvas>
                         </div>
-                        <div id="stt-chart-provider-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล</div>
+                        <div id="stt-chart-provider-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;" data-i18n="set.stt.noData">ไม่มีข้อมูล</div>
                     </div>
                     <div>
-                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;" data-i18n="set.stt.chartWhisperModelTitle">
                             ความยาวเสียงรวมที่ถอดได้ของ Whisper แยกตามโมเดล (นาที)
                         </div>
                         <div style="position:relative; height:240px;">
                             <canvas id="stt-chart-whisper-model"></canvas>
                         </div>
-                        <div id="stt-chart-whisper-model-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล Whisper</div>
+                        <div id="stt-chart-whisper-model-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;" data-i18n="set.stt.noDataWhisper">ไม่มีข้อมูล Whisper</div>
                     </div>
                     <div>
-                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">
+                        <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;" data-i18n="set.stt.chartRatioTitle">
                             อัตราส่วนเวลารอถอดเสียงต่อความยาวเสียง แยกตามโมเดล Whisper (RTF)
                         </div>
                         <div style="position:relative; height:240px;">
                             <canvas id="stt-chart-whisper-ratio"></canvas>
                         </div>
-                        <div id="stt-chart-whisper-ratio-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;">ไม่มีข้อมูล Whisper</div>
+                        <div id="stt-chart-whisper-ratio-empty" class="text-center text-muted" style="display:none; padding:32px 0; font-size:0.8rem;" data-i18n="set.stt.noDataWhisper">ไม่มีข้อมูล Whisper</div>
                     </div>
                 </div>
             </div>
 
             <div class="settings-section" id="stt-config-section">
-                <h2>📝 Speech-to-Text (Global)</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
+                <h2 data-i18n="set.stt.globalTitle">📝 Speech-to-Text (Global)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.stt.globalHint">
                     ค่าเหล่านี้เก็บในฐานข้อมูล ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน
                 </p>
                 <div class="form-group">
@@ -340,23 +336,23 @@
                     <div class="form-group">
                         <label>Language</label>
                         <select id="stt-lang">
-                            <option value="th">ไทย</option>
+                            <option value="th" data-i18n="set.stt.langTh">ไทย</option>
                             <option value="en">English</option>
                             <option value="auto">Auto detect</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>ถอดเสียงอัตโนมัติเมื่ออัดเสร็จ</label>
+                        <label data-i18n="set.stt.autoLabel">ถอดเสียงอัตโนมัติเมื่ออัดเสร็จ</label>
                         <select id="stt-auto">
-                            <option value="true">เปิด (ถอดอัตโนมัติทุกครั้ง)</option>
-                            <option value="false">ปิด (กดถอดเองในหน้า Recordings)</option>
+                            <option value="true" data-i18n="set.stt.autoOn">เปิด (ถอดอัตโนมัติทุกครั้ง)</option>
+                            <option value="false" data-i18n="set.stt.autoOff">ปิด (กดถอดเองในหน้า Recordings)</option>
                         </select>
                     </div>
                 </div>
                 <!-- Whisper Local-specific fields (shown only when provider=whisper_local) -->
                 <div id="stt-whisper-local-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
                     <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Whisper Local API Settings</h3>
-                    <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:8px;">
+                    <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:8px;" data-i18n="set.stt.whisperConnHint">
                         เชื่อมต่อกับ faster-whisper-server บนเครือข่ายท้องถิ่น (Gradio API)
                     </p>
                     <div class="form-row">
@@ -373,34 +369,34 @@
                         <div class="form-group">
                             <label>Model</label>
                             <input type="text" id="stt-whisper-local-model" placeholder="Systran/faster-whisper-small" value="Systran/faster-whisper-small">
-                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.whisperModelHint">
                                 เช่น Systran/faster-whisper-small, Systran/faster-whisper-medium
                             </p>
                         </div>
                         <div class="form-group">
                             <label>Task</label>
                             <select id="stt-whisper-local-task">
-                                <option value="transcribe">transcribe (ถอดเสียงเป็นภาษาต้นฉบับ)</option>
-                                <option value="translate">translate (แปลเป็นภาษาอังกฤษ)</option>
+                                <option value="transcribe" data-i18n="set.stt.taskTranscribe">transcribe (ถอดเสียงเป็นภาษาต้นฉบับ)</option>
+                                <option value="translate" data-i18n="set.stt.taskTranslate">translate (แปลเป็นภาษาอังกฤษ)</option>
                             </select>
                         </div>
                     </div>
                     <div class="form-group">
                         <label>Temperature (0.0–1.0)</label>
                         <input type="number" id="stt-whisper-local-temperature" placeholder="0.0" value="0.0" step="0.1" min="0" max="1">
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.tempHint">
                             0.0 = แม่นยำที่สุด (greedy), ค่าที่สูงขึ้น = สร้าสรรค์มากขึ้น (sampling)
                         </p>
                     </div>
                     <div class="form-group">
-                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
+                        <label data-i18n="set.stt.compressLabel">รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
                         <select id="stt-whisper-local-audio-format">
-                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
-                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
-                            <option value="flac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
-                            <option value="mp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
+                            <option value="off" data-i18n="set.stt.compressOff">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav" data-i18n="set.stt.compressWav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac" data-i18n="set.stt.compressFlac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
+                            <option value="mp3" data-i18n="set.stt.compressMp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
                         </select>
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.compressHint">
                             ย่อขนาดไฟล์ก่อนส่งไปถอดเสียง → ประหยัด bandwidth & เร็วขึ้น
                         </p>
                     </div>
@@ -410,44 +406,44 @@
                 <div id="stt-speechmatics-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
                     <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">Speechmatics API Settings</h3>
                     <div class="form-group">
-                        <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off">
-                        <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        <input type="password" id="stt-api-key" placeholder="ใส่ API Key ของ Speechmatics" autocomplete="off" data-i18n-ph="set.stt.smKeyPh">
+                        <p id="stt-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.smKeyHint">
                             ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
                         </p>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Operating Point (คุณภาพการถอด)</label>
+                            <label data-i18n="set.stt.smOpPointLabel">Operating Point (คุณภาพการถอด)</label>
                             <select id="stt-operating-point">
-                                <option value="standard">Standard (เร็ว ประหยัดเครดิต)</option>
-                                <option value="enhanced">Enhanced (แม่นยำ ใช้เครดิตมาก)</option>
+                                <option value="standard" data-i18n="set.stt.smOpStandard">Standard (เร็ว ประหยัดเครดิต)</option>
+                                <option value="enhanced" data-i18n="set.stt.smOpEnhanced">Enhanced (แม่นยำ ใช้เครดิตมาก)</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>Diarization (แยกลำโพง)</label>
+                            <label data-i18n="set.stt.smDiarLabel">Diarization (แยกลำโพง)</label>
                             <select id="stt-diarization">
-                                <option value="none">None (ไม่แยก)</option>
-                                <option value="speaker">Speaker (แยกตามผู้พูด)</option>
-                                <option value="channel">Channel (แยกตามช่องสัญญาณ)</option>
+                                <option value="none" data-i18n="set.stt.smDiarNone">None (ไม่แยก)</option>
+                                <option value="speaker" data-i18n="set.stt.smDiarSpeaker">Speaker (แยกตามผู้พูด)</option>
+                                <option value="channel" data-i18n="set.stt.smDiarChannel">Channel (แยกตามช่องสัญญาณ)</option>
                             </select>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Enable Entities (จับคำสำคัญ เช่น ชื่อบุคคล/สถานที่/วันที่)</label>
+                        <label data-i18n="set.stt.smEntitiesLabel">Enable Entities (จับคำสำคัญ เช่น ชื่อบุคคล/สถานที่/วันที่)</label>
                         <select id="stt-enable-entities">
-                            <option value="false">ปิด</option>
-                            <option value="true">เปิด</option>
+                            <option value="false" data-i18n="set.stt.smEntitiesOff">ปิด</option>
+                            <option value="true" data-i18n="set.stt.smEntitiesOn">เปิด</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเครดิต/เน็ต)</label>
+                        <label data-i18n="set.stt.compressLabel">รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเครดิต/เน็ต)</label>
                         <select id="stt-speechmatics-audio-format">
-                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
-                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
-                            <option value="flac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
-                            <option value="mp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
+                            <option value="off" data-i18n="set.stt.compressOff">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav" data-i18n="set.stt.compressWav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac" data-i18n="set.stt.compressFlac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
+                            <option value="mp3" data-i18n="set.stt.compressMp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
                         </select>
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.smCompressHint">
                             Speechmatics รองรับ WAV/FLAC/MP3 — MP3 ประหยัด bandwidth ที่สุด
                         </p>
                     </div>
@@ -472,14 +468,14 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
+                        <label data-i18n="set.stt.compressLabel">รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
                         <select id="stt-azure-audio-format">
-                            <option value="off">ปิด (ส่ง WAV 32kHz เดิม)</option>
-                            <option value="wav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
-                            <option value="flac">FLAC (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
-                            <option value="mp3">MP3 (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
+                            <option value="off" data-i18n="set.stt.compressOff">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav" data-i18n="set.stt.compressWav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac" data-i18n="set.stt.compressFlacAzure">FLAC (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
+                            <option value="mp3" data-i18n="set.stt.compressMp3Azure">MP3 (Azure รองรับเฉพาะ WAV → ใช้ WAV อัตโนมัติ)</option>
                         </select>
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.azureWavWarn">
                             ⚠️ Azure Speech SDK รองรับเฉพาะ WAV/PCM — MP3/FLAC จะถูกแปลงเป็น WAV อัตโนมัติ
                         </p>
                     </div>
@@ -490,7 +486,7 @@
                 </div>
 
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveSTT()">💾 บันทึก</button>
+                    <button class="btn btn-primary" onclick="Settings.saveSTT()" data-i18n="set.stt.save">💾 บันทึก</button>
                 </div>
             </div>
         </div>
@@ -498,13 +494,13 @@
         <!-- Telegram Settings (now managed in the Alert Rules page) -->
         <div class="tab-content" id="tab-telegram" style="display:none;">
             <div class="settings-section">
-                <h2>📨 ช่องทางแจ้งเตือน</h2>
-                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">
+                <h2 data-i18n="set.tg.title">📨 ช่องทางแจ้งเตือน</h2>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;" data-i18n="set.tg.hint">
                     ระบบแจ้งเตือนถูกอัพเกรดแล้ว — จัดการช่องทางแจ้งเตือน (Telegram/แอปอื่น), กลุ่ม, คีย์เวิร์ด, กฎ, และดูประวัติการแจ้งเตือนได้ที่หน้าใหม่:
                 </p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <a href="/alert-rules" class="btn btn-primary">⚙️ จัดการกฎ &amp; ช่องทาง</a>
-                    <a href="/alerts" class="btn btn-sm">📋 ดูการแจ้งเตือนทั้งหมด</a>
+                    <a href="/alert-rules" class="btn btn-primary" data-i18n="set.tg.manageRules">⚙️ จัดการกฎ & ช่องทาง</a>
+                    <a href="/alerts" class="btn btn-sm" data-i18n="set.tg.viewAlerts">📋 ดูการแจ้งเตือนทั้งหมด</a>
                 </div>
             </div>
         </div>
@@ -512,13 +508,13 @@
         <!-- Keywords Settings (now managed in the Alert Rules page) -->
         <div class="tab-content" id="tab-keywords" style="display:none;">
             <div class="settings-section">
-                <h2>🔑 Keywords สำหรับแจ้งเตือน</h2>
-                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">
+                <h2 data-i18n="set.kw.title">🔑 Keywords สำหรับแจ้งเตือน</h2>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;" data-i18n="set.kw.hint">
                     ระบบแจ้งเตือนถูกอัพเกรดแล้ว — จัดการคีย์เวิร์ด (รวมกลุ่ม/ประเภท/คะแนน ±), สร้างกฎแจ้งเตือน และดูประวัติได้ที่หน้าใหม่:
                 </p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <a href="/alert-rules" class="btn btn-primary">⚙️ จัดการ Keywords &amp; กฎ</a>
-                    <a href="/alerts" class="btn btn-sm">📋 ดูการแจ้งเตือนทั้งหมด</a>
+                    <a href="/alert-rules" class="btn btn-primary" data-i18n="set.kw.manageKw">⚙️ จัดการ Keywords & กฎ</a>
+                    <a href="/alerts" class="btn btn-sm" data-i18n="set.tg.viewAlerts">📋 ดูการแจ้งเตือนทั้งหมด</a>
                 </div>
             </div>
         </div>
@@ -526,93 +522,83 @@
         <!-- Display Settings -->
         <div class="tab-content" id="tab-display" style="display:none;">
             <div class="settings-section">
-                <h2>🎨 Theme หน้าจอ</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    เลือกรูปแบบการแสดงผลของ Dashboard<br>
-                    <strong>Classic</strong> = สไตล์เดิม (เข้ม แบบ operations desk)<br>
-                    <strong>V2 (Analog Radio)</strong> = ปุ่มนูน 3D เหมือนวิทยุจริง, จอ VFO บุ๋มแบบ LCD, ฟอนต์ 7-segment
-                </p>
+                <h2 data-i18n="set.disp.themeTitle">🎨 Theme หน้าจอ</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.themeHint">เลือกรูปแบบการแสดงผลของ Dashboard</p>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.themeClassicDesc">Classic = สไตล์เดิม (เข้ม แบบ operations desk)</p>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.themeV2Desc">V2 (Analog Radio) = ปุ่มนูน 3D เหมือนวิทยุจริง, จอ VFO บุ๋มแบบ LCD, ฟอนต์ 7-segment</p>
                 <div class="form-group">
                     <label>Theme</label>
                     <select id="ui-theme">
-                        <option value="classic">Classic (สไตล์เดิม)</option>
-                        <option value="v2">V2 - Analog Radio (ปุ่มนูน + จอ LCD)</option>
+                        <option value="classic" data-i18n="set.disp.themeClassic">Classic (สไตล์เดิม)</option>
+                        <option value="v2" data-i18n="set.disp.themeV2">V2 - Analog Radio (ปุ่มนูน + จอ LCD)</option>
                     </select>
                 </div>
             </div>
             <div class="settings-section">
-                <h2>🌊 Waterfall ความเร็วการเลื่อน</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    ความเร็ว = จำนวนบรรทัดที่เพิ่มต่อเฟรมข้อมูล spectrum (1x = ช้า, 4x = เร็วมาก)
-                </p>
+                <h2 data-i18n="set.disp.wfSpeedTitle">🌊 Waterfall ความเร็วการเลื่อน</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.wfSpeedHint">ความเร็ว = จำนวนบรรทัดที่เพิ่มต่อเฟรมข้อมูล spectrum (1x = ช้า, 4x = เร็วมาก)</p>
                 <div class="form-group">
-                    <label>ความเร็ว Waterfall</label>
+                    <label data-i18n="set.disp.wfSpeedLabel">ความเร็ว Waterfall</label>
                     <select id="wf-speed">
-                        <option value="1">1x - ช้า</option>
-                        <option value="2">2x - ปานกลาง</option>
-                        <option value="3">3x - เร็ว</option>
-                        <option value="4">4x - เร็วมาก</option>
+                        <option value="1" data-i18n="set.disp.wfSpeed1">1x - ช้า</option>
+                        <option value="2" data-i18n="set.disp.wfSpeed2">2x - ปานกลาง</option>
+                        <option value="3" data-i18n="set.disp.wfSpeed3">3x - เร็ว</option>
+                        <option value="4" data-i18n="set.disp.wfSpeed4">4x - เร็วมาก</option>
                     </select>
                 </div>
             </div>
             <div class="settings-section">
-                <h2>📊 FFT Size (ความละเอียด Waterfall)</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    ขนาด FFT = จำนวน bins ในแต่ละบรรทัดของ waterfall<br>
-                    <strong>ค่ามาก = ละเอียดขึ้น แต่ใช้ CPU/Bandwidth มากขึ้น</strong>
-                </p>
+                <h2 data-i18n="set.disp.fftTitle">📊 FFT Size (ความละเอียด Waterfall)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.fftHint1">ขนาด FFT = จำนวน bins ในแต่ละบรรทัดของ waterfall</p>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.fftHint2">ค่ามาก = ละเอียดขึ้น แต่ใช้ CPU/Bandwidth มากขึ้น</p>
                 <div class="form-group">
                     <label>FFT Size</label>
                     <select id="wf-fft-size">
-                        <option value="512">512 bins - เบา (เหมาะกับอุปกรณ์ช้า)</option>
-                        <option value="1024">1024 bins - ปานกลาง (แนะนำ)</option>
-                        <option value="2048">2048 bins - ละเอียด (CPU ปานกลาง)</option>
-                        <option value="4096">4096 bins - ละเอียดมาก ⚠️ (หนัก)</option>
+                        <option value="512" data-i18n="set.disp.fft512">512 bins - เบา (เหมาะกับอุปกรณ์ช้า)</option>
+                        <option value="1024" data-i18n="set.disp.fft1024">1024 bins - ปานกลาง (แนะนำ)</option>
+                        <option value="2048" data-i18n="set.disp.fft2048">2048 bins - ละเอียด (CPU ปานกลาง)</option>
+                        <option value="4096" data-i18n="set.disp.fft4096">4096 bins - ละเอียดมาก ⚠️ (หนัก)</option>
                     </select>
                 </div>
-                <p id="fft-warning" style="font-size:0.75rem; color:var(--accent-red); display:none; margin-top:4px;">
+                <p id="fft-warning" style="font-size:0.75rem; color:var(--accent-red); display:none; margin-top:4px;" data-i18n="set.disp.fftWarn">
                     ⚠️ 4096 bins ใช้ CPU และ Bandwidth สูง อาจทำให้เครื่องช้าได้
                 </p>
             </div>
             <div class="settings-section">
-                <h2>🎨 ช่วงสี Waterfall (dB)</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    ค่า dB ต่ำสุด-สูงสุดที่จะแสดงเป็นสี ค่าที่ต่ำกว่าจะเป็นสีดำ ค่าที่สูงกว่าจะเป็นสีขาว
-                </p>
+                <h2 data-i18n="set.disp.colorTitle">🎨 ช่วงสี Waterfall (dB)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.disp.colorHint">ค่า dB ต่ำสุด-สูงสุดที่จะแสดงเป็นสี ค่าที่ต่ำกว่าจะเป็นสีดำ ค่าที่สูงกว่าจะเป็นสีขาว</p>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>dB ต่ำสุด (Noise Floor)</label>
+                        <label data-i18n="set.disp.colorMinLabel">dB ต่ำสุด (Noise Floor)</label>
                         <input type="number" id="wf-db-min" value="-110" min="-150" max="-50">
                     </div>
                     <div class="form-group">
-                        <label>dB สูงสุด (Strong Signal)</label>
+                        <label data-i18n="set.disp.colorMaxLabel">dB สูงสุด (Strong Signal)</label>
                         <input type="number" id="wf-db-max" value="-55" min="-100" max="0">
                     </div>
                 </div>
             </div>
             <div class="settings-section">
-                <h2>📋 พรีเซ็ต</h2>
+                <h2 data-i18n="set.disp.presetTitle">📋 พรีเซ็ต</h2>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button class="btn btn-sm" onclick="Settings.applyPreset('default')">ปกติ</button>
-                    <button class="btn btn-sm" onclick="Settings.applyPreset('sensitive')">สัญญาณอ่อน</button>
-                    <button class="btn btn-sm" onclick="Settings.applyPreset('fast')">เลื่อนเร็ว</button>
-                    <button class="btn btn-sm" onclick="Settings.applyPreset('wide')">ช่วงกว้าง</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('default')" data-i18n="set.disp.presetDefault">ปกติ</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('sensitive')" data-i18n="set.disp.presetSensitive">สัญญาณอ่อน</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('fast')" data-i18n="set.disp.presetFast">เลื่อนเร็ว</button>
+                    <button class="btn btn-sm" onclick="Settings.applyPreset('wide')" data-i18n="set.disp.presetWide">ช่วงกว้าง</button>
                 </div>
             </div>
             <div class="form-actions">
-                <button class="btn btn-primary" onclick="Settings.saveDisplay()">💾 บันทึก</button>
+                <button class="btn btn-primary" onclick="Settings.saveDisplay()" data-i18n="set.disp.save">💾 บันทึก</button>
             </div>
         </div>
 
         <!-- General Settings -->
         <div class="tab-content" id="tab-general" style="display:none;">
             <div class="settings-section">
-                <h2>🕐 Timezone สำหรับแสดงผล</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    เลือก timezone ที่ต้องการใช้แสดงเวลาในระบบ (เช่น 15:30 น. แทน 08:30 UTC)
-                </p>
+                <h2 data-i18n="set.tz.title">🕐 Timezone สำหรับแสดงผล</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.tz.hint">เลือก timezone ที่ต้องการใช้แสดงเวลาในระบบ (เช่น 15:30 น. แทน 08:30 UTC)</p>
                 <div class="form-group">
-                    <label>Timezone ของคุณ</label>
+                    <label data-i18n="set.tz.label">Timezone ของคุณ</label>
                     <select id="user-timezone" style="padding: 8px 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); font-size: 0.85rem; width: 100%; max-width: 400px;">
                         <option value="Asia/Bangkok">🇹🇭 Asia/Bangkok (UTC+7)</option>
                         <option value="Asia/Ho_Chi_Minh">🇻🇳 Asia/Ho_Chi_Minh (UTC+7)</option>
@@ -634,21 +620,17 @@
                         <option value="America/Chicago">🇺🇸 America/Chicago (UTC-6/-5)</option>
                         <option value="UTC">🌍 UTC (UTC+0)</option>
                     </select>
-                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                        💡 เวลาที่บันทึกในระบบจะเป็น UTC เสมอ แต่จะแสดงผลตาม timezone ที่เลือก
-                    </p>
+                    <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.tz.note">💡 เวลาที่บันทึกในระบบจะเป็น UTC เสมอ แต่จะแสดงผลตาม timezone ที่เลือก</p>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveTimezone()">💾 บันทึก Timezone</button>
+                    <button class="btn btn-primary" onclick="Settings.saveTimezone()" data-i18n="set.tz.save">💾 บันทึก Timezone</button>
                 </div>
             </div>
 
             <!-- System Policy — Admin Only -->
             <div class="settings-section" id="system-policy-section">
-                <h2>⚙️ นโยบายระบบ (System Policy)</h2>
-                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">
-                    การตั้งค่านโยบายการใช้งานของระบบ — สำหรับผู้ดูแลระบบเท่านั้น
-                </p>
+                <h2 data-i18n="set.pol.title">⚙️ นโยบายระบบ (System Policy)</h2>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;" data-i18n="set.pol.hint">การตั้งค่านโยบายการใช้งานของระบบ — สำหรับผู้ดูแลระบบเท่านั้น</p>
                 <div class="form-row">
                     <div class="form-group">
                         <label>VFO Passband Margin (Ratio)</label>
@@ -671,17 +653,15 @@
                         </p>
                     </div>
                     <div class="form-group">
-                        <label>จำนวนผู้ฟังพร้อมกันสูงสุด (Max Listeners)</label>
+                        <label data-i18n="set.pol.maxListenersLabel">จำนวนผู้ฟังพร้อมกันสูงสุด (Max Listeners)</label>
                         <input type="number" id="sdr-max-listeners" value="8" min="1" max="128" step="1">
-                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                            จำกัดจำนวนผู้ใช้ที่ฟังเสียงสดพร้อมกัน (1–128)<br>
-                            แต่ละผู้ฟังใช้ CPU 1 demod thread — ค่าสูงขึ้นต้องเซิร์ฟเวอร์แรงขึ้น<br>
-                            <span id="max-listeners-current" style="color:var(--accent-cyan);"></span>
-                        </p>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.pol.maxListenersHint1">จำกัดจำนวนผู้ใช้ที่ฟังเสียงสดพร้อมกัน (1–128)</p>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.pol.maxListenersHint2">แต่ละผู้ฟังใช้ CPU 1 demod thread — ค่าสูงขึ้นต้องเซิร์ฟเวอร์แรงขึ้น</p>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;"><span id="max-listeners-current" style="color:var(--accent-cyan);"></span></p>
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-primary" onclick="Settings.saveSystemPolicy()">💾 บันทึกนโยบายระบบ</button>
+                    <button class="btn btn-primary" onclick="Settings.saveSystemPolicy()" data-i18n="set.pol.save">💾 บันทึกนโยบายระบบ</button>
                 </div>
             </div>
         </div>
@@ -689,19 +669,19 @@
         <!-- Users Settings (Admin) -->
         <div class="tab-content" id="tab-users" style="display:none;">
             <div class="settings-section">
-                <h2>👥 จัดการผู้ใช้งาน</h2>
+                <h2 data-i18n="set.users.title">👥 จัดการผู้ใช้งาน</h2>
                 <table style="width:100%; font-size:0.85rem; border-collapse:collapse;">
                     <thead>
                         <tr style="border-bottom:1px solid var(--border);">
                             <th style="text-align:left; padding:8px;">Username</th>
                             <th style="text-align:left; padding:8px;">Role</th>
-                            <th style="text-align:left; padding:8px;">สถานะ</th>
+                            <th style="text-align:left; padding:8px;" data-i18n="set.users.thStatus">สถานะ</th>
                             <th style="text-align:left; padding:8px;">Last Login</th>
-                            <th style="text-align:right; padding:8px;">จัดการ</th>
+                            <th style="text-align:right; padding:8px;" data-i18n="set.users.thActions">จัดการ</th>
                         </tr>
                     </thead>
                     <tbody id="users-tbody">
-                        <tr><td colspan="5" class="text-center text-muted p-2">กำลังโหลด...</td></tr>
+                        <tr><td colspan="5" class="text-center text-muted p-2" data-i18n="common.loading">กำลังโหลด...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -726,7 +706,7 @@
             if (!isAdmin) {
                 // Update page title for non-admin (personal settings, not system)
                 const h1 = document.querySelector('.settings-header h1');
-                if (h1) h1.textContent = '⚙️ ตั้งค่า';
+                if (h1) h1.textContent = I18n.t('set.userSettingsTitle');
 
                 // Hide admin-only tab buttons and their content
                 const adminTabs = ['devices', 'recording', 'telegram', 'keywords', 'users'];
@@ -785,7 +765,7 @@
                     if (curEl) {
                         const sr = status.sample_rate || 2048000;
                         const maxOff = Math.round(sr * status.vfo_margin_ratio / 1000);
-                        curEl.textContent = `ปัจจุบัน: ${status.vfo_margin_ratio.toFixed(2)} → ±${maxOff} kHz`;
+                        curEl.textContent = I18n.t('set.pol.vfoCurrent', { ratio: status.vfo_margin_ratio.toFixed(2), kHz: maxOff });
                     }
                 }
                 // Max listeners (admin-configurable concurrent listener cap)
@@ -795,7 +775,7 @@
                     const curEl = document.getElementById('max-listeners-current');
                     if (curEl) {
                         const cur = status.listeners !== undefined ? status.listeners : 0;
-                        curEl.textContent = `ปัจจุบัน: ${status.max_listeners} (กำลังฟังอยู่: ${cur})`;
+                        curEl.textContent = I18n.t('set.pol.listenersCurrent', { max: status.max_listeners, cur: cur });
                     }
                 }
             } catch (e) {
@@ -850,24 +830,24 @@
                 const el = document.getElementById('sdr-status');
                 if (el) {
                     const connBadge = status.connected
-                        ? '<span class="status-badge status-on">เชื่อมต่อแล้ว</span>'
-                        : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
+                        ? `<span class="status-badge status-on">${I18n.t('set.connected')}</span>`
+                        : `<span class="status-badge status-off">${I18n.t('set.disconnected')}</span>`;
                     const streamBadge = status.streaming
-                        ? '<span class="status-badge status-on">กำลังรับสัญญาณ</span>'
-                        : '<span class="status-badge status-off">หยุดรับ</span>';
+                        ? `<span class="status-badge status-on">${I18n.t('set.status.receiving')}</span>`
+                        : `<span class="status-badge status-off">${I18n.t('set.status.stopped')}</span>`;
                     const recBadge = status.recording
-                        ? '<span class="status-badge status-on">กำลังอัด</span>'
-                        : '<span class="status-badge status-off">ไม่ได้อัด</span>';
+                        ? `<span class="status-badge status-on">${I18n.t('set.status.recording')}</span>`
+                        : `<span class="status-badge status-off">${I18n.t('set.status.notRecording')}</span>`;
                     el.innerHTML = `
                         <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px;">
-                            <div>🔗 การเชื่อมต่อ: ${connBadge}</div>
-                            <div>📡 Streaming: ${streamBadge}</div>
-                            <div>🎙️ Recording: ${recBadge}</div>
-                            <div>📊 Signal: <code>${status.signal_level_db} dB</code></div>
-                            <div>🔄 Freq: <code>${(status.frequency/1e6).toFixed(3)} MHz</code></div>
-                            <div>📻 Mode: <code>${status.mode}</code></div>
-                            <div>🔊 Gain: <code>${status.gain} dB</code></div>
-                            <div>📶 Squelch: <code>${status.squelch_level} dB</code></div>
+                            <div>${I18n.t('set.status.connection')}: ${connBadge}</div>
+                            <div>${I18n.t('set.status.streaming')}: ${streamBadge}</div>
+                            <div>${I18n.t('set.status.recLabel')}: ${recBadge}</div>
+                            <div>${I18n.t('set.status.signal')}: <code>${status.signal_level_db} dB</code></div>
+                            <div>${I18n.t('set.status.freq')}: <code>${(status.frequency/1e6).toFixed(3)} MHz</code></div>
+                            <div>${I18n.t('set.status.mode')}: <code>${status.mode}</code></div>
+                            <div>${I18n.t('set.status.gain')}: <code>${status.gain} dB</code></div>
+                            <div>${I18n.t('set.status.squelch')}: <code>${status.squelch_level} dB</code></div>
                         </div>
                     `;
                 }
@@ -883,10 +863,10 @@
                 const el = document.getElementById('sdr-status');
                 if (el) {
                     el.innerHTML = `
-                        <div style="color:var(--accent-red);">⚠️ ไม่สามารถโหลดสถานะได้</div>
+                        <div style="color:var(--accent-red);">${I18n.t('set.status.loadFail')}</div>
                         <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
                             Error: ${err.detail || err.message || err}<br>
-                            <a href="/login" style="color:var(--accent-cyan);">ลองเข้าสู่ระบบใหม่</a>
+                            <a href="/login" style="color:var(--accent-cyan);">${I18n.t('set.status.relogin')}</a>
                         </div>
                     `;
                 }
@@ -907,18 +887,18 @@
             if (isActive) {
                 // This is the active device → show connect/disconnect/refresh.
                 actionsEl.innerHTML = `
-                    <button class="btn btn-sm" onclick="Settings.connectSDR()">🔗 เชื่อมต่อ</button>
-                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">🔌 ตัดการเชื่อมต่อ</button>
-                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">🔄 รีเฟรช</button>
+                    <button class="btn btn-sm" onclick="Settings.connectSDR()">${I18n.t('set.dev.connect')}</button>
+                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">${I18n.t('set.dev.disconnect')}</button>
+                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">${I18n.t('set.dev.refresh')}</button>
                 `;
             } else {
                 // Non-active device → offer to activate it.
                 actionsEl.innerHTML = `
                     <p style="font-size:0.78rem; color:var(--text-secondary); margin:0; flex:1;">
-                        อุปกรณ์นี้ยังไม่ได้ใช้สำหรับ "ฟังสด" — กดปุ่มเพื่อสลับให้อุปกรณ์นี้เป็นอุปกรณ์ที่ใช้ในหน้า Dashboard
-                        <br>(ไม่กระทบการอัดเสียงอัตโนมัติ ที่ทำงานแบบ background ได้อิสระต่ออุปกรณ์)
+                        ${I18n.t('set.dev.notActiveHint')}
+                        <br>${I18n.t('set.dev.notActiveHint2')}
                     </p>
-                    <button class="btn btn-sm btn-primary" onclick="Settings.activateDevice('${viewing}')">🔊 ฟังสดอุปกรณ์นี้</button>
+                    <button class="btn btn-sm btn-primary" title="${I18n.t('set.dev.activateTitle')}" onclick="Settings.activateDevice('${viewing}')">${I18n.t('set.dev.listenThis')}</button>
                 `;
             }
         },
@@ -929,12 +909,12 @@
             try {
                 await API.sdr.connect();  // no args → backend uses active device config
                 this.refreshStatus();
-            } catch(e) { alert('เชื่อมต่อไม่ได้: ' + (e.detail || e.message || e)); }
+            } catch(e) { alert(I18n.t('set.connectFail') + (e.detail || e.message || e)); }
         },
 
         async disconnectSDR() {
             try { await API.sdr.disconnect(); this.refreshStatus(); }
-            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+            catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
         },
 
         // === System Policy (VFO Margin + Max Listeners) — Admin Only ===
@@ -945,7 +925,7 @@
                 try {
                     await API.sdr.setVFOMargin(parseFloat(vfoMarginEl.value));
                 } catch(e) {
-                    alert('⚠️ ตั้ง VFO Margin ไม่สำเร็จ: ' + (e.detail || e.message || e));
+                    alert(I18n.t('set.pol.vfoFail') + (e.detail || e.message || e));
                     return;
                 }
             }
@@ -957,12 +937,12 @@
                     try {
                         await API.request('PUT', '/api/sdr/max-listeners', { max_listeners: n });
                     } catch(e) {
-                        alert('⚠️ ตั้ง Max Listeners ไม่สำเร็จ: ' + (e.detail || e.message || e));
+                        alert(I18n.t('set.pol.listenersFail') + (e.detail || e.message || e));
                         return;
                     }
                 }
             }
-            alert('✅ บันทึกนโยบายระบบเรียบร้อย!');
+            alert(I18n.t('set.pol.saveSuccess'));
             // Refresh to update current values display
             this.loadSDRSettings();
         },
@@ -982,10 +962,10 @@
             try {
                 await API.sdr.setRecordingEnabled(enabled);
                 alert(enabled
-                    ? '✅ เปิดระบบบันทึกสำหรับผู้ใช้ทั่วไปแล้ว'
-                    : '✅ ปิดระบบบันทึกสำหรับผู้ใช้ทั่วไปแล้ว\n(ผู้ใช้ทั่วไปที่กดบันทึกจะเห็นข้อความแจ้งเตือน)');
+                    ? I18n.t('set.rec.enabledOn')
+                    : I18n.t('set.rec.enabledOff'));
             } catch (e) {
-                alert('ผิดพลาด: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.errorGeneral') + (e.detail || e.message || e));
             }
         },
 
@@ -1048,9 +1028,8 @@
                     retention_max_age_days,
                     retention_action,
                 });
-                alert('✅ บันทึกการตั้งค่าการอัดเสียงสำเร็จ!\n' +
-                      '(ค่านี้ใช้ร่วมกันสำหรับผู้ใช้งานทุกคน และจะถูกเก็บไว้แม้ restart server)');
-            } catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+                alert(I18n.t('set.rec.saveSuccess'));
+            } catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
         },
 
         // === STT Settings ===
@@ -1070,8 +1049,8 @@
                 if (elKey) elKey.value = '';  // Don't show real key; user types new to change
                 if (elHint) {
                     elHint.textContent = cfg.api_key_set
-                        ? `✅ API Key ถูกตั้งไว้แล้ว (${cfg.api_key}) ปล่อยว่างถ้าไม่ต้องการเปลี่ยน`
-                        : '⚠️ ยังไม่มี API Key ใส่เพื่อบันทึก';
+                        ? I18n.t('set.stt.smKeySet') + ` (${cfg.api_key})`
+                        : I18n.t('set.stt.smKeyNotSet');
                 }
                 const elOp = document.getElementById('stt-operating-point');
                 const elDia = document.getElementById('stt-diarization');
@@ -1087,8 +1066,8 @@
                 if (elAzKey) elAzKey.value = '';
                 if (elAzKeyHint) {
                     elAzKeyHint.textContent = cfg.azure_key_set
-                        ? `✅ Key ถูกตั้งไว้แล้ว (${cfg.azure_key}) ปล่อยว่างถ้าไม่ต้องการเปลี่ยน`
-                        : '⚠️ ยังไม่มี Key ใส่เพื่อบันทึก';
+                        ? I18n.t('set.stt.azureKeySet') + ` (${cfg.azure_key})`
+                        : I18n.t('set.stt.azureKeyNotSet');
                 }
                 if (elAzRegion && cfg.azure_region) elAzRegion.value = cfg.azure_region;
 
@@ -1272,7 +1251,7 @@
                 data: {
                     labels,
                     datasets: [{
-                        label: 'นาที',
+                        label: I18n.t('set.stt.minutes'),
                         data: values,
                         backgroundColor: colors,
                         borderColor: borderColors,
@@ -1288,9 +1267,9 @@
                             callbacks: {
                                 label: (ctx) => {
                                     const row = rows[ctx.dataIndex];
-                                    const lines = [`${row.total_minutes} นาที (เสียงรวม ${row.total_audio_seconds || 0} วินาที)`, `${row.count} รายการ`];
+                                    const lines = [I18n.t('set.stt.ttMinutes', { m: row.total_minutes, s: row.total_audio_seconds || 0 }), I18n.t('set.stt.ttCount', { c: row.count })];
                                     if (row.total_stt_seconds) {
-                                        lines.push(`เวลารอถอดรวม: ${row.total_stt_seconds} วินาที`);
+                                        lines.push(I18n.t('set.stt.ttWait', { s: row.total_stt_seconds }));
                                     }
                                     return lines;
                                 },
@@ -1300,7 +1279,7 @@
                     scales: {
                         x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
                         y: {
-                            ticks: { color: '#94a3b8', callback: (v) => v + ' นาที' },
+                            ticks: { color: '#94a3b8', callback: (v) => v + ' ' + I18n.t('set.stt.minutesShort') },
                             grid: { color: 'rgba(148,163,184,0.1)' },
                             beginAtZero: true,
                         },
@@ -1327,7 +1306,7 @@
                 data: {
                     labels,
                     datasets: [{
-                        label: 'นาที',
+                        label: I18n.t('set.stt.minutes'),
                         data: values,
                         backgroundColor: colors,
                         borderColor: borderColors,
@@ -1343,9 +1322,9 @@
                             callbacks: {
                                 label: (ctx) => {
                                     const row = rows[ctx.dataIndex];
-                                    const lines = [`${row.total_minutes} นาที (เสียงรวม ${row.total_audio_seconds || 0} วินาที)`, `${row.count} รายการ`];
+                                    const lines = [I18n.t('set.stt.ttMinutes', { m: row.total_minutes, s: row.total_audio_seconds || 0 }), I18n.t('set.stt.ttCount', { c: row.count })];
                                     if (row.total_stt_seconds) {
-                                        lines.push(`เวลารอถอดรวม: ${row.total_stt_seconds} วินาที`);
+                                        lines.push(I18n.t('set.stt.ttWait', { s: row.total_stt_seconds }));
                                     }
                                     return lines;
                                 },
@@ -1355,7 +1334,7 @@
                     scales: {
                         x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
                         y: {
-                            ticks: { color: '#94a3b8', callback: (v) => v + ' นาที' },
+                            ticks: { color: '#94a3b8', callback: (v) => v + ' ' + I18n.t('set.stt.minutesShort') },
                             grid: { color: 'rgba(148,163,184,0.1)' },
                             beginAtZero: true,
                         },
@@ -1389,7 +1368,7 @@
                 data: {
                     labels,
                     datasets: [{
-                        label: 'อัตราส่วน (RTF)',
+                        label: I18n.t('set.stt.ratioLabel'),
                         data: values,
                         backgroundColor: colors,
                         borderColor: borderColors,
@@ -1407,14 +1386,14 @@
                                 label: (ctx) => {
                                     const row = valid[ctx.dataIndex];
                                     const r = row.ratio;
-                                    const note = (r < 1) ? `(เร็วกว่าเวลาจริง ${(1/r).toFixed(2)}x)`
-                                              : (r > 1) ? `(ช้ากว่าเวลาจริง ${r.toFixed(2)}x)`
-                                              : '(เท่าเวลาจริง)';
+                                    const note = (r < 1) ? I18n.t('set.stt.ratioFaster', { x: (1/r).toFixed(2) })
+                                              : (r > 1) ? I18n.t('set.stt.ratioSlower', { x: r.toFixed(2) })
+                                              : I18n.t('set.stt.ratioRealtime');
                                     return [
-                                        `อัตราส่วน: ${r.toFixed(3)}x ${note}`,
-                                        `เสียงรวม: ${row.total_audio_seconds.toFixed(1)} วินาที`,
-                                        `เวลารอรวม: ${row.total_stt_seconds.toFixed(1)} วินาที`,
-                                        `จำนวน: ${row.count} รายการ`,
+                                        I18n.t('set.stt.ttRatio', { r: r.toFixed(3), note: note }),
+                                        I18n.t('set.stt.ttAudio', { s: row.total_audio_seconds.toFixed(1) }),
+                                        I18n.t('set.stt.ttWaitFloat', { s: row.total_stt_seconds.toFixed(1) }),
+                                        I18n.t('set.stt.ttCount', { c: row.count }),
                                     ];
                                 },
                             },
@@ -1498,20 +1477,20 @@
                 if (result.provider === 'speechmatics') {
                     keyLine = result.api_key_set
                         ? `API Key (Speechmatics): ${result.api_key}`
-                        : '⚠️ ยังไม่มี API Key ของ Speechmatics';
+                        : I18n.t('set.stt.smKeyNoSm');
                 } else if (result.provider === 'azure') {
                     keyLine = result.azure_key_set
                         ? `Azure Key: ${result.azure_key}`
-                        : '⚠️ ยังไม่มี Azure Key';
+                        : I18n.t('set.stt.azureKeyNoAzure');
                 } else if (result.provider === 'whisper_local') {
                     keyLine = `Host: ${result.whisper_local_host || '-'}:${result.whisper_local_port || '-'}\nModel: ${result.whisper_local_model || '-'}`;
                 }
-                const msg = `✅ บันทึก STT settings สำเร็จ!\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? 'เปิด' : 'ปิด'}\n${keyLine}`;
+                const msg = I18n.t('set.stt.saveSuccess') + `\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? I18n.t('common.on') : I18n.t('common.off')}\n${keyLine}`;
                 alert(msg);
                 // Reload to update hint
                 this.loadSTTSettings();
             } catch (e) {
-                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.stt.saveFail') + (e.detail || e.message || e));
             }
         },
         // Telegram/Keywords tabs now redirect to the dedicated Alert Rules page.
@@ -1580,7 +1559,7 @@
             const timezone = document.getElementById('user-timezone').value;
             try {
                 const result = await API.request('PUT', '/api/auth/me/timezone', { timezone });
-                alert('✅ บันทึก Timezone เรียบร้อย!\nเวลาจะแสดงตาม timezone ที่เลือก');
+                alert(I18n.t('set.tz.saveSuccess'));
                 // Update local storage
                 const user = Auth.getUser();
                 if (user) {
@@ -1588,7 +1567,7 @@
                     localStorage.setItem('user', JSON.stringify(user));
                 }
             } catch(e) {
-                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.saveFail') + (e.detail || e.message || e));
             }
         },
 
@@ -1608,9 +1587,9 @@
             // Send FFT size to backend
             try {
                 await API.sdr.setFFTSize(fftSize);
-                alert('✅ บันทึกการตั้งค่าแสดงผลแล้ว!\nกลับไป Dashboard เพื่อเห็นผล');
+                alert(I18n.t('set.disp.saveSuccess'));
             } catch(e) {
-                alert('✅ บันทึก local แล้ว แต่ส่งไป server ไม่ได้: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.disp.saveLocalOnly') + (e.detail || e.message || e));
             }
         },
 
@@ -1636,28 +1615,28 @@
                     <tr style="border-bottom:1px solid var(--border);">
                         <td style="padding:8px;">${u.username}</td>
                         <td style="padding:8px;"><code>${u.role}</code></td>
-                        <td style="padding:8px;"><span class="status-badge ${u.is_active ? 'status-on' : 'status-off'}">${u.is_active ? 'ใช้งาน' : 'ปิด'}</span></td>
+                        <td style="padding:8px;"><span class="status-badge ${u.is_active ? 'status-on' : 'status-off'}">${u.is_active ? I18n.t('set.users.active') : I18n.t('set.users.inactive')}</span></td>
                         <td style="padding:8px; font-size:0.75rem;">${u.last_login || '-'}</td>
                         <td style="padding:8px; text-align:right;">
-                            <button class="btn btn-sm" onclick="Settings.toggleUser('${u.id}')">${u.is_active ? 'ปิด' : 'เปิด'}</button>
-                            <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteUser('${u.id}')">ลบ</button>
+                            <button class="btn btn-sm" onclick="Settings.toggleUser('${u.id}')">${u.is_active ? I18n.t('common.off') : I18n.t('common.on')}</button>
+                            <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteUser('${u.id}')">${I18n.t('common.delete')}</button>
                         </td>
                     </tr>
                 `).join('');
             } catch(e) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">ไม่สามารถโหลดข้อมูลได้</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">${I18n.t('set.loadFail')}</td></tr>`;
             }
         },
 
         async toggleUser(id) {
             try { await API.request('PUT', `/api/auth/users/${id}/toggle-active`); this.loadUsers(); }
-            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+            catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
         },
 
         async deleteUser(id) {
-            if (!confirm('ต้องการลบผู้ใช้นี้?')) return;
+            if (!confirm(I18n.t('set.users.deleteConfirm'))) return;
             try { await API.request('DELETE', `/api/auth/users/${id}`); this.loadUsers(); }
-            catch(e) { alert('ผิดพลาด: ' + (e.detail || e)); }
+            catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
         },
 
         // === SDR Devices (Admin) ===
@@ -1678,7 +1657,7 @@
                     || (devices.length ? devices[0].id : null);
                 this._lastActiveId = activeId;
                 if (!devices.length) {
-                    el.innerHTML = '<div class="text-center text-muted" style="padding:24px;">ยังไม่มีอุปกรณ์ SDR ในระบบ กด "เพิ่มอุปกรณ์" เพื่อเริ่มต้น</div>';
+                    el.innerHTML = `<div class="text-center text-muted" style="padding:24px;">${I18n.t('set.noDevices')}</div>`;
                     return;
                 }
                 // Build a lookup of per-device background recording status.
@@ -1715,44 +1694,44 @@
                     let connBadge;
                     if (isActive) {
                         connBadge = (st && st.connected)
-                            ? '<span class="status-badge status-on">เชื่อมต่อ (สด)</span>'
-                            : '<span class="status-badge status-off">ยังไม่เชื่อมต่อ</span>';
+                            ? '<span class="status-badge status-on">' + I18n.t('set.status.connLive') + '</span>'
+                            : '<span class="status-badge status-off">' + I18n.t('set.status.connNotConnected') + '</span>';
                     } else if (job) {
                         connBadge = job.connected
-                            ? '<span class="status-badge status-on">เชื่อมต่อ (job)</span>'
-                            : '<span class="status-badge status-off">รอเชื่อมต่อ (job)</span>';
+                            ? '<span class="status-badge status-on">' + I18n.t('set.status.connJob') + '</span>'
+                            : '<span class="status-badge status-off">' + I18n.t('set.status.connWaitJob') + '</span>';
                     } else {
-                        connBadge = '<span class="status-badge status-off">ว่าง</span>';
+                        connBadge = '<span class="status-badge status-off">' + I18n.t('set.status.connIdle') + '</span>';
                     }
 
                     // --- Streaming badge (only meaningful for live/active) ---
                     const streamBadge = (st && st.streaming)
-                        ? '<span class="status-badge status-on">กำลังรับ</span>'
-                        : '<span class="status-badge status-off">หยุดรับ</span>';
+                        ? '<span class="status-badge status-on">' + I18n.t('set.status.recvActive') + '</span>'
+                        : '<span class="status-badge status-off">' + I18n.t('set.status.recvStopped') + '</span>';
 
                     // --- Recording badge ---
                     let recBadge;
                     if (isActive && st && st.recording) {
-                        recBadge = '<span class="status-badge status-on">กำลังอัด (สด)</span>';
+                        recBadge = '<span class="status-badge status-on">' + I18n.t('set.status.recLive') + '</span>';
                     } else if (job && job.state === 'RUNNING') {
                         // Check if any channel is actively recording a transmission
                         const chs = (job.frequencies || []);
                         const anyRec = chs.some(c => c && c.is_recording);
                         recBadge = anyRec
-                            ? '<span class="status-badge status-on">กำลังอัด (job)</span>'
-                            : '<span class="status-badge status-on" style="background:rgba(14,165,233,0.15); color:var(--accent-cyan);">รอสัญญาณ (job)</span>';
+                            ? '<span class="status-badge status-on">' + I18n.t('set.status.recJob') + '</span>'
+                            : '<span class="status-badge status-on" style="background:rgba(14,165,233,0.15); color:var(--accent-cyan);">' + I18n.t('set.status.recWaitJob') + '</span>';
                     } else {
-                        recBadge = '<span class="status-badge status-off">ไม่ได้อัด</span>';
+                        recBadge = '<span class="status-badge status-off">' + I18n.t('set.status.notRecording') + '</span>';
                     }
 
                     // --- Top-right role badge ---
                     let roleBadge;
                     if (isActive) {
-                        roleBadge = '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">● กำลังฟังสด</span>';
+                        roleBadge = '<span class="status-badge status-on" style="background:rgba(16,185,129,0.3);">' + I18n.t('set.status.roleListening') + '</span>';
                     } else if (job) {
-                        roleBadge = '<span class="status-badge status-on" style="background:rgba(14,165,233,0.2); color:var(--accent-cyan);">● กำลังอัดอัตโนมัติ</span>';
+                        roleBadge = '<span class="status-badge status-on" style="background:rgba(14,165,233,0.2); color:var(--accent-cyan);">' + I18n.t('set.status.roleRecording') + '</span>';
                     } else {
-                        roleBadge = '<span class="status-badge status-off">พร้อมใช้งาน</span>';
+                        roleBadge = '<span class="status-badge status-off">' + I18n.t('set.status.roleReady') + '</span>';
                     }
 
                     return `
@@ -1771,15 +1750,15 @@
                                 </div>
                             </div>
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                                ${!isActive ? `<button class="btn btn-sm btn-primary" title="สลับให้อุปกรณ์นี้เป็นอุปกรณ์ที่ใช้ฟังสดในหน้า Dashboard (ไม่กระทบการอัดเสียงอัตโนมัติ)" onclick="Settings.activateDevice('${d.id}')">🔊 ฟังสดอุปกรณ์นี้</button>` : '<span class="status-badge status-on" style="background:rgba(16,185,129,0.15); align-self:center;">กำลังฟังสด</span>'}
-                                <button class="btn btn-sm" onclick="Settings.viewDevice('${d.id}')">📊 ดูสถานะ/ตั้งค่า</button>
-                                <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteDevice('${d.id}')">🗑️ ลบ</button>
+                                ${!isActive ? '<button class="btn btn-sm btn-primary" title="' + I18n.t('set.dev.activateTitle') + '" onclick="Settings.activateDevice(\'' + d.id + '\')">' + I18n.t('set.dev.listenThis') + '</button>' : '<span class="status-badge status-on" style="background:rgba(16,185,129,0.15); align-self:center;">' + I18n.t('set.status.nowListening') + '</span>'}
+                                <button class="btn btn-sm" onclick="Settings.viewDevice('${d.id}')">${I18n.t('set.dev.viewStatus')}</button>
+                                <button class="btn btn-sm" style="color:var(--accent-red);" onclick="Settings.deleteDevice('${d.id}')">${I18n.t('common.delete')}</button>
                             </div>
                         </div>
                     `;
                 }).join('');
             } catch(e) {
-                el.innerHTML = `<div style="color:var(--accent-red); font-size:0.8rem;">ไม่สามารถโหลดอุปกรณ์ได้: ${e.detail || e.message || e}</div>`;
+                el.innerHTML = `<div style="color:var(--accent-red); font-size:0.8rem;">${I18n.t('set.loadDeviceFail')}: ${e.detail || e.message || e}</div>`;
             }
         },
 
@@ -1823,15 +1802,15 @@
 
             const titleEl = document.getElementById('device-wizard-title');
             if (deviceId) {
-                titleEl.textContent = '✏️ แก้ไขอุปกรณ์';
+                titleEl.textContent = I18n.t('set.deviceEditTitle');
             } else {
-                titleEl.textContent = '➕ เพิ่มอุปกรณ์ใหม่';
+                titleEl.textContent = I18n.t('set.dev.wizardTitle');
             }
 
             // Populate type options
             const types = await this._ensureDeviceTypes();
             const selectEl = document.getElementById('device-type');
-            selectEl.innerHTML = '<option value="">— เลือกประเภท —</option>' +
+            selectEl.innerHTML = `<option value="">${I18n.t('set.selectType')}</option>` +
                 types.map(t => `<option value="${t.value}">${t.label}</option>`).join('');
 
             // Reset fields
@@ -1852,7 +1831,7 @@
                         this.deviceWizardNext();
                     }
                 } catch(e) {
-                    alert('ไม่สามารถโหลดข้อมูลอุปกรณ์ได้: ' + (e.detail || e.message || e));
+                    alert(I18n.t('set.deviceLoadFail2') + (e.detail || e.message || e));
                 }
             } else {
                 this._wizardConfig = {};
@@ -1876,8 +1855,8 @@
         deviceWizardNext() {
             const name = document.getElementById('device-name').value.trim();
             const type = document.getElementById('device-type').value;
-            if (!name) { alert('กรุณาใส่ชื่ออุปกรณ์'); return; }
-            if (!type) { alert('กรุณาเลือกประเภทอุปกรณ์'); return; }
+            if (!name) { alert(I18n.t('set.deviceNameRequired')); return; }
+            if (!type) { alert(I18n.t('set.deviceTypeRequired')); return; }
 
             // Move to step 2
             document.getElementById('device-step1').style.display = 'none';
@@ -1916,57 +1895,56 @@
                 container.innerHTML = `
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Host / IP Address</label>
+                            <label>${I18n.t('set.dev.hostLabel')}</label>
                             <input type="text" id="dc-host" value="${this._escapeAttr(cfg.host || '')}" placeholder="192.168.1.101">
                         </div>
                         <div class="form-group">
-                            <label>Port</label>
+                            <label>${I18n.t('set.dev.portLabel')}</label>
                             <input type="number" id="dc-port" value="${cfg.port || 1234}" placeholder="1234">
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>หมายเหตุ / รายละเอียดอุปกรณ์ (ไม่บังคับ)</label>
-                        <input type="text" id="dc-description" value="${this._escapeAttr(cfg.description || cfg.note || '')}" placeholder="เช่น ตั้งอยู่บนหลังคา">
+                        <label>${I18n.t('set.dev.noteLabel')}</label>
+                        <input type="text" id="dc-description" value="${this._escapeAttr(cfg.description || cfg.note || '')}" placeholder="${I18n.t('set.dev.notePh')}">
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Gain เริ่มต้น (dB) — สำหรับการอัดเสียง</label>
+                            <label>${I18n.t('set.dev.gainDefaultLabel')}</label>
                             <input type="number" id="dc-gain" value="${defGain}" min="0" max="60">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ค่า Gain พื้นฐานที่จะนำไปกรอกอัตโนมัติตอนตั้งค่าการอัดเสียง (เปลี่ยนทีหลังได้)
+                                ${I18n.t('set.dev.gainDefaultHint')}
                             </p>
                         </div>
                         <div class="form-group">
-                            <label>Frequency Correction เริ่มต้น (PPM) — สำหรับการอัดเสียง</label>
+                            <label>${I18n.t('set.dev.ppmDefaultLabel')}</label>
                             <input type="number" id="dc-ppm" value="${defPpm}" min="-200" max="200">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ค่าปรับความถี่พื้นฐาน ใช้กรอกอัตโนมัติตอนตั้งค่าการอัดเสียง
+                                ${I18n.t('set.dev.ppmDefaultHint')}
                             </p>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Waterfall dB ต่ำสุด (Noise Floor)</label>
+                            <label>${I18n.t('set.dev.wfMinLabel')}</label>
                             <input type="number" id="dc-wf-db-min" value="${defWfMin}" min="-150" max="-50">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ค่าต่ำสุดที่จะแสดงเป็นสี (ต่ำกว่านี้ = ดำ) — ใช้ตอนฟังสดอุปกรณ์นี้
+                                ${I18n.t('set.dev.wfMinHint')}
                             </p>
                         </div>
                         <div class="form-group">
-                            <label>Waterfall dB สูงสุด (Strong Signal)</label>
+                            <label>${I18n.t('set.dev.wfMaxLabel')}</label>
                             <input type="number" id="dc-wf-db-max" value="${defWfMax}" min="-100" max="0">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ค่าสูงสุดที่จะแสดงเป็นสี (สูงกว่านี้ = ขาว) — ใช้ตอนฟังสดอุปกรณ์นี้
+                                ${I18n.t('set.dev.wfMaxHint')}
                             </p>
                         </div>
                     </div>
                     <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:8px;">
-                        💡 การตั้งค่าความถี่, Sample Rate, Demodulation Mode และ Bandwidth
-                        ย้ายไปอยู่ในส่วน "การตั้งค่าการอัดเสียงของอุปกรณ์" (แท็บ การอัดเสียง)
+                        ${I18n.t('set.dev.freqMovedHint')}
                     </p>
                 `;
             } else {
-                container.innerHTML = '<div class="text-muted">ยังไม่รองรับการตั้งค่าสำหรับประเภทนี้</div>';
+                container.innerHTML = `<div class="text-muted">${I18n.t('set.notSupported')}</div>`;
             }
         },
 
@@ -1987,7 +1965,7 @@
             const host = document.getElementById('dc-host').value.trim();
             const port = parseInt(document.getElementById('dc-port').value) || 1234;
             const description = document.getElementById('dc-description').value.trim();
-            if (!host) { alert('กรุณาใส่ Host'); return null; }
+            if (!host) { alert(I18n.t('set.deviceHostRequired')); return null; }
             // Recording defaults (Gain / Frequency Correction) — these pre-fill
             // the recording job editor. User can override per job later.
             const gain = parseInt(document.getElementById('dc-gain').value);
@@ -2025,10 +2003,10 @@
             try {
                 if (this._editingDeviceId) {
                     await API.sdr.devices.update(this._editingDeviceId, payload);
-                    alert('✅ แก้ไขอุปกรณ์เรียบร้อย!');
+                    alert(I18n.t('set.deviceEditSuccess'));
                 } else {
                     const result = await API.sdr.devices.create(payload);
-                    alert('✅ เพิ่มอุปกรณ์เรียบร้อย!');
+                    alert(I18n.t('set.deviceAddSuccess'));
                 }
                 this.cancelDeviceWizard();
                 this.loadDevices();
@@ -2036,19 +2014,19 @@
                 this.loadSDRSettings();
                 this.refreshStatus();
             } catch(e) {
-                alert('❌ บันทึกไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.deviceSaveFail') + (e.detail || e.message || e));
             }
         },
 
         async activateDevice(id) {
             try {
                 await API.sdr.devices.activate(id);
-                alert('✅ เปลี่ยนอุปกรณ์ที่ใช้งานเรียบร้อย!');
+                alert(I18n.t('set.deviceActivateSuccess'));
                 this.loadDevices();
                 this.loadSDRSettings();
                 this.refreshStatus();
             } catch(e) {
-                alert('❌ เปลี่ยนอุปกรณ์ไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.deviceActivateFail') + (e.detail || e.message || e));
             }
         },
 
@@ -2057,20 +2035,30 @@
         },
 
         async deleteDevice(id) {
-            if (!confirm('ต้องการลบอุปกรณ์นี้? หากเป็นอุปกรณ์ที่กำลังใช้งานอยู่ จะต้องเลือกอุปกรณ์อื่นแทน')) return;
+            if (!confirm(I18n.t('set.deviceDeleteConfirmFull'))) return;
             try {
                 await API.sdr.devices.remove(id);
-                alert('✅ ลบอุปกรณ์เรียบร้อย!');
+                alert(I18n.t('set.deviceDeleteSuccess'));
                 this.loadDevices();
                 this.loadSDRSettings();
                 this.refreshStatus();
             } catch(e) {
-                alert('❌ ลบไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('set.deviceDeleteFail') + (e.detail || e.message || e));
             }
         },
     };
 
     document.addEventListener('DOMContentLoaded', () => Settings.init());
+
+    // Re-render dynamic content when language changes
+    document.addEventListener('languagechange', () => {
+        if (Settings._lastStatus) Settings.refreshStatus();
+        if (document.getElementById('devices-list-view') &&
+            document.getElementById('devices-list-view').style.display !== 'none') {
+            Settings.loadDevices();
+        }
+        if (document.getElementById('users-tbody')) Settings.loadUsers();
+    });
     </script>
 </body>
 </html>

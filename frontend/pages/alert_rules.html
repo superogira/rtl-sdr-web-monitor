@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Alert Management - RTL-SDR Monitor</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/css/app.css?v=24">
+<script src="/js/i18n.js?v=1"></script>
+    <link rel="stylesheet" href="/css/app.css?v=24">
 <script>(function(){try{var t=localStorage.getItem('ui_theme');if(t==='v2')document.documentElement.setAttribute('data-theme','v2');}catch(e){}})();</script>
 <style>
 .am-page{max-width:1100px;margin:0 auto;padding:20px;}
@@ -74,51 +75,52 @@
 <div class="am-page">
 <div class="am-header">
 <div>
-<a href="/dashboard" class="am-back">&larr; กลับ Dashboard</a>
-<h1>⚙️ Alert Management</h1>
+<a href="/dashboard" class="am-back" data-i18n="nav.backDashboard">&larr; กลับ Dashboard</a>
+            <button class="lang-toggle-btn" onclick="I18n.toggle()" data-i18n="lang.toggle">🌐 EN</button>
+<h1 data-i18n="ar.pageTitle">⚙️ Alert Management</h1>
 </div>
-<a href="/alerts" class="am-back" style="background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);padding:6px 14px;border-radius:6px;">📋 หน้าแจ้งเตือน</a>
+<a href="/alerts" class="am-back" style="background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.35);padding:6px 14px;border-radius:6px;" data-i18n="nav.alertsTitle">📋 Alerts</a>
 </div>
 
 <div class="am-subtabs">
-<div class="am-subtab active" onclick="Mng.showTab('keywords')">🔑 Keywords</div>
-<div class="am-subtab" onclick="Mng.showTab('channels')">📨 Channels</div>
-<div class="am-subtab" onclick="Mng.showTab('rules')">🚨 Rules</div>
+<div class="am-subtab active" onclick="Mng.showTab('keywords')" data-i18n="ar.keywordsTab">🔑 Keywords</div>
+<div class="am-subtab" onclick="Mng.showTab('channels')" data-i18n="ar.channelsTab">📨 Channels</div>
+<div class="am-subtab" onclick="Mng.showTab('rules')" data-i18n="ar.rulesTab">🚨 Rules</div>
 </div>
 
 <!-- ===== KEYWORDS TAB ===== -->
 <div id="tab-keywords">
 <div class="am-section">
-<h2>🗂️ กลุ่ม Keyword <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openKwGroupEditor()">＋ เพิ่มกลุ่ม</button></h2>
-<div id="kw-groups-list"><div class="empty">กำลังโหลด...</div></div>
+<h2 data-i18n="ar.kwGroupTitle">🗂️ กลุ่ม Keyword <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openKwGroupEditor()" data-i18n="ar.addKwGroup">＋ เพิ่มกลุ่ม</button></h2>
+<div id="kw-groups-list"><div class="empty" data-i18n="common.loading">กำลังโหลด...</div></div>
 </div>
 <div class="am-section">
-<h2>🔑 Keywords <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openKwEditor()">＋ เพิ่ม Keyword</button></h2>
-<table class="am-table"><thead><tr><th>คำ/ประโยค</th><th>กลุ่ม</th><th>ประเภท</th><th>คะแนน</th><th>พิมพ์เล็ก/ใหญ่</th><th>เปิด</th><th>จัดการ</th></tr></thead>
-<tbody id="kw-tbody"><tr><td colspan="7" class="empty">กำลังโหลด...</td></tr></tbody></table>
+<h2 data-i18n="ar.keywordsTab">🔑 Keywords <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openKwEditor()" data-i18n="ar.addKeyword">＋ เพิ่ม Keyword</button></h2>
+<table class="am-table"><thead><tr><th data-i18n="ar.thText">คำ/ประโยค</th><th data-i18n="ar.thGroup">กลุ่ม</th><th data-i18n="ar.thType">ประเภท</th><th data-i18n="ar.thScore">คะแนน</th><th data-i18n="ar.thCase">พิมพ์เล็ก/ใหญ่</th><th data-i18n="ar.thEnabled">เปิด</th><th data-i18n="ar.thActions">จัดการ</th></tr></thead>
+<tbody id="kw-tbody"><tr><td colspan="7" class="empty" data-i18n="common.loading">กำลังโหลด...</td></tr></tbody></table>
 </div>
 </div>
 
 <!-- ===== CHANNELS TAB ===== -->
 <div id="tab-channels" style="display:none;">
 <div class="am-section">
-<h2>📁 กลุ่มช่องทาง (Notification Groups) <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openNgEditor()">＋ เพิ่มกลุ่ม</button></h2>
-<div id="ng-list"><div class="empty">กำลังโหลด...</div></div>
+<h2 data-i18n="ar.notifGroupTitle">📁 Notification Groups <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openNgEditor()" data-i18n="ar.addNotifGroup">＋ เพิ่มกลุ่ม</button></h2>
+<div id="ng-list"><div class="empty" data-i18n="common.loading">กำลังโหลด...</div></div>
 </div>
 <div class="am-section">
-<h2>📨 ช่องทางแจ้งเตือน <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openChEditor()">＋ เพิ่มช่องทาง</button></h2>
-<table class="am-table"><thead><tr><th>ชื่อ</th><th>แอป</th><th>ปลายทาง</th><th>เปิด</th><th>ทดสอบ</th><th>จัดการ</th></tr></thead>
-<tbody id="ch-tbody"><tr><td colspan="6" class="empty">กำลังโหลด...</td></tr></tbody></table>
+<h2 data-i18n="ar.channelTitle">📨 Channels <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openChEditor()" data-i18n="ar.addChannelBtn">＋ เพิ่มช่องทาง</button></h2>
+<table class="am-table"><thead><tr><th data-i18n="ar.thName">ชื่อ</th><th data-i18n="ar.thApp">แอป</th><th data-i18n="ar.thTarget">ปลายทาง</th><th data-i18n="ar.thEnabled">เปิด</th><th data-i18n="ar.thTest">ทดสอบ</th><th data-i18n="ar.thActions">จัดการ</th></tr></thead>
+<tbody id="ch-tbody"><tr><td colspan="6" class="empty" data-i18n="common.loading">กำลังโหลด...</td></tr></tbody></table>
 </div>
 </div>
 
 <!-- ===== RULES TAB ===== -->
 <div id="tab-rules" style="display:none;">
 <div class="am-section">
-<h2>🚨 กฎแจ้งเตือน <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openRuleEditor()">＋ สร้างกฎ</button></h2>
-<p style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:8px;">เลือก keyword + blacklist, กำหนดคะแนนขั้นต่ำ, severity, ช่วงเวลา, cooldown และช่องทางส่ง</p>
-<table class="am-table"><thead><tr><th>ชื่อกฎ</th><th>คะแนนขั้นต่ำ</th><th>ระดับ</th><th>Keyword/Blacklist</th><th>ช่องทาง</th><th>เวลาทำงาน</th><th>Cool&nbsp;down</th><th>เปิด</th><th>จัดการ</th></tr></thead>
-<tbody id="rules-tbody"><tr><td colspan="9" class="empty">กำลังโหลด...</td></tr></tbody></table>
+<h2 data-i18n="ar.ruleTitle">🚨 Alert Rules <button class="ar-btn ar-btn-sm ar-btn-primary" onclick="Mng.openRuleEditor()" data-i18n="ar.createRule">＋ สร้างกฎ</button></h2>
+<p style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:8px;" data-i18n="ar.ruleDescHint">เลือก keyword + blacklist, กำหนดคะแนนขั้นต่ำ, severity, ช่วงเวลา, cooldown และช่องทางส่ง</p>
+<table class="am-table"><thead><tr><th data-i18n="ar.thRuleName">ชื่อกฎ</th><th data-i18n="ar.thMinScore">คะแนนขั้นต่ำ</th><th data-i18n="ar.thSeverity">ระดับ</th><th data-i18n="ar.thKwBlacklist">Keyword/Blacklist</th><th data-i18n="ar.thChannel">ช่องทาง</th><th data-i18n="ar.thTime">เวลาทำงาน</th><th data-i18n="ar.thCooldown">Cool&nbsp;down</th><th data-i18n="ar.thEnabled">เปิด</th><th data-i18n="ar.thActions">จัดการ</th></tr></thead>
+<tbody id="rules-tbody"><tr><td colspan="9" class="empty" data-i18n="common.loading">กำลังโหลด...</td></tr></tbody></table>
 </div>
 </div>
 </div>
@@ -126,77 +128,77 @@
 <!-- ===== MODALS ===== -->
 <!-- Keyword Group Modal -->
 <div class="modal-overlay" id="kwgroup-modal"><div class="modal">
-<h2 id="kwgroup-title">เพิ่มกลุ่ม Keyword</h2>
-<div class="fg"><label>ชื่อกลุ่ม</label><input id="kwgroup-name" placeholder="เช่น ภัยพิบัติ"></div>
-<div class="fg"><label>คำอธิบาย</label><textarea id="kwgroup-desc" rows="2"></textarea></div>
-<div class="fg"><label>สี (hex เช่น #ef4444)</label><input id="kwgroup-color" type="color" value="#22d3ee"></div>
-<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('kwgroup-modal')">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveKwGroup()">💾 บันทึก</button></div>
+<h2 id="kwgroup-title" data-i18n="ar.addKeywordGroupTitle2">เพิ่มกลุ่ม Keyword</h2>
+<div class="fg"><label data-i18n="ar.groupNameLabel">ชื่อกลุ่ม</label><input id="kwgroup-name" data-i18n-ph="ar.groupNamePh" placeholder="เช่น ภัยพิบัติ"></div>
+<div class="fg"><label data-i18n="ar.description">คำอธิบาย</label><textarea id="kwgroup-desc" rows="2"></textarea></div>
+<div class="fg"><label data-i18n="ar.colorLabel">สี (hex เช่น #ef4444)</label><input id="kwgroup-color" type="color" value="#22d3ee"></div>
+<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('kwgroup-modal')" data-i18n="ar.cancel">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveKwGroup()" data-i18n="ar.save">💾 บันทึก</button></div>
 </div></div>
 
 <!-- Keyword Modal -->
 <div class="modal-overlay" id="kw-modal"><div class="modal">
-<h2 id="kw-title">เพิ่ม Keyword</h2>
-<div class="fg"><label>คำหรือประโยค</label><input id="kw-word" placeholder="เช่น ฉุกเฉิน"></div>
-<div class="fg"><label>คำอธิบาย (ไม่บังคับ)</label><input id="kw-desc"></div>
+<h2 id="kw-title" data-i18n="ar.addKeywordTitle2">เพิ่ม Keyword</h2>
+<div class="fg"><label data-i18n="ar.keywordWord">คำหรือประโยค</label><input id="kw-word" data-i18n-ph="ar.keywordWordPh" placeholder="เช่น ฉุกเฉิน"></div>
+<div class="fg"><label data-i18n="ar.optionalDesc">คำอธิบาย (ไม่บังคับ)</label><input id="kw-desc"></div>
 <div class="row-3">
-<div class="fg"><label>กลุ่ม</label><select id="kw-group"></select></div>
-<div class="fg"><label>ประเภท</label><select id="kw-type"></select></div>
-<div class="fg"><label>คะแนน (+ หรือ -)</label><input id="kw-score" type="number" value="1"></div>
+<div class="fg"><label data-i18n="ar.thGroup">กลุ่ม</label><select id="kw-group"></select></div>
+<div class="fg"><label data-i18n="ar.thType">ประเภท</label><select id="kw-type"></select></div>
+<div class="fg"><label data-i18n="ar.scoreLabel">คะแนน (+ หรือ -)</label><input id="kw-score" type="number" value="1"></div>
 </div>
 <div class="row-2">
-<div class="fg"><label>ตรงตามตัวพิมพ์เล็ก/ใหญ่</label><select id="kw-case"><option value="false">ไม่ (default)</option><option value="true">ใช่</option></select></div>
-<div class="fg"><label>เปิดใช้งาน</label><select id="kw-active"><option value="true">เปิด</option><option value="false">ปิด</option></select></div>
+<div class="fg"><label data-i18n="ar.caseSensitive">ตรงตามตัวพิมพ์เล็ก/ใหญ่</label><select id="kw-case"><option value="false" data-i18n="ar.caseNo">ไม่ (default)</option><option value="true" data-i18n="ar.caseYes">ใช่</option></select></div>
+<div class="fg"><label data-i18n="ar.enabledLabel">เปิดใช้งาน</label><select id="kw-active"><option value="true" data-i18n="ar.on">เปิด</option><option value="false" data-i18n="ar.off">ปิด</option></select></div>
 </div>
-<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('kw-modal')">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveKw()">💾 บันทึก</button></div>
+<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('kw-modal')" data-i18n="ar.cancel">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveKw()" data-i18n="ar.save">💾 บันทึก</button></div>
 </div></div>
 
 <!-- Notification Group Modal -->
 <div class="modal-overlay" id="ng-modal"><div class="modal">
-<h2 id="ng-title">เพิ่มกลุ่มช่องทาง</h2>
-<div class="fg"><label>ชื่อกลุ่ม</label><input id="ng-name" placeholder="เช่น ทีมปฏิบัติการ"></div>
-<div class="fg"><label>คำอธิบาย</label><textarea id="ng-desc" rows="2"></textarea></div>
-<div class="fg"><label>เลือกช่องทางในกลุ่มนี้</label><div id="ng-channel-chips" class="chip-row"></div></div>
-<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('ng-modal')">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveNg()">💾 บันทึก</button></div>
+<h2 id="ng-title" data-i18n="ar.addNotifGroupTitle2">เพิ่มกลุ่มช่องทาง</h2>
+<div class="fg"><label data-i18n="ar.groupNameLabel">ชื่อกลุ่ม</label><input id="ng-name"></div>
+<div class="fg"><label data-i18n="ar.description">คำอธิบาย</label><textarea id="ng-desc" rows="2"></textarea></div>
+<div class="fg"><label data-i18n="ar.selectChannels">เลือกช่องทางในกลุ่มนี้</label><div id="ng-channel-chips" class="chip-row"></div></div>
+<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('ng-modal')" data-i18n="ar.cancel">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveNg()" data-i18n="ar.save">💾 บันทึก</button></div>
 </div></div>
 
 <!-- Channel Modal -->
 <div class="modal-overlay" id="ch-modal"><div class="modal">
-<h2 id="ch-title">เพิ่มช่องทาง</h2>
+<h2 id="ch-title" data-i18n="ar.addChannelTitle2">เพิ่มช่องทาง</h2>
 <div class="row-2">
-<div class="fg"><label>ประเภทแอป</label><select id="ch-app"></select></div>
-<div class="fg"><label>เปิดใช้งาน</label><select id="ch-active"><option value="true">เปิด</option><option value="false">ปิด</option></select></div>
+<div class="fg"><label data-i18n="ar.appType">ประเภทแอป</label><select id="ch-app"></select></div>
+<div class="fg"><label data-i18n="ar.enabledLabel">เปิดใช้งาน</label><select id="ch-active"><option value="true" data-i18n="ar.on">เปิด</option><option value="false" data-i18n="ar.off">ปิด</option></select></div>
 </div>
-<div class="fg"><label>ชื่อ (ภายใน)</label><input id="ch-name" placeholder="เช่น ห้องแจ้งเตือนหลัก"></div>
-<div class="fg"><label>Chat ID / ปลายทาง</label><input id="ch-target" placeholder="-100123456789"></div>
-<div class="fg"><label>Bot Token (Telegram) <span class="hint">— ว่างไว้ = ใช้ค่า default จากระบบ</span></label><input id="ch-token" type="password" placeholder="123456:ABC-DEF..."></div>
-<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('ch-modal')">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveCh()">💾 บันทึก</button></div>
+<div class="fg"><label data-i18n="ar.nameInternal">ชื่อ (ภายใน)</label><input id="ch-name" data-i18n-ph="ar.nameInternalPh" placeholder="เช่น ห้องแจ้งเตือนหลัก"></div>
+<div class="fg"><label data-i18n="ar.targetLabel">Chat ID / ปลายทาง</label><input id="ch-target" placeholder="-100123456789"></div>
+<div class="fg"><label data-i18n="ar.botToken">Bot Token (Telegram) <span class="hint" data-i18n="ar.botTokenHint">— ว่างไว้ = ใช้ค่า default จากระบบ</span></label><input id="ch-token" type="password" placeholder="123456:ABC-DEF..."></div>
+<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('ch-modal')" data-i18n="ar.cancel">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveCh()" data-i18n="ar.save">💾 บันทึก</button></div>
 </div></div>
 
 <!-- Rule Modal -->
 <div class="modal-overlay" id="rule-modal"><div class="modal">
-<h2 id="rule-modal-title">สร้างกฎใหม่</h2>
-<div class="fg"><label>ชื่อกฎ</label><input id="rule-name" placeholder="เช่น แจ้งเตือนภัยฉุกเฉิน"></div>
-<div class="fg"><label>คำอธิบาย (ไม่บังคับ)</label><textarea id="rule-desc" rows="2"></textarea></div>
+<h2 id="rule-modal-title" data-i18n="ar.createRuleTitle">สร้างกฎใหม่</h2>
+<div class="fg"><label data-i18n="ar.ruleNameLabel">ชื่อกฎ</label><input id="rule-name" data-i18n-ph="ar.ruleNamePh" placeholder="เช่น แจ้งเตือนภัยฉุกเฉิน"></div>
+<div class="fg"><label data-i18n="ar.optionalDesc">คำอธิบาย (ไม่บังคับ)</label><textarea id="rule-desc" rows="2"></textarea></div>
 <div class="row-3">
-<div class="fg"><label>คะแนนขั้นต่ำ</label><input id="rule-threshold" type="number" value="1"></div>
-<div class="fg"><label>ระดับ (Severity)</label><select id="rule-severity"></select></div>
-<div class="fg"><label>Cool down (วินาที)</label><input id="rule-cooldown" type="number" value="300"></div>
+<div class="fg"><label data-i18n="ar.minScoreLabel">คะแนนขั้นต่ำ</label><input id="rule-threshold" type="number" value="1"></div>
+<div class="fg"><label data-i18n="ar.severityLabel">ระดับ (Severity)</label><select id="rule-severity"></select></div>
+<div class="fg"><label data-i18n="ar.cooldownLabel">Cool down (วินาที)</label><input id="rule-cooldown" type="number" value="300"></div>
 </div>
 <div class="row-3">
-<div class="fg"><label>เริ่มต้น (ว่าง=ตลอดวัน)</label><input id="rule-time-start" type="time"></div>
-<div class="fg"><label>สิ้นสุด</label><input id="rule-time-end" type="time"></div>
-<div class="fg"><label>Timezone</label><input id="rule-tz" value="Asia/Bangkok"></div>
+<div class="fg"><label data-i18n="ar.timeStart">เริ่มต้น (ว่าง=ตลอดวัน)</label><input id="rule-time-start" type="time"></div>
+<div class="fg"><label data-i18n="ar.timeEnd">สิ้นสุด</label><input id="rule-time-end" type="time"></div>
+<div class="fg"><label data-i18n="ar.timezoneLabel">Timezone</label><input id="rule-tz" value="Asia/Bangkok"></div>
 </div>
-<div class="fg"><label>Keyword ที่ตรวจ (คลิกเลือกหลายตัว — รวมคะแนน)</label><div id="rule-keyword-chips" class="chip-row"></div><div class="hint" style="margin-top:4px;"><a href="#" onclick="Mng.showTab('keywords');return false;" style="color:var(--accent-cyan);">＋ สร้าง keyword ใหม่</a></div></div>
-<div class="fg"><label>Blacklist (Negative Filter — พบคำใดคำหนึ่งแล้วไม่ส่ง)</label><div id="rule-blacklist-chips" class="chip-row"></div></div>
-<div class="fg"><label>ช่องทางส่ง (Channels) <span class="hint">— <a href="#" onclick="Mng.showTab('channels');return false;" style="color:var(--accent-cyan);">สร้างช่องทางใหม่</a></span></label><div id="rule-channel-chips" class="chip-row"></div></div>
-<div class="fg"><label>กลุ่มช่องทาง (Notification Groups)</label><div id="rule-group-chips" class="chip-row"></div></div>
+<div class="fg"><label data-i18n="ar.kwCheckLabel">Keyword ที่ตรวจ (คลิกเลือกหลายตัว — รวมคะแนน)</label><div id="rule-keyword-chips" class="chip-row"></div><div class="hint" style="margin-top:4px;"><a href="#" onclick="Mng.showTab('keywords');return false;" style="color:var(--accent-cyan);" data-i18n="ar.createKwLink">＋ สร้าง keyword ใหม่</a></div></div>
+<div class="fg"><label data-i18n="ar.blacklistLabel">Blacklist (Negative Filter — พบคำใดคำหนึ่งแล้วไม่ส่ง)</label><div id="rule-blacklist-chips" class="chip-row"></div></div>
+<div class="fg"><label><span data-i18n="ar.channelSendLabel">ช่องทางส่ง (Channels)</span> <span class="hint">— <a href="#" onclick="Mng.showTab('channels');return false;" style="color:var(--accent-cyan);" data-i18n="ar.createChLink">สร้างช่องทางใหม่</a></span></label><div id="rule-channel-chips" class="chip-row"></div></div>
+<div class="fg"><label data-i18n="ar.notifGroupSelect">กลุ่มช่องทาง (Notification Groups)</label><div id="rule-group-chips" class="chip-row"></div></div>
 <hr style="border-color:var(--border);margin:12px 0;">
-<div class="fg"><label>🧪 ทดสอบกฎ — พิมพ์ข้อความตัวอย่างแล้วกดทดสอบ</label>
-<div style="display:flex;gap:6px;"><input id="rule-test-text" placeholder="เช่น มีเหตุฉุกเฉินที่..." style="flex:1;"><button class="ar-btn" onclick="Mng.testLive()">ทดสอบ</button></div>
-<div id="rule-test-result" class="test-box">ผลจะแสดงที่นี่</div>
+<div class="fg"><label data-i18n="ar.testLabel">🧪 ทดสอบกฎ — พิมพ์ข้อความตัวอย่างแล้วกดทดสอบ</label>
+<div style="display:flex;gap:6px;"><input id="rule-test-text" placeholder="..." style="flex:1;"><button class="ar-btn" onclick="Mng.testLive()" data-i18n="ar.testBtn">ทดสอบ</button></div>
+<div id="rule-test-result" class="test-box"></div>
 </div>
-<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('rule-modal')">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveRule()">💾 บันทึก</button></div>
+<div class="actions"><button class="ar-btn" onclick="Mng.closeModal('rule-modal')" data-i18n="ar.cancel">ยกเลิก</button><button class="ar-btn ar-btn-primary" onclick="Mng.saveRule()" data-i18n="ar.save">💾 บันทึก</button></div>
 </div></div>
 
 <script src="/js/api.js?v=12"></script>
@@ -214,7 +216,7 @@ const Mng = {
 
     async init() {
         if (!Auth.requireAuth()) return;
-        if (!Auth.isAdmin()) { document.body.innerHTML = '<p style="padding:40px;text-align:center;color:var(--text-muted);">ต้องเข้าสู่ระบบในฐานะผู้ดูแล</p>'; return; }
+        if (!Auth.isAdmin()) { document.body.innerHTML = `<p style="padding:40px;text-align:center;color:var(--text-muted);">${I18n.t('ar.adminRequired')}</p>`; return; }
         await this.reload();
     },
 
@@ -231,7 +233,7 @@ const Mng = {
             this.renderKwGroups(); this.renderKeywords();
             this.renderNotifGroups(); this.renderChannels();
             this.renderRules();
-        } catch(e) { console.error(e); alert('โหลดข้อมูลไม่สำเร็จ: ' + (e.detail||e.message||e)); }
+        } catch(e) { console.error(e); alert(I18n.t('ar.reloadFail') + (e.detail||e.message||e)); }
     },
 
     _esc(s){return (s==null?'':String(s)).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));},
@@ -258,7 +260,7 @@ const Mng = {
     // ============================================================
     renderKwGroups() {
         const el = document.getElementById('kw-groups-list');
-        if (!this.kwGroups.length) { el.innerHTML = '<div class="empty">ยังไม่มีกลุ่ม — สร้างกลุ่มเพื่อจัดหมวดหมู่ keyword</div>'; return; }
+        if (!this.kwGroups.length) { el.innerHTML = `<div class="empty">${I18n.t('ar.noKeywordGroupsHint')}</div>`; return; }
         el.innerHTML = this.kwGroups.map(g => {
             const n = this.keywords.filter(k=>k.group_id===g.id).length;
             return `<div class="group-card"><span><span class="group-dot" style="background:${g.color||'#888'};"></span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${n} keyword${g.description?" · "+this._esc(g.description):""})</span></span><span><button class="ar-btn ar-btn-sm" onclick="Mng.openKwGroupEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKwGroup('${g.id}')">🗑</button></span></div>`;
@@ -267,7 +269,7 @@ const Mng = {
 
     openKwGroupEditor(id) {
         this.editKwGroup = id || null;
-        document.getElementById('kwgroup-title').textContent = id ? 'แก้ไขกลุ่ม Keyword' : 'เพิ่มกลุ่ม Keyword';
+        document.getElementById('kwgroup-title').textContent = id ? I18n.t('ar.editKeywordGroup') : I18n.t('ar.addKeywordGroupTitle2');
         if (id) { const g=this.kwGroups.find(x=>x.id===id); document.getElementById('kwgroup-name').value=g.name; document.getElementById('kwgroup-desc').value=g.description||''; document.getElementById('kwgroup-color').value=g.color||'#22d3ee'; }
         else { document.getElementById('kwgroup-name').value=''; document.getElementById('kwgroup-desc').value=''; document.getElementById('kwgroup-color').value='#22d3ee'; }
         document.getElementById('kwgroup-modal').classList.add('show');
@@ -275,15 +277,15 @@ const Mng = {
 
     async saveKwGroup() {
         const data = { name: document.getElementById('kwgroup-name').value.trim(), description: document.getElementById('kwgroup-desc').value.trim()||null, color: document.getElementById('kwgroup-color').value||null };
-        if (!data.name) { alert('กรุณากรอกชื่อกลุ่ม'); return; }
+        if (!data.name) { alert(I18n.t('ar.enterGroupName')); return; }
         try { if (this.editKwGroup) await API.keywordGroups.update(this.editKwGroup, data); else await API.keywordGroups.create(data); this.closeModal('kwgroup-modal'); await this.reload(); }
-        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.saveFail')+(e.detail||e.message||e)); }
     },
 
     async delKwGroup(id) {
-        if (!confirm('ลบกลุ่มนี้? (keyword ทั้งหมดในกลุ่มจะกลายเป็น "ไม่มีกลุ่ม")')) return;
+        if (!confirm(I18n.t('ar.deleteGroupConfirm'))) return;
         try { await API.keywordGroups.remove(id); await this.reload(); }
-        catch(e){ alert('ลบไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.deleteFail')+(e.detail||e.message||e)); }
     },
 
     // ============================================================
@@ -291,7 +293,7 @@ const Mng = {
     // ============================================================
     renderKeywords() {
         const tb = document.getElementById('kw-tbody');
-        if (!this.keywords.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">ยังไม่มี keyword — กด "เพิ่ม Keyword"</td></tr>'; return; }
+        if (!this.keywords.length) { tb.innerHTML = `<tr><td colspan="7" class="empty">${I18n.t('ar.noKeywordsHint')}</td></tr>`; return; }
         const types = this.options.keyword_types || ['threat','location','callsign','action','other'];
         tb.innerHTML = this.keywords.map(k => {
             const grp = k.group_name ? `<span class="kw-pill">${this._esc(k.group_name)}</span>` : '<span style="color:var(--text-muted);font-size:0.72rem;">—</span>';
@@ -303,7 +305,7 @@ const Mng = {
 <td>${grp}</td>
 <td><span class="badge ${typeClass}">${k.type||'other'}</span></td>
 <td class="${sc}">${scTxt}</td>
-<td style="font-size:0.72rem;">${k.is_case_sensitive?'✔️ ตรง':'ไม่สน'}</td>
+<td style="font-size:0.72rem;">${k.is_case_sensitive?I18n.t('ar.caseMatch'):I18n.t('ar.caseIgnore')}</td>
 <td><span class="${k.is_active?'tg-on':'tg-off'}" onclick="Mng.toggleKw('${k.id}')">${k.is_active?'✅':'⚪'}</span></td>
 <td style="white-space:nowrap;"><button class="ar-btn ar-btn-sm" onclick="Mng.openKwEditor('${k.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKw('${k.id}')">🗑</button></td>
 </tr>`;
@@ -313,9 +315,9 @@ const Mng = {
     openKwEditor(id) {
         this.editKw = id || null;
         const types = this.options.keyword_types || ['threat','location','callsign','action','other'];
-        document.getElementById('kw-title').textContent = id ? 'แก้ไข Keyword' : 'เพิ่ม Keyword';
+        document.getElementById('kw-title').textContent = id ? I18n.t('ar.editKeyword') : I18n.t('ar.addKeywordTitle2');
         // fill group select
-        this._fillSelect('kw-group', this.kwGroups, 'id', 'name', '(ไม่มีกลุ่ม)');
+        this._fillSelect('kw-group', this.kwGroups, 'id', 'name', I18n.t('ar.noGroup'));
         document.getElementById('kw-type').innerHTML = types.map(t=>`<option value="${t}">${t}</option>`).join('');
         if (id) {
             const k = this.keywords.find(x=>x.id===id);
@@ -344,16 +346,16 @@ const Mng = {
             is_case_sensitive: document.getElementById('kw-case').value==='true',
             is_active: document.getElementById('kw-active').value==='true',
         };
-        if (!data.keyword) { alert('กรุณากรอกคำ/ประโยค'); return; }
+        if (!data.keyword) { alert(I18n.t('ar.enterKeyword')); return; }
         try { if (this.editKw) await API.keywords.update(this.editKw, data); else await API.keywords.create(data); this.closeModal('kw-modal'); await this.reload(); }
-        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.saveFail')+(e.detail||e.message||e)); }
     },
 
-    async delKw(id) { if(!confirm('ลบ keyword นี้?')) return; try { await API.keywords.remove(id); await this.reload(); } catch(e){ alert('ลบไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async delKw(id) { if(!confirm(I18n.t('ar.deleteKeywordConfirm'))) return; try { await API.keywords.remove(id); await this.reload(); } catch(e){ alert(I18n.t('ar.deleteFail')+(e.detail||e.message||e)); } },
 
     async toggleKw(id) {
         const k = this.keywords.find(x=>x.id===id); if(!k) return;
-        try { await API.keywords.update(id, {...k, is_active: !k.is_active}); await this.reload(); } catch(e){ alert('สลับไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        try { await API.keywords.update(id, {...k, is_active: !k.is_active}); await this.reload(); } catch(e){ alert(I18n.t('ar.toggleFailKw')+(e.detail||e.message||e)); }
     },
 
     // ============================================================
@@ -361,22 +363,22 @@ const Mng = {
     // ============================================================
     renderNotifGroups() {
         const el = document.getElementById('ng-list');
-        if (!this.notifGroups.length) { el.innerHTML = '<div class="empty">ยังไม่มีกลุ่ม — สร้างเพื่อรวมหลายช่องทางเป็นกลุ่มเดียว</div>'; return; }
+        if (!this.notifGroups.length) { el.innerHTML = `<div class="empty">${I18n.t('ar.noNotifGroupsHint')}</div>`; return; }
         el.innerHTML = this.notifGroups.map(g => {
             // count channels in this group via the API list (groups carry channel_count)
-            return `<div class="group-card"><span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${g.channel_count||0} ช่องทาง${g.description?" · "+this._esc(g.description):""})</span></span><span><button class="ar-btn ar-btn-sm" onclick="Mng.openNgEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delNg('${g.id}')">🗑</button></span></div>`;
+            return `<div class="group-card"><span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${I18n.t('ar.channelCount', g.channel_count||0)}${g.description?" · "+this._esc(g.description):""})</span></span><span><button class="ar-btn ar-btn-sm" onclick="Mng.openNgEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delNg('${g.id}')">🗑</button></span></div>`;
         }).join('');
     },
 
     openNgEditor(id) {
         this.editNg = id || null;
         this.selNgCh.clear();
-        document.getElementById('ng-title').textContent = id ? 'แก้ไขกลุ่มช่องทาง' : 'เพิ่มกลุ่มช่องทาง';
+        document.getElementById('ng-title').textContent = id ? I18n.t('ar.editNotifGroup') : I18n.t('ar.addNotifGroupTitle2');
         if (id) { const g=this.notifGroups.find(x=>x.id===id); document.getElementById('ng-name').value=g.name; document.getElementById('ng-desc').value=g.description||''; }
         else { document.getElementById('ng-name').value=''; document.getElementById('ng-desc').value=''; }
         // render channel chips (channels list with selection)
         const wrap = document.getElementById('ng-channel-chips');
-        wrap.innerHTML = this.channels.length ? this.channels.map(c => `<label style="font-size:0.78rem;display:flex;align-items:center;gap:4px;cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:9px;" onclick="Mng._toggleNgCh('${c.id}', this)"><input type="checkbox" value="${c.id}" style="width:auto;"> ${this._esc(c.name)} <span style="opacity:0.6;font-size:0.66rem;">(${this._esc(c.app_type)})</span></label>`).join('') : '<span class="empty">ยังไม่มี channel</span>';
+        wrap.innerHTML = this.channels.length ? this.channels.map(c => `<label style="font-size:0.78rem;display:flex;align-items:center;gap:4px;cursor:pointer;padding:3px 8px;border:1px solid var(--border);border-radius:9px;" onclick="Mng._toggleNgCh('${c.id}', this)"><input type="checkbox" value="${c.id}" style="width:auto;"> ${this._esc(c.name)} <span style="opacity:0.6;font-size:0.66rem;">(${this._esc(c.app_type)})</span></label>`).join('') : `<span class="empty">${I18n.t('ar.noChannelsShort')}</span>`;
         document.getElementById('ng-modal').classList.add('show');
     },
 
@@ -387,19 +389,19 @@ const Mng = {
 
     async saveNg() {
         const data = { name: document.getElementById('ng-name').value.trim(), description: document.getElementById('ng-desc').value.trim()||null, channel_ids: [...this.selNgCh] };
-        if (!data.name) { alert('กรุณากรอกชื่อกลุ่ม'); return; }
+        if (!data.name) { alert(I18n.t('ar.enterNotifGroupName')); return; }
         try { if (this.editNg) await API.notifGroups.update(this.editNg, data); else await API.notifGroups.create(data); this.closeModal('ng-modal'); await this.reload(); }
-        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.saveFail')+(e.detail||e.message||e)); }
     },
 
-    async delNg(id) { if(!confirm('ลบกลุ่มนี้?')) return; try { await API.notifGroups.remove(id); await this.reload(); } catch(e){ alert('ลบไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async delNg(id) { if(!confirm(I18n.t('ar.deleteNotifGroupConfirm'))) return; try { await API.notifGroups.remove(id); await this.reload(); } catch(e){ alert(I18n.t('ar.deleteFail')+(e.detail||e.message||e)); } },
 
     // ============================================================
     // CHANNELS
     // ============================================================
     renderChannels() {
         const tb = document.getElementById('ch-tbody');
-        if (!this.channels.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">ยังไม่มีช่องทาง — กด "เพิ่มช่องทาง"</td></tr>'; return; }
+        if (!this.channels.length) { tb.innerHTML = `<tr><td colspan="6" class="empty">${I18n.t('ar.noChannelsHint')}</td></tr>`; return; }
         const appTypes = this._appTypes || {};
         tb.innerHTML = this.channels.map(c => {
             const label = appTypes[c.app_type] ? appTypes[c.app_type].label : c.app_type;
@@ -408,7 +410,7 @@ const Mng = {
 <td><span class="badge sev-other">${this._esc(label)}</span></td>
 <td style="font-family:'JetBrains Mono',monospace;font-size:0.74rem;">${this._esc(c.target)}</td>
 <td><span class="${c.is_active?'tg-on':'tg-off'}" onclick="Mng.toggleCh('${c.id}')">${c.is_active?'✅':'⚪'}</span></td>
-<td><button class="ar-btn ar-btn-sm ar-btn-test" onclick="Mng.testCh('${c.id}')" ${c.is_active?'':'disabled'}>🧪 ทดสอบ</button></td>
+<td><button class="ar-btn ar-btn-sm ar-btn-test" onclick="Mng.testCh('${c.id}')" ${c.is_active?'':'disabled'}>${I18n.t('ar.testBtn')}</button></td>
 <td style="white-space:nowrap;"><button class="ar-btn ar-btn-sm" onclick="Mng.openChEditor('${c.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delCh('${c.id}')">🗑</button></td>
 </tr>`;
         }).join('');
@@ -416,7 +418,7 @@ const Mng = {
 
     openChEditor(id) {
         this.editCh = id || null;
-        document.getElementById('ch-title').textContent = id ? 'แก้ไขช่องทาง' : 'เพิ่มช่องทาง';
+        document.getElementById('ch-title').textContent = id ? I18n.t('ar.editChannel') : I18n.t('ar.addChannelTitle2');
         // fill app types
         const appTypes = this._appTypes || {telegram:{label:'Telegram'}};
         document.getElementById('ch-app').innerHTML = Object.keys(appTypes).map(a=>`<option value="${a}">${appTypes[a].label}</option>`).join('');
@@ -443,23 +445,23 @@ const Mng = {
             is_active: document.getElementById('ch-active').value==='true',
             config: token ? { bot_token: token } : {},
         };
-        if (!data.name || !data.target) { alert('กรุณากรอกชื่อและปลายทาง'); return; }
+        if (!data.name || !data.target) { alert(I18n.t('ar.enterNameTarget')); return; }
         try { if (this.editCh) await API.channels.update(this.editCh, data); else await API.channels.create(data); this.closeModal('ch-modal'); await this.reload(); }
-        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.saveFail')+(e.detail||e.message||e)); }
     },
 
-    async delCh(id) { if(!confirm('ลบช่องทางนี้?')) return; try { await API.channels.remove(id); await this.reload(); } catch(e){ alert('ลบไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async delCh(id) { if(!confirm(I18n.t('ar.deleteChannelConfirm'))) return; try { await API.channels.remove(id); await this.reload(); } catch(e){ alert(I18n.t('ar.deleteFail')+(e.detail||e.message||e)); } },
 
     async toggleCh(id) {
         const c = this.channels.find(x=>x.id===id); if(!c) return;
-        try { await API.channels.update(id, {...c, is_active: !c.is_active}); await this.reload(); } catch(e){ alert('สลับไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        try { await API.channels.update(id, {...c, is_active: !c.is_active}); await this.reload(); } catch(e){ alert(I18n.t('ar.toggleFailCh')+(e.detail||e.message||e)); }
     },
 
     async testCh(id) {
-        const btn = event.target; btn.disabled = true; btn.textContent = '⏳ กำลังส่ง...';
-        try { await API.channels.test(id); alert('✅ ส่งข้อความทดสอบสำเร็จ! ตรวจสอบในแอป/กลุ่มของคุณ'); }
-        catch(e){ alert('❌ ทดสอบไม่สำเร็จ: '+(e.detail||e.message||e)); }
-        finally { btn.disabled=false; btn.textContent='🧪 ทดสอบ'; }
+        const btn = event.target; btn.disabled = true; btn.textContent = I18n.t('ar.testSending');
+        try { await API.channels.test(id); alert(I18n.t('ar.testSent')); }
+        catch(e){ alert(I18n.t('ar.testFail')+(e.detail||e.message||e)); }
+        finally { btn.disabled=false; btn.textContent=I18n.t('ar.testBtn'); }
     },
 
     // ============================================================
@@ -469,13 +471,13 @@ const Mng = {
 
     renderRules() {
         const tb = document.getElementById('rules-tbody');
-        if (!this.rules.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">ยังไม่มีกฎ — กด "สร้างกฎ"</td></tr>'; return; }
+        if (!this.rules.length) { tb.innerHTML = `<tr><td colspan="9" class="empty">${I18n.t('ar.noRulesHint')}</td></tr>`; return; }
         // severity select fill
         const sevs = this.options.severities || ['info','warning','high','critical','other'];
         document.getElementById('rule-severity').innerHTML = sevs.map(s=>`<option value="${s}">${s}</option>`).join('');
         tb.innerHTML = this.rules.map(r => {
             const kwN=(r.keywords||[]).length, blN=(r.blacklist||[]).length, chN=(r.channels||[]).length+(r.notification_groups||[]).length;
-            const time=(r.active_time_start&&r.active_time_end)?`${r.active_time_start}–${r.active_time_end}`:'ตลอดวัน';
+            const time=(r.active_time_start&&r.active_time_end)?`${r.active_time_start}–${r.active_time_end}`:I18n.t('ar.allDay');
             return `<tr>
 <td><b>${this._esc(r.name)}</b>${r.description?`<br><span style="font-size:0.68rem;color:var(--text-muted);">${this._esc(r.description)}</span>`:''}</td>
 <td style="text-align:center;"><b>${r.score_threshold}</b></td>
@@ -492,12 +494,12 @@ const Mng = {
 
     _ruleToReq(r){ return { name:r.name,description:r.description,score_threshold:r.score_threshold,severity:r.severity,cooldown_seconds:r.cooldown_seconds,active_time_start:r.active_time_start,active_time_end:r.active_time_end,timezone:r.timezone,is_enabled:r.is_enabled,keyword_ids:(r.keywords||[]).map(k=>k.id),blacklist_ids:(r.blacklist||[]).map(k=>k.id),channel_ids:(r.channels||[]).map(c=>c.id),notification_group_ids:(r.notification_groups||[]).map(g=>g.id) }; },
 
-    async toggleRule(id,val){ const r=this.rules.find(x=>x.id===id); if(!r) return; try{ await API.alertRules.update(id,{...this._ruleToReq(r),is_enabled:val}); await this.reload(); }catch(e){ alert('สลับไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async toggleRule(id,val){ const r=this.rules.find(x=>x.id===id); if(!r) return; try{ await API.alertRules.update(id,{...this._ruleToReq(r),is_enabled:val}); await this.reload(); }catch(e){ alert(I18n.t('ar.toggleFailCh')+(e.detail||e.message||e)); } },
 
     openRuleEditor(id) {
         this.editRule = id || null;
         this.selKw.clear(); this.selBl.clear(); this.selCh.clear(); this.selNg.clear();
-        document.getElementById('rule-modal-title').textContent = id ? 'แก้ไขกฎ' : 'สร้างกฎใหม่';
+        document.getElementById('rule-modal-title').textContent = id ? I18n.t('ar.editRule') : I18n.t('ar.createRuleTitle');
         const sevs = this.options.severities || ['info','warning','high','critical','other'];
         document.getElementById('rule-severity').innerHTML = sevs.map(s=>`<option value="${s}">${s}</option>`).join('');
         if (id) {
@@ -513,7 +515,7 @@ const Mng = {
             document.getElementById('rule-name').value=''; document.getElementById('rule-desc').value=''; document.getElementById('rule-threshold').value=1;
             document.getElementById('rule-cooldown').value=300; document.getElementById('rule-time-start').value=''; document.getElementById('rule-time-end').value=''; document.getElementById('rule-tz').value='Asia/Bangkok';
         }
-        document.getElementById('rule-test-text').value=''; document.getElementById('rule-test-result').className='test-box'; document.getElementById('rule-test-result').textContent='ผลจะแสดงที่นี่';
+        document.getElementById('rule-test-text').value=''; document.getElementById('rule-test-result').className='test-box'; document.getElementById('rule-test-result').textContent=I18n.t('ar.testResultDefault');
         this._renderRuleChips();
         document.getElementById('rule-modal').classList.add('show');
     },
@@ -521,9 +523,9 @@ const Mng = {
     _renderRuleChips() {
         const chip=(o,set,fn,extra)=>`<div class="chip ${set.has(o.id)?'selected':''}" onclick="Mng._toggleRuleChip('${fn}','${o.id}')">${this._esc(o.keyword||o.name||o.target)}${extra||''}</div>`;
         const sc=(s)=>` <span class="sc ${s>=0?'score-pos':'score-neg'}">${s>=0?'+':''}${s}</span>`;
-        document.getElementById('rule-keyword-chips').innerHTML = this.keywords.length ? this.keywords.map(k=>chip(k,this.selKw,'kw',sc(k.score))).join('') : '<span class="empty">ยังไม่มี keyword</span>';
+        document.getElementById('rule-keyword-chips').innerHTML = this.keywords.length ? this.keywords.map(k=>chip(k,this.selKw,'kw',sc(k.score))).join('') : `<span class="empty">${I18n.t('ar.noKwMatch')}</span>`;
         document.getElementById('rule-blacklist-chips').innerHTML = this.keywords.map(k=>chip(k,this.selBl,'bl','')).join('') || '<span class="empty">—</span>';
-        document.getElementById('rule-channel-chips').innerHTML = this.channels.length ? this.channels.map(c=>chip(c,this.selCh,'ch',` <span class=\"sc\">(${this._esc(c.app_type)})</span>`)).join('') : '<span class="empty">ยังไม่มี channel</span>';
+        document.getElementById('rule-channel-chips').innerHTML = this.channels.length ? this.channels.map(c=>chip(c,this.selCh,'ch',` <span class=\"sc\">(${this._esc(c.app_type)})</span>`)).join('') : `<span class="empty">${I18n.t('ar.noChannelsShort')}</span>`;
         document.getElementById('rule-group-chips').innerHTML = this.notifGroups.length ? this.notifGroups.map(g=>chip(g,this.selNg,'ng','')).join('') : '<span class="empty">—</span>';
     },
 
@@ -532,16 +534,16 @@ const Mng = {
     async saveRule() {
         const start=document.getElementById('rule-time-start').value||null, end=document.getElementById('rule-time-end').value||null;
         const data={ name:document.getElementById('rule-name').value.trim(), description:document.getElementById('rule-desc').value.trim()||null, score_threshold:parseInt(document.getElementById('rule-threshold').value)||0, severity:document.getElementById('rule-severity').value, cooldown_seconds:parseInt(document.getElementById('rule-cooldown').value)||0, active_time_start:start,active_time_end:end, timezone:document.getElementById('rule-tz').value||'Asia/Bangkok', is_enabled:true, keyword_ids:[...this.selKw],blacklist_ids:[...this.selBl],channel_ids:[...this.selCh],notification_group_ids:[...this.selNg] };
-        if(!data.name){alert('กรุณาใส่ชื่อกฎ');return;}
-        if(!data.keyword_ids.length){alert('เลือก keyword อย่างน้อย 1 ตัว');return;}
-        if(!data.channel_ids.length&&!data.notification_group_ids.length){alert('เลือกช่องทาง/กลุ่มอย่างน้อย 1');return;}
+        if(!data.name){alert(I18n.t('ar.enterRuleName'));return;}
+        if(!data.keyword_ids.length){alert(I18n.t('ar.selectKw'));return;}
+        if(!data.channel_ids.length&&!data.notification_group_ids.length){alert(I18n.t('ar.selectChannel'));return;}
         try{ if(this.editRule) await API.alertRules.update(this.editRule,data); else await API.alertRules.create(data); this.closeModal('rule-modal'); await this.reload(); }
-        catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.detail||e.message||e)); }
+        catch(e){ alert(I18n.t('ar.saveFail')+(e.detail||e.message||e)); }
     },
 
-    async delRule(id){ if(!confirm('ลบกฎนี้?'))return; try{ await API.alertRules.remove(id); await this.reload(); }catch(e){ alert('ลบไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async delRule(id){ if(!confirm(I18n.t('ar.deleteRuleConfirm')))return; try{ await API.alertRules.remove(id); await this.reload(); }catch(e){ alert(I18n.t('ar.deleteFail')+(e.detail||e.message||e)); } },
 
-    async testRule(id){ const t=prompt('พิมพ์ข้อความตัวอย่างเพื่อทดสอบกฎ:',''); if(t==null)return; try{ const r=await API.alertRules.test(id,t); alert(r.fired?`✅ ส่งแจ้งเตือน! คะแนน ${r.total_score}\nพบ: ${r.matched.map(m=>m.keyword).join(', ')}`:`❌ ไม่ส่ง — ${r.reason}`); }catch(e){ alert('ทดสอบไม่สำเร็จ: '+(e.detail||e.message||e)); } },
+    async testRule(id){ const t=prompt(I18n.t('ar.testRulePrompt'),''); if(t==null)return; try{ const r=await API.alertRules.test(id,t); alert(r.fired?I18n.t('ar.testFired', r.total_score, r.matched.map(m=>m.keyword).join(', ')):I18n.t('ar.testNotFired', r.reason)); }catch(e){ alert(I18n.t('ar.testFail')+(e.detail||e.message||e)); } },
 
     testLive() {
         const text=document.getElementById('rule-test-text').value.trim(); if(!text)return;
@@ -550,14 +552,21 @@ const Mng = {
         for(const kw of this.keywords.filter(k=>data.keyword_ids.includes(k.id))){ const hit=kw.is_case_sensitive?text.includes(kw.keyword):text.toLowerCase().includes((kw.keyword||'').toLowerCase()); if(hit){score+=(kw.score||0);matched.push(kw.keyword);} }
         for(const kw of this.keywords.filter(k=>data.blacklist_ids.includes(k.id))){ const hit=kw.is_case_sensitive?text.includes(kw.keyword):text.toLowerCase().includes((kw.keyword||'').toLowerCase()); if(hit){blocked=true;bw=kw.keyword;break;} }
         const box=document.getElementById('rule-test-result'); let msg,cls;
-        if(blocked){msg=`🚫 Blacklist ตรง: "${bw}" → ไม่ส่ง`;cls='test-box not-fired';}
-        else if(!matched.length){msg='ไม่พบ keyword ที่ตรง';cls='test-box not-fired';}
-        else if(score>=data.score_threshold){msg=`✅ ส่งแจ้งเตือน! คะแนน ${score} ≥ ${data.score_threshold}\nพบ: ${matched.join(', ')}`;cls='test-box fired';}
-        else{msg=`คะแนน ${score} < ขั้นต่ำ ${data.score_threshold} → ไม่ส่ง`;cls='test-box not-fired';}
+        if(blocked){msg=I18n.t('ar.blacklistBlocked', bw);cls='test-box not-fired';}
+        else if(!matched.length){msg=I18n.t('ar.noKwMatch');cls='test-box not-fired';}
+        else if(score>=data.score_threshold){msg=I18n.t('ar.testFired', score, matched.join(', '));cls='test-box fired';}
+        else{msg=I18n.t('ar.testScoreLow', score, data.score_threshold);cls='test-box not-fired';}
         box.className=cls; box.textContent=msg;
     },
 };
 Mng.init();
+
+// Re-render dynamic content when language changes
+document.addEventListener('languagechange', () => {
+    Mng.renderKwGroups(); Mng.renderKeywords();
+    Mng.renderNotifGroups(); Mng.renderChannels();
+    Mng.renderRules();
+});
 </script>
 </body>
 </html>

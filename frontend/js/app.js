@@ -147,14 +147,14 @@ const App = {
             if (btnConnect) { btnConnect.style.display = 'none'; }
             if (btnStream) { btnStream.style.display = ''; }
         } else {
-            if (btnConnect) { btnConnect.style.display = ''; btnConnect.textContent = '🔗 เชื่อมต่อ'; btnConnect.disabled = false; }
+            if (btnConnect) { btnConnect.style.display = ''; btnConnect.textContent = I18n.t('dash.connect'); btnConnect.disabled = false; }
             if (btnStream) { btnStream.style.display = 'none'; }
         }
 
         if (this.isStreaming) {
-            if (btnStream) { btnStream.textContent = '⏹ หยุดรับ'; }
+            if (btnStream) { btnStream.textContent = I18n.t('dash.stopReceive'); }
         } else {
-            if (btnStream) { btnStream.textContent = '▶ รับสัญญาณ'; }
+            if (btnStream) { btnStream.textContent = I18n.t('dash.receive'); }
         }
 
         this.updateFreqDisplay();
@@ -254,19 +254,19 @@ const App = {
 
     async connectSDR() {
         const btn = document.getElementById('btn-connect');
-        btn.textContent = '⏳ กำลังเชื่อมต่อ...';
+        btn.textContent = I18n.t('dash.connecting');
         btn.disabled = true;
 
         try {
             const result = await API.sdr.connect();
             this.isConnected = true;
-            btn.textContent = '✅ เชื่อมต่อแล้ว';
+            btn.textContent = I18n.t('dash.connected');
             btn.style.display = 'none';
             document.getElementById('btn-stream').style.display = '';
         } catch (err) {
-            btn.textContent = '🔗 เชื่อมต่อ';
+            btn.textContent = I18n.t('dash.connect');
             btn.disabled = false;
-            alert('ไม่สามารถเชื่อมต่อ RTL-TCP ได้: ' + (err.detail || err.message || err));
+            alert(I18n.t('dash.errConnectRtl') + (err.detail || err.message || err));
         }
     },
 
@@ -283,7 +283,7 @@ const App = {
         if (this.isStreaming) {
             // STOP
             const prevText = btn.textContent;
-            btn.textContent = '⏳ กำลังหยุด...';
+            btn.textContent = I18n.t('dash.stopping');
             btn.disabled = true;
             try {
                 await API.sdr.streamStop();
@@ -292,7 +292,7 @@ const App = {
             } catch (e) {
                 // Even on error, trust the WS status broadcast to correct us.
                 console.error('Stream stop failed:', e);
-                alert('หยุดรับสัญญาณไม่สำเร็จ: ' + (e.detail || e.message || e));
+                alert(I18n.t('dash.errStopStream') + (e.detail || e.message || e));
                 this.updateUI();
             } finally {
                 btn.disabled = false;
@@ -301,7 +301,7 @@ const App = {
         } else {
             // START — backend now auto-connects, so we no longer require the
             // user to press "ฟังสด" first.
-            btn.textContent = '⏳ กำลังเชื่อมต่อ...';
+            btn.textContent = I18n.t('dash.connecting');
             btn.disabled = true;
             try {
                 await API.sdr.streamStart();
@@ -314,7 +314,7 @@ const App = {
             } catch (err) {
                 // Do NOT flip the button; show the reason from the backend.
                 this.updateUI();
-                alert('ไม่สามารถเริ่มรับสัญญาณ: ' + (err.detail || err.message || err));
+                alert(I18n.t('dash.errStartStream') + (err.detail || err.message || err));
             } finally {
                 btn.disabled = false;
                 this._streamBusy = false;
@@ -324,8 +324,8 @@ const App = {
 
     // === Clock ===
     startClock() {
-        const thaiMonths = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
-        const thaiDays = ['วันอาทิตย์','วันจันทร์','วันอังคาร','วันพุธ','วันพฤหัสบดี','วันศุกร์','วันเสาร์'];
+        const months = I18n.tArr('date.months');
+        const days = I18n.tArr('date.days');
         const update = () => {
             const now = new Date();
             const h = String(now.getHours()).padStart(2,'0');
@@ -335,8 +335,9 @@ const App = {
             const cd = document.getElementById('clock-date');
             const cdy = document.getElementById('clock-day');
             if (ct) ct.textContent = `${h}:${m}:${s}`;
-            if (cd) cd.textContent = `${now.getDate()} ${thaiMonths[now.getMonth()]} ${now.getFullYear()+543}`;
-            if (cdy) cdy.textContent = thaiDays[now.getDay()];
+            const year = I18n.lang === 'th' ? now.getFullYear() + 543 : now.getFullYear();
+            if (cd) cd.textContent = `${now.getDate()} ${months[now.getMonth()]} ${year}`;
+            if (cdy) cdy.textContent = days[now.getDay()];
         };
         update(); setInterval(update, 1000);
     },
@@ -634,7 +635,7 @@ const App = {
             // Disable the button if Three.js failed to load (offline CDN).
             if (typeof THREE === 'undefined') {
                 wf3dBtn.disabled = true;
-                wf3dBtn.title = 'Three.js ไม่พร้อมใช้งาน (offline?)';
+                wf3dBtn.title = I18n.t('dash.errThreejs');
                 wf3dBtn.style.opacity = '0.4';
             } else {
                 wf3dBtn.addEventListener('click', () => this.toggleWaterfall3D());
@@ -747,7 +748,7 @@ const App = {
             sqlAutoBtn.addEventListener('click', () => {
                 if (typeof LiveAudio === 'undefined' || !LiveAudio.anyPlaying) {
                     this._onAutoSquelchAck({ enabled: false });
-                    alert('กรุณากด "ฟังสด" ก่อนเปิด Auto Squelch');
+                    alert(I18n.t('dash.errNeedListenAutoSql'));
                     return;
                 }
                 const next = !this._autoSquelchOn;
@@ -931,8 +932,8 @@ const App = {
                 <h3>${title}</h3>
                 <input type="text" id="freq-input-field" value="${defaultValueMHz}" autofocus>
                 <div class="freq-input-btns">
-                    <button class="btn btn-primary" id="freq-input-ok">✅ ตั้งค่า</button>
-                    <button class="btn" id="freq-input-cancel">ยกเลิก</button>
+                    <button class="btn btn-primary" id="freq-input-ok">${I18n.t('dash.setBtn')}</button>
+                    <button class="btn" id="freq-input-cancel">${I18n.t('dash.cancel')}</button>
                 </div>
             </div>
         `;
@@ -948,7 +949,7 @@ const App = {
             if (!isNaN(val) && val >= minMHz && val <= maxMHz) {
                 onApply(Math.round(val * 1e6));
             } else {
-                alert(`ความถี่ต้องอยู่ระหว่าง ${minMHz} – ${maxMHz} MHz`);
+                alert(I18n.t('dash.errFreqRange', minMHz, maxMHz));
                 return;  // keep dialog open so the user can correct it
             }
             close();
@@ -969,7 +970,7 @@ const App = {
         const vfoHz = this.currentFreq + (this._vfoOffsetHz || 0);
         const currentMHz = (vfoHz / 1e6).toFixed(4);
         this._openFreqInputDialog({
-            title: '🎧 ใส่ความถี่ที่จะฟัง (MHz)',
+            title: I18n.t('dash.freqInputTitleVfo'),
             defaultValueMHz: currentMHz,
             onApply: (freqHz) => this.setVFO(freqHz),
         });
@@ -981,7 +982,7 @@ const App = {
     showCenterFreqInput() {
         const currentMHz = (this.currentFreq / 1e6).toFixed(4);
         this._openFreqInputDialog({
-            title: '📻 ใส่ความถี่กลาง / Center Frequency (MHz)',
+            title: I18n.t('dash.freqInputTitleCenter'),
             defaultValueMHz: currentMHz,
             onApply: (freqHz) => {
                 this.currentFreq = freqHz;
@@ -1018,7 +1019,7 @@ const App = {
             // want the user to see WHY the audio is noise).
             const offscreen = !this._isVfoInPassband();
             const warn = offscreen
-                ? ` <span style="color:#ff5050;font-size:0.5em;vertical-align:middle">⚠ นอกช่วงรับสัญญาณ</span>`
+                ? ` <span style="color:#ff5050;font-size:0.5em;vertical-align:middle">${I18n.t('dash.outOfRange')}</span>`
                 : '';
             // When more than one VFO is active, prefix the big display with the
             // active VFO label + its color so the operator knows which cursor
@@ -1051,7 +1052,7 @@ const App = {
         // independent of everyone else.
         // Guard: require live audio to be active (the WS carries the recorder)
         if (!this.isRecording && !LiveAudio.isPlaying) {
-            alert('กรุณากด "🔈 ฟังสด" ก่อน แล้วค่อยกดบันทึก');
+            alert(I18n.t('dash.errNeedListenRecord'));
             return;
         }
         if (this.isRecording) {
@@ -1099,7 +1100,7 @@ const App = {
                 // The admin has disabled manual recording for regular users.
                 this.isRecording = false;
                 if (btn) btn.classList.remove('recording');
-                alert(obj.message || 'ระบบบันทึกถูกปิดไว้ กรุณาติดต่อผู้ดูแลระบบ');
+                alert(obj.message || I18n.t('dash.recordingDisabled'));
                 break;
             default:
                 console.warn('🎙️ Unknown record_ack status:', obj.status);
@@ -1117,7 +1118,7 @@ const App = {
         // Auto-record (per-user) rides on the live audio WebSocket, so it
         // requires "ฟังสด" to be active first.
         if (typeof LiveAudio === 'undefined' || !LiveAudio.anyPlaying) {
-            alert('กรุณากด "🔈 ฟังสด" ก่อนเปิดอัดอัตโนมัติ');
+            alert(I18n.t('dash.errNeedListenAutoRec'));
             return;
         }
         const next = !this._autoRecordOn;
@@ -1141,8 +1142,8 @@ const App = {
             btn.classList.toggle('auto-rec-active', this._autoRecordOn);
             btn.textContent = this._autoRecordOn ? '🔄●' : '🔄';
             btn.title = this._autoRecordOn
-                ? 'อัดอัตโนมัติของฉัน: เปิดอยู่ (คลิกเพื่อปิด)'
-                : 'อัดอัตโนมัติของฉัน (ต้องกดฟังสดก่อน)';
+                ? I18n.t('dash.autoRecOnTitle')
+                : I18n.t('dash.autoRecOffTitle');
         }
         if (obj.message) {
             // e.g. recording disabled by admin → revert and inform.
@@ -1463,7 +1464,7 @@ const App = {
                 if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
             }
             el.textContent = '🔄REC';
-            el.title = `กำลังบันทึก (source: ${source || 'auto'})`;
+            el.title = I18n.t('dash.recStatusTitle', source || 'auto');
         } else if (el) {
             el.remove();
         }
@@ -1495,7 +1496,7 @@ const App = {
         if (hasManual) {
             const freqMhz = freqFromOffset(0);
             const mode = (data && data.mode) || this.currentMode || 'FM';
-            items.push(row('🔴', `บันทึกด้วยมือ: ${freqMhz} MHz | ${mode}`));
+            items.push(row('🔴', I18n.t('dash.recManual', freqMhz, mode)));
         }
 
         // 2. Center auto-record (global background)
@@ -1504,7 +1505,7 @@ const App = {
             const mode = (data && data.mode) || this.currentMode || 'FM';
             const bwHz = (data && data.channel_bw) || this._channelBw || 12000;
             const bwKhz = (bwHz / 1000).toFixed(0);
-            items.push(row('🔴', `อัดกลางอัตโนมัติ: ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
+            items.push(row('🔴', I18n.t('dash.recAutoCenter', freqMhz, mode, bwKhz)));
         }
 
         // 3. Per-listener recordings (manual + auto, each user's own VFO)
@@ -1513,12 +1514,12 @@ const App = {
                 const freqMhz = freqFromOffset(ln.vfo_offset_hz);
                 const mode = ln.mode || 'FM';
                 const bwKhz = ((ln.channel_bw || 12000) / 1000).toFixed(0);
-                const userTag = ln.user_id ? `👤 ${ln.user_id.slice(0, 8)}` : '👤 guest';
+                const userTag = ln.user_id ? `👤 ${ln.user_id.slice(0, 8)}` : I18n.t('dash.guest');
                 if (ln.manual_recording) {
-                    items.push(row('🔴', `บันทึกด้วยมือ (${userTag}): ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
+                    items.push(row('🔴', I18n.t('dash.recManualUser', userTag, freqMhz, mode, bwKhz)));
                 }
                 if (ln.auto_recording) {
-                    items.push(row('🎙️', `อัดอัตโนมัติ ฟังสด (${userTag}): ${freqMhz} MHz | ${mode} | BW ${bwKhz}kHz`));
+                    items.push(row('🎙️', I18n.t('dash.recAutoListen', userTag, freqMhz, mode, bwKhz)));
                 }
             }
         }
@@ -1532,7 +1533,7 @@ const App = {
                     const freqMhz = (f.frequency_hz / 1e6).toFixed(4);
                     const bwKhz = ((f.bandwidth_hz || 12000) / 1000).toFixed(0);
                     const label = cap.job_label || (cap.job_id ? cap.job_id.slice(0, 8) : 'job');
-                    items.push(row('📼', `Job ${label}: ${freqMhz} MHz | ${f.demod_mode} | BW ${bwKhz}kHz`));
+                    items.push(row('📼', I18n.t('dash.recJob', label, freqMhz, f.demod_mode, bwKhz)));
                 }
             }
         }
@@ -1648,7 +1649,7 @@ const App = {
     // Lightweight toast so users know why streaming stopped (instead of the
     // button just silently flipping back to "รับสัญญาณ"). Auto-dismisses.
     _showStreamStoppedToast(msg) {
-        const text = msg || 'หยุดรับสัญญาณแล้ว (อาจเป็นเพราะอุปกรณ์ RTL-TCP หลุด หรือไม่มีผู้ฟังครบเวลา)';
+        const text = msg || I18n.t('dash.streamStopped');
         let el = document.getElementById('stream-toast');
         if (!el) {
             el = document.createElement('div');
@@ -2826,7 +2827,7 @@ const App = {
                 c3d.style.display = 'none';
                 if (hint) hint.style.display = 'none';
                 c2d.style.display = '';
-                alert('ไม่สามารถเริ่ม 3D waterfall ได้ (WebGL/Three.js ไม่พร้อมใช้งาน)');
+                alert(I18n.t('dash.err3dWaterfall'));
                 return;
             }
             this._waterfall3dOn = true;
@@ -3138,7 +3139,7 @@ const App = {
         const container = document.getElementById('live-feed-container');
         if (!container) return;
         if (!this.recordings.length) {
-            container.innerHTML = '<div class="text-center text-muted p-2" style="font-size:0.8rem;">ยังไม่มีรายการบันทึก</div>';
+            container.innerHTML = `<div class="text-center text-muted p-2" style="font-size:0.8rem;">${I18n.t('dash.noRecordings')}</div>`;
             return;
         }
         container.innerHTML = this.recordings.map(rec => this.createFeedItemHTML(rec)).join('');
@@ -3154,11 +3155,11 @@ const App = {
         const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
         const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
         const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
-        const transcript = rec.transcript || rec.transcription || '<span class="text-muted">กำลังถอดเสียง...</span>';
+        const transcript = rec.transcript || rec.transcription || `<span class="text-muted">${I18n.t('dash.transcribing')}</span>`;
         const audioUrl = rec.url || (rec.audio_file_name ? `/recordings/${rec.audio_file_name}` : '');
         const source = rec.source || 'auto';
         const badgeClass = source === 'manual' ? 'manual' : 'auto';
-        const badgeLabel = source === 'manual' ? '✋ บันทึก' : '🔄 อัตโนมัติ';
+        const badgeLabel = source === 'manual' ? I18n.t('dash.sourceManual') : I18n.t('dash.sourceAuto');
         // Show recorder's name for manual recordings (per-user)
         const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
         const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
@@ -3179,7 +3180,7 @@ const App = {
         // stopPropagation prevents the click from triggering the feed item's
         // own click handler (if any).
         const _delBtn = (typeof Auth !== 'undefined' && Auth.isAdmin())
-            ? `<button class="feed-del-btn" title="ลบรายการนี้" onclick="event.stopPropagation(); App.deleteFeedItem('${rec.id}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;font-size:0.85rem;border-radius:4px;opacity:0.6;transition:opacity 0.15s, color 0.15s, background 0.15s;" onmouseover="this.style.opacity='1';this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.12)';" onmouseout="this.style.opacity='0.6';this.style.color='var(--text-muted)';this.style.background='none';">🗑</button>`
+            ? `<button class="feed-del-btn" title="${I18n.t('dash.delFeedTitle')}" onclick="event.stopPropagation(); App.deleteFeedItem('${rec.id}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;font-size:0.85rem;border-radius:4px;opacity:0.6;transition:opacity 0.15s, color 0.15s, background 0.15s;" onmouseover="this.style.opacity='1';this.style.color='#fca5a5';this.style.background='rgba(239,68,68,0.12)';" onmouseout="this.style.opacity='0.6';this.style.color='var(--text-muted)';this.style.background='none';">🗑</button>`
             : '';
 
         return `
@@ -3187,7 +3188,7 @@ const App = {
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span class="feed-time">${time}</span>
                     <div style="display:flex; gap:6px; align-items:center;">
-                        <span class="source-badge ${badgeClass}" title="${source === 'manual' ? 'ผู้ใช้กดบันทึก' : 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ'}">${badgeLabel}</span>
+                        <span class="source-badge ${badgeClass}" title="${source === 'manual' ? I18n.t('dash.sourceManualTitle') : I18n.t('dash.sourceAutoTitle')}">${badgeLabel}</span>
                         ${recorderLabel ? `<span style="font-size:0.65rem; color:var(--text-muted); white-space:nowrap;">${recorderLabel}</span>` : ''}
                         <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
                         ${_delBtn}
@@ -3209,7 +3210,7 @@ const App = {
      */
     async deleteFeedItem(recId) {
         if (typeof Auth === 'undefined' || !Auth.isAdmin()) return;
-        if (!confirm('ต้องการลบรายการนี้ใช่ไหม? (จะลบทั้ง record และไฟล์เสียง)')) return;
+        if (!confirm(I18n.t('dash.delFeedConfirm'))) return;
         try {
             await API.recordings.delete(recId);
             // Remove from local data + re-render
@@ -3219,7 +3220,7 @@ const App = {
             console.log('🗑 Deleted feed item:', recId);
         } catch (err) {
             console.error('Delete feed item failed:', err);
-            alert('ลบไม่สำเร็จ: ' + (err.detail || err.message || err));
+            alert(I18n.t('dash.delFail') + (err.detail || err.message || err));
         }
     },
 
@@ -3262,7 +3263,7 @@ const App = {
             localStorage.setItem(this._bookmarkKey(), JSON.stringify(this.bookmarks));
         } catch (e) {
             console.error('Failed to save bookmarks:', e);
-            alert('บันทึก bookmark ไม่สำเร็จ (อาจเกินโควต้า localStorage)');
+            alert(I18n.t('dash.bmSaveFail'));
         }
     },
 
@@ -3288,7 +3289,7 @@ const App = {
         const container = document.getElementById('bookmarks-container');
         if (!container) return;
         if (!this.bookmarks.length) {
-            container.innerHTML = '<div class="text-muted" style="font-size:0.75rem;padding:6px 8px;">ยังไม่มี bookmark — กด “+ เพิ่ม” เพื่อบันทึกความถี่ที่ฟังอยู่</div>';
+            container.innerHTML = `<div class="text-muted" style="font-size:0.75rem;padding:6px 8px;">${I18n.t('dash.noBookmark')}</div>`;
             return;
         }
         container.innerHTML = this.bookmarks.map(bm => {
@@ -3310,7 +3311,7 @@ const App = {
         if (count) count.textContent = this.bookmarks.length;
         if (!container) return;
         if (!this.bookmarks.length) {
-            container.innerHTML = '<div class="text-muted" style="font-size:0.75rem;padding:6px 12px;">ยังไม่มีความถี่ที่บันทึกไว้</div>';
+            container.innerHTML = `<div class="text-muted" style="font-size:0.75rem;padding:6px 12px;">${I18n.t('dash.noSavedFreq')}</div>`;
             return;
         }
         // Sort by frequency ascending for easy scanning.
@@ -3319,7 +3320,7 @@ const App = {
             const mhz = (bm.freqHz / 1e6).toFixed(4);
             const escName = this._esc(bm.name);
             const mode = bm.mode || 'FM';
-            return `<div class="freq-item" data-bm-id="${bm.id}" onclick="App.gotoBookmark('${bm.id}')" title="คลิกเพื่อไปยัง ${mhz} MHz">
+            return `<div class="freq-item" data-bm-id="${bm.id}" onclick="App.gotoBookmark('${bm.id}')" title="${I18n.t('dash.bmGotoTitle', escName, mhz)}">
                         <span class="signal-led"></span>
                         <div class="freq-info">
                             <div class="freq-value">${mhz} <span class="freq-unit">MHz</span></div>
@@ -3327,8 +3328,8 @@ const App = {
                         </div>
                         <span class="freq-mode">${mode}</span>
                         <span class="bm-actions">
-                            <button class="bm-act-btn" title="แก้ไข" onclick="event.stopPropagation(); App.editBookmark('${bm.id}')">✏️</button>
-                            <button class="bm-act-btn" title="ลบ" onclick="event.stopPropagation(); App.deleteBookmark('${bm.id}')">🗑️</button>
+                            <button class="bm-act-btn" title="${I18n.t('dash.bmEditTitle2')}" onclick="event.stopPropagation(); App.editBookmark('${bm.id}')">✏️</button>
+                            <button class="bm-act-btn" title="${I18n.t('dash.bmDeleteTitle')}" onclick="event.stopPropagation(); App.deleteBookmark('${bm.id}')">🗑️</button>
                         </span>
                     </div>`;
         }).join('');
@@ -3435,7 +3436,7 @@ const App = {
     deleteBookmark(id) {
         const bm = this.bookmarks.find(b => b.id === id);
         if (!bm) return;
-        if (!confirm(`ลบ bookmark “${bm.name}” ใช่ไหม?`)) return;
+        if (!confirm(I18n.t('dash.bmDeleteConfirm', bm.name))) return;
         this.bookmarks = this.bookmarks.filter(b => b.id !== id);
         this._saveBookmarks();
         this.renderBookmarks();
@@ -3454,16 +3455,16 @@ const App = {
         ).join('');
         overlay.innerHTML = `
             <div class="freq-input-box bm-dialog">
-                <h3>${isEdit ? '✏️ แก้ไข Bookmark' : '🔖 เพิ่ม Bookmark'}</h3>
-                <label class="bm-label">ชื่อ</label>
-                <input type="text" id="bm-name" value="${this._esc(name)}" placeholder="เช่น วิทยุตำรวจ" autofocus>
-                <label class="bm-label">ความถี่ (MHz)</label>
+                <h3>${isEdit ? I18n.t('dash.bmEditTitle') : I18n.t('dash.bmAddTitle')}</h3>
+                <label class="bm-label">${I18n.t('dash.bmName')}</label>
+                <input type="text" id="bm-name" value="${this._esc(name)}" placeholder="${I18n.t('dash.bmNamePh')}" autofocus>
+                <label class="bm-label">${I18n.t('dash.bmFreq')}</label>
                 <input type="text" id="bm-freq" value="${(freqHz/1e6).toFixed(4)}">
-                <label class="bm-label">โหมด</label>
+                <label class="bm-label">${I18n.t('dash.bmMode')}</label>
                 <select id="bm-mode">${modeOptions}</select>
                 <div class="freq-input-btns">
-                    <button class="btn btn-primary" id="bm-ok">${isEdit ? '💾 บันทึก' : '✅ เพิ่ม'}</button>
-                    <button class="btn" id="bm-cancel">ยกเลิก</button>
+                    <button class="btn btn-primary" id="bm-ok">${isEdit ? I18n.t('dash.bmSave') : I18n.t('dash.bmAddBtn')}</button>
+                    <button class="btn" id="bm-cancel">${I18n.t('dash.bmCancel')}</button>
                 </div>
             </div>
         `;
@@ -3479,9 +3480,9 @@ const App = {
             const nm = nameEl.value.trim();
             const fMHz = parseFloat(freqEl.value);
             const md = document.getElementById('bm-mode').value;
-            if (!nm) { alert('กรุณาใส่ชื่อ bookmark'); nameEl.focus(); return; }
+            if (!nm) { alert(I18n.t('dash.bmNameRequired')); nameEl.focus(); return; }
             if (isNaN(fMHz) || fMHz < 0.5 || fMHz > 1766) {
-                alert('ความถี่ต้องอยู่ระหว่าง 0.5 – 1766 MHz');
+                alert(I18n.t('dash.bmFreqRange'));
                 freqEl.focus();
                 return;
             }
@@ -3542,4 +3543,13 @@ const App = {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     App.init();
+});
+
+// Re-render dynamic content when language changes
+document.addEventListener('languagechange', () => {
+    if (typeof App !== 'undefined' && App.recordings) {
+        App.renderLiveFeed();
+        App.renderBookmarks();
+        App.renderFreqList();
+    }
 });
