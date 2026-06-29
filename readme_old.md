@@ -4,50 +4,74 @@
 
 **Real-time Software-Defined Radio monitoring system with web-based waterfall, multi-user live audio, speech-to-text, and scheduled recordings.**
 
-English | [ภาษาไทย](#ภาษาไทย)
+[English](#english) · [ภาษาไทย](#ภาษาไทย)
 
 </div>
-
 ---
 
-## 🌟 Features
+<a id="english"></a>
+
+# RTL-SDR Monitor (English)
+
+A self-hosted web-based RTL-SDR receiver, recorder, and intelligent monitoring platform. Listen to live radio in your browser, schedule background recordings, auto-transcribe audio to text with Whisper, and get instant Telegram alerts when your keywords are detected — all from a clean, bilingual (Thai/English) web UI.
+
+Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many listeners, each with their own VFO offset, bookmarks.
+
+## ✨ Features
 
 ### 📻 Core SDR
-- **Web-based Waterfall** — Real-time spectrum display with configurable FFT, 2D waterfall, and 3D waterfall (Three.js)
+- **Shared tuner architecture** — one RTL-SDR device serves multiple simultaneous listeners via WebSocket audio fan-out
+- **Real-time audio streaming** — over WebSocket with server-side demodulation
 - **Multi-Mode Demodulation** — FM (NBFM/WBFM), AM, USB, LSB
 - **RTL-TCP Support** — Connect to any `rtl_tcp` server on your network (dongle not required on the server machine)
 - **Multi-Device Registry** — Manage multiple RTL-TCP devices, switch active device on-the-fly
-- **Auto-Connect & Stream** — 24/7 background operation, auto-retry on connection loss
+- **Web-based Waterfall** — Real-time spectrum display with configurable FFT, 2D waterfall, and 3D waterfall (Three.js)
 
-### 🎧 Multi-Listener Audio (OpenWebRX-style)
+### 🎧 Multi-Listener Audio
 - **Independent VFO per listener** — Each user can listen to a different frequency within the passband
 - **Per-Listener Squelch** — Auto (adaptive) or manual squelch with hysteresis
 - **Solo / Priority Mode** — Long-press mute button to set a listener as SOLO (only that VFO) or PRIORITY (dims others)
 - **G.711 µ-law Audio** — Efficient bandwidth usage for live streaming
 
-### 🎙️ Recording & Playback
+### 🎙️ Recording & Scheduling
 - **Auto Recording** — Voice-activated (squelch-gated) recordings
-- **Manual Recording** — Per-listener manual record button
-- **Scheduled Recording Jobs** — Always-on or time-scheduled background recording with multi-frequency support
+- **Manual recording** — Per-listener manual record button
+- **Scheduled recording jobs** — Always-on or time-scheduled background recording with multi-frequency support
 - **In-Browser Playback** — Listen to recordings directly, with transcript viewing
 - **Retention Policies** — Auto-delete old recordings by count, age, or total duration (keep transcript option)
+- **Auto Speech-to-Text** — every recording can be automatically transcribed on completion
 
 ### 🤖 Speech-to-Text (STT)
-- **Speechmatics** — Cloud-based high-quality transcription (Thai supported)
+- **Speechmatics** — Cloud-based high-quality transcription
 - **Azure Cognitive Services** — Microsoft cloud STT
-- **Whisper Local** — Self-hosted faster-whisper-server (free, private, GPU-accelerated)
+- **Whisper Local** — Self-hosted faster-whisper-server
 - **Auto-Transcribe** — Automatically transcribe new recordings
 - **Audio Preprocessing** — Optionally downsample/compress audio before STT to save bandwidth
 
-### 🔔 Alerts & Notifications
-- **Keyword Alerting** — Define keywords (Thai/English) to trigger alerts when detected in transcriptions
-- **Telegram Integration** — Send alerts to Telegram channels/groups with transcription and audio link
-- **Keyword Management** — Case-sensitive options, active/inactive toggles
+### 🔔 Keyword Alerting & Notifications
+- **Rule-based alert engine** — define rules with keyword matching, keyword groups and time-window schedules, active/inactive toggles
+- **Telegram notifications** — delivered to configured chat/channel IDs, send alerts to Telegram channels/groups with transcription and audio link
+- **Background worker** — polls a database-backed job queue every 2 seconds, evaluates rules against transcripts, and dispatches notifications
+- **Alert history & statistics** — triage events, resend, test channels, and view analytics
+
+### Authentication & Users
+- **JWT authentication** with access and refresh tokens
+- **Role-based access** — `admin` and `user` roles (admin-only settings & recording controls)
+- **Per-user timezone** for correct local-time display
+- **CLI user management** — create superusers and regular users from the terminal
 
 ### 🔖 Bookmarks
-- **Personal Bookmarks** — Save frequencies with name, mode, color, and description
+- **Personal Bookmarks** — Save frequencies with name, mode per user
 - **Quick Navigation** — Click a bookmark to instantly tune to that frequency
-- **Re-order & Toggle** — Drag to reorder, toggle visibility
+
+### 🖥️ Dashboard
+- **Real-time Clock** — Live frequency display with 7-segment style
+- **Signal Meter (S-Meter)** — Real-time signal strength indicator
+- **Spectrum + Waterfall** — 2D spectrum with configurable overlap
+- **3D Waterfall** — Three.js-powered 3D spectrum visualization
+- **Active Recordings** — Live status of all manual/auto/scheduled recordings
+- **Status Bar** — Connection status, SDR status, listener count
+
 
 ### 👥 User System
 - **JWT Authentication** — Access + refresh token auth
@@ -62,29 +86,25 @@ English | [ภาษาไทย](#ภาษาไทย)
 - **Server Timezone** — Configurable timezone for job scheduler
 - **Waterfall Display** — Configurable dB range, colors, FFT size
 
-### 🖥️ Dashboard
-- **Real-time Clock** — Live frequency display with 7-segment style
-- **Signal Meter (S-Meter)** — Real-time signal strength indicator
-- **Spectrum + Waterfall** — 2D spectrum with configurable overlap
-- **3D Waterfall** — Three.js-powered 3D spectrum visualization
-- **Active Recordings** — Live status of all manual/auto/scheduled recordings
-- **Status Bar** — Connection status, SDR status, listener count, recording indicators
+### Internationalization
+- **Bilingual UI** — Thai (default) and English, toggleable in the header
 
 ---
 
-## 🏗️ Architecture
+### 🏗 Architecture
 
 ```
-┌──────────────┐    TCP:1234    ┌──────────────┐   HTTP/WS:8000   ┌────────────┐
+┌──────────────┐    TCP:1234  ┌──────────────┐   HTTP/WS:8000   ┌────────────┐
 │  USB RTL-SDR │ ◄──────────► │   rtl_tcp    │ ◄──────────────► │   Browser  │
-│  (Hardware)  │   raw IQ      │   (Server)   │   spectrum/audio │  (Frontend)│
-└──────────────┘               └──────┬───────┘                  └────────────┘
+│  (Hardware)  │   raw IQ     │   (Server)   │   spectrum/audio │  (Frontend)│
+└──────────────┘              └──────┬───────┘                  └────────────┘
                                       │ TCP:1234
                                       ▼
                                ┌──────────────┐         ┌──────────────┐
-                               │  FastAPI      │ ◄─────► │   SQLite     │
+                               │  FastAPI     │ ◄─────► │   SQLite     │
                                │  (Backend)   │         │  rtl_sdr.db  │
                                │  uvicorn:8000│         └──────────────┘
+							   └──────────────┘
 ```
 
 ### Tech Stack
@@ -94,14 +114,19 @@ English | [ภาษาไทย](#ภาษาไทย)
 | **Database** | SQLite + aiosqlite (SQLAlchemy async) |
 | **Signal Processing** | NumPy, SciPy |
 | **Auth** | JWT (python-jose) + bcrypt |
+| **STT** | faster-whisper (local) / Azure / Speechmatics |
 | **Frontend** | Vanilla JS, HTML5, CSS3 |
 | **Spectrum/Waterfall** | Canvas 2D + Three.js 3D |
 | **Audio Streaming** | WebSocket (G.711 µ-law AUD2 frames) |
+| **SDR interface** | rtl_tcp client (network) |
 | **Deployment** | Docker / Docker Compose |
 
 ---
 
 ## 📋 Prerequisites
+
+- **RTL-SDR dongle** (RTL2832U-based) and the `rtl-sdr` driver/toolkit installed
+- A running **`rtl_tcp`** server your backend can reach (local or remote)
 
 ### Backend Server (No USB required)
 - Python 3.11+
@@ -184,22 +209,134 @@ Open your browser at **http://localhost:8000**
 
 ## ⚙️ Configuration
 
-### Environment Variables (`.env`)
+All settings are controlled via environment variables (see `.env.example`). The database initializes automatically on startup; there is no manual migration step.
+
+### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RTL_TCP_HOST` | `127.0.0.1` | rtl_tcp server hostname |
-| `RTL_TCP_PORT` | `1234` | rtl_tcp port |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./app.db` | Database connection string |
+| `SERVER_HOST` | `0.0.0.0` | Bind host |
+| `SERVER_PORT` | `8000` | Bind port |
+| `JWT_SECRET_KEY` | _(required)_ | Secret used to sign JWT tokens — **set this to a strong random value** |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | Access token lifetime |
+| `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime |
+
+### SDR / rtl_tcp
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RTL_TCP_HOST` | `127.0.0.1` | Host of the `rtl_tcp` server |
+| `RTL_TCP_PORT` | `1234` | Port of the `rtl_tcp` server |
 | `RTL_TCP_SAMPLE_RATE` | `2048000` | Sample rate (2.048 MSPS) |
 | `RTL_TCP_CENTER_FREQ` | `145500000` | Initial frequency (145.5 MHz) |
 | `RTL_TCP_GAIN` | `30` | Tuner gain (dB) |
-| `JWT_SECRET_KEY` | (change me!) | JWT signing key (32+ chars) |
-| `STT_PROVIDER` | `speechmatics` | STT provider: speechmatics / azure / whisper_local |
-| `TELEGRAM_ENABLED` | `false` | Enable Telegram alerts |
 | `AUTO_START_STREAMING` | `true` | Auto-connect on startup |
+> Device index, gain, PPM correction, antenna, and sample rate are configured at runtime via the web UI / API.
 
-View `.env.example` for the complete list.
+### Speech-to-Text
 
+| Variable | Description |
+|----------|-------------|
+| `STT_PROVIDER` | STT provider: speechmatics / azure / whisper_local |
+| `WHISPER_LOCAL_HOST` | Host of a local Whisper STT service (if used) |
+| `WHISPER_LOCAL_PORT` | Port of a local Whisper STT service |
+| `WHISPER_LOCAL_MODEL` | Whisper model size (e.g. `base`, `small`, `medium`, `large-v3`) |
+| `AZURE_SPEECH_KEY` | Azure Speech resource key (if using Azure) |
+| `SPEECHMATICS_API_KEY` | Speechmatics API key (if using Speechmatics) |
+
+### Telegram Notifications
+
+| Variable | Description |
+|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_ENABLED` | Enable/disable Telegram delivery (`true`/`false`) |
+
+## 👤 First-run: Create an Admin User
+
+There is no default account. Create your first admin from the CLI:
+
+```bash
+# Interactive
+python -m backend.cli createsuperuser
+
+# Non-interactive
+python -m backend.cli createuser <username> <password> admin
+```
+
+Then log in at the web UI with those credentials.
+
+### Other CLI commands
+
+| Command | Description |
+|---------|-------------|
+| `python -m backend.cli createsuperuser` | Create an admin user (interactive) |
+| `python -m backend.cli createuser <username> <password> [admin]` | Create a user |
+| `python -m backend.cli resetpassword <username>` | Reset a user's password |
+| `python -m backend.cli migrate-db` | Run database migrations manually |
+
+## 🧭 Web UI Pages
+
+| Route | Description |
+|-------|-------------|
+| `/login` | Login screen |
+| `/dashboard` | Live reception console — frequency, mode, waterfall, audio, VFO, recording |
+| `/recordings` | Browse, play, and read transcripts of past recordings |
+| `/alert-rules` | Configure keyword rules, keyword groups, and Telegram channels |
+| `/alerts` | Alert event history and triage |
+| `/stats` | Alert analytics and charts |
+| `/settings` | Admin settings (SDR, Recording, STT, Telegram, Keywords, Users tabs) |
+| `/admin/users` | User management |
+
+## 📡 API Highlights
+
+- `GET /api/health` — health check
+- `GET /api/sdr/status` — tuner state
+- `POST /api/sdr/connect|disconnect` — connect/disconnect tuner
+- `POST /api/sdr/frequency|sample-rate|gain|freq-correction|mode|channel-bw|squelch` — tuner control
+- `POST /api/sdr/start-streaming|stop-streaming` — start/stop live audio
+- `POST /api/sdr/start-recording|stop-recording` — manual recording (admin)
+- `WS /ws` — control channel (commands + spectrum)
+- `WS /ws/audio` — live audio stream
+- `/api/recordings*` — recordings CRUD + transcripts
+- `/api/recording-jobs*` — scheduled recording jobs
+- `/api/devices*` — SDR device management
+- `/api/alert-rules*`, `/api/alerts*`, `/api/alert-stats*` — alerting
+- `/api/keyword-groups*`, `/api/keywords*`, `/api/channels*`, `/api/notif-groups*` — alert configuration
+- `/api/auth/login|refresh|me` — authentication
+
+## 🗂 Project Structure
+
+```
+.
+├── backend/
+│   ├── main.py              # FastAPI app, lifespan, WebSocket endpoints
+│   ├── config.py            # Settings (env vars)
+│   ├── database.py          # DB init + migrations
+│   ├── cli.py               # User management CLI
+│   ├── sdr/                 # Tuner control, rtl_tcp client, capture, job scheduler
+│   ├── audio/               # Demodulation (FM/AM/SSB/CW/RAW), conversion, broadcaster
+│   ├── alerts/              # Rule engine, worker, providers, router
+│   ├── auth/                # JWT, dependencies, router
+│   ├── models/              # SQLAlchemy models
+│   ├── services/            # STT, Telegram, recording jobs, app settings
+│   └── migrations/versions/ # Alembic-style migrations
+├── frontend/
+│   ├── index.html
+│   ├── pages/               # dashboard, recordings, alerts, settings, ...
+│   ├── css/  js/  assets/
+├── docs/
+│   └── WHISPER_LOCAL_STT.md
+├── scripts/
+│   └── reset_stuck_alerts.py
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── .env.example
+```
+
+---
 ### CLI Tools
 
 ```bash
@@ -212,7 +349,6 @@ View `.env.example` for the complete list.
 # Reset password
 ./venv/bin/python3 -m backend.cli resetpassword <username>
 ```
-
 ---
 
 ## 🖥️ Usage
@@ -274,8 +410,6 @@ Admin users can set up scheduled recording jobs:
 | STT not working | Verify API keys in Settings → STT |
 | SQLite errors | Check `data/` directory is writable |
 
----
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -284,300 +418,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is open source. See the [LICENSE](LICENSE) file for details.
----
-
-<div align="center">
+This project is open source. Released under the **MIT License**. See [LICENSE](LICENSE).
 
 ---
-
-# ภาษาไทย
-
-</div>
-
-# 📡 RTL-SDR Web Monitor — ภาษาไทย
-
-**ระบบตรวจสอบคลื่นวิทยุ Software-Defined Radio แบบ Real-time พร้อม Waterfall ผ่านเว็บ, ฟังเสียงสดแบบหลายผู้ใช้, ถอดเสียงพูด, และตั้งเวลาอัดเสียง**
-
----
-
-## 🌟 คุณสมบัติ
-
-### 📻 ระบบ SDR หลัก
-- **Waterfall บนเว็บ** — แสดงสเปกตรัมแบบ Real-time พร้อม FFT ที่ปรับค่าได้, 2D waterfall และ 3D waterfall (Three.js)
-- **demod หลายโหมด** — FM (NBFM/WBFM), AM, USB, LSB
-- **รองรับ RTL-TCP** — เชื่อมต่อไปยัง `rtl_tcp` server ไหนก็ได้บนเครือข่าย (ไม่ต้องเสียบ USB ที่เครื่อง Server)
-- **ลงทะเบียนหลายอุปกรณ์** — จัดการ RTL-TCP หลายตัว สลับอุปกรณ์ที่ใช้งานได้ทันที
-- **เชื่อมต่อและสตรีมอัตโนมัติ** — ทำงาน 24/7 พร้อมลองเชื่อมต่อใหม่หากหลุด
-
-### 🎧 ฟังเสียงแบบหลายผู้ใช้ (OpenWebRX-style)
-- **VFO แยกตามผู้ฟัง** — แต่ละคนฟังความถี่ต่างกันได้ภายใน passband เดียวกัน
-- **Squelch แยกตามผู้ฟัง** — แบบ Auto (ปรับตาม noise floor) หรือ Manual พร้อม Hysteresis
-- **โหมด SOLO / Priority** — กดปุ่ม mute ค้างเพื่อตั้ง VFO ใดให้เป็น SOLO (ฟังเฉพาะนั้น) หรือ PRIORITY (ลดเสียงอื่น)
-- **G.711 µ-law Audio** — ใช้ bandwidth น้อยสำหรับการส่งเสียงสด
-
-### 🎙️ อัดเสียงและเล่นซ้ำ
-- **อัดอัตโนมัติ** — อัดเสียงเมื่อมีสัญญาณ (squelch-gated)
-- **อัดด้วยตนเอง** — ปุ่มอัดแยกตามผู้ฟัง
-- **ตั้งเวลาอัด (Recording Jobs)** — อัดแบบตลอดเวลาหรือตามตารางเวลา รองรับหลายความถี่
-- **เล่นซ้ำในเบราว์เซอร์** — ฟังไฟล์อัดได้เลย พร้อมดูบทถอดเสียง
-- **นโยบายเก็บไฟล์** — ลบไฟล์เก่าอัตโนมัติตามจำนวน อายุ หรือระยะเวลารวม
-
-### 🤖 ถอดเสียงพูด (Speech-to-Text)
-- **Speechmatics** — บริการ Cloud คุณภาพสูง (รองรับภาษาไทย)
-- **Azure Cognitive Services** — บริการ Cloud ของ Microsoft
-- **Whisper Local** — โฮสต์เองด้วย faster-whisper-server (ฟรี เป็นส่วนตัว ใช้ GPU เร่งได้)
-- **ถอดเสียงอัตโนมัติ** — ถอดเสียงไฟล์บันทึกใหม่โดยอัตโนมัติ
-- **ย่อขนาดก่อนส่ง** — ลดขนาดไฟล์เสียงก่อนส่ง STT เพื่อประหยัด bandwidth
-
-### 🔔 การแจ้งเตือน
-- **แจ้งเตือนคำสำคัญ** — กำหนดคำสำคัญ (ไทย/อังกฤษ) เมื่อระบบตรวจพบในบทถอดเสียง
-- **แจ้งเตือนผ่าน Telegram** — ส่งแจ้งเตือนไปยัง Telegram พร้อมบทถอดเสียงและลิงก์ไฟล์เสียง
-- **จัดการคำสำคัญ** — เลือกแยกตัวพิมพ์เล็ก/ใหญ่, เปิด/ปิดการใช้งาน
-
-### 🔖 บุ๊กมาร์ก
-- **บุ๊กมาร์กส่วนตัว** — บันทึกความถี่พร้อมชื่อ โหมด สี และคำอธิบาย
-- **นำทางเร็ว** — คลิกบุ๊กมาร์กเพื่อปรับความถี่ทันที
-- **เรียงลำดับและซ่อน** — ลากเรียงลำดับ, ซ่อน/แสดง
-
-### 👥 ระบบผู้ใช้
-- **ยืนยันตัวตนด้วย JWT** — ระบบ Access + Refresh token
-- **สิทธิ์ตามบทบาท** — Admin และ User
-- **จัดการผู้ใช้** — สร้าง, ปิดใช้งาน, ลบผู้ใช้
-- **Timezone ส่วนตัว** — แต่ละผู้ใช้ตั้งเวลาโซนของตัวเอง
-
-### ⚙️ การตั้งค่า
-- **ตั้งค่าผ่านเว็บ** — แท็บทั่วไป, แสดงผล (Waterfall), SDR, อัดเสียง, STT, Telegram, คำสำคัญ, ผู้ใช้
-- **VFO Passband Margin** — กำหนดขอบเขตการ tune
-- **จำกัดผู้ฟังพร้อมกัน** — กำหนดจำนวนสูงสุด
-- **Timezone ของเซิร์ฟเวอร์** — ตั้งค่าเวลาสำหรับ Job Scheduler
-- **ปรับแต่ง Waterfall** — ช่วง dB, สี, ขนาด FFT
-
-### 🖥️ แดชบอร์ด
-- **นาฬิกาแบบ Real-time** — แสดงความถี่แบบ 7-segment
-- **S-Meter** — แสดงระดับสัญญาณแบบ Real-time
-- **สเปกตรัม + Waterfall** — 2D spectrum แบบปรับ overlap ได้
-- **3D Waterfall** — แสดงสเปกตรัม 3 มิติด้วย Three.js
-- **สถานะการอัด** — แสดงการอัดทั้งหมดที่กำลังทำงาน
-- **แถบสถานะ** — สถานะเชื่อมต่อ, SDR, จำนวนผู้ฟัง, ตัวชี้การอัด
-
----
-
-## 🏗️ สถาปัตยกรรม
-
-```
-┌──────────────┐    TCP:1234    ┌──────────────┐   HTTP/WS:8000   ┌────────────┐
-│  USB RTL-SDR │ ◄──────────► │   rtl_tcp    │ ◄──────────────► │  เบราว์เซอร์ │
-│  (ฮาร์ดแวร์)  │   raw IQ      │   (Server)   │   spectrum/audio │  (Frontend)│
-└──────────────┘               └──────┬───────┘                  └────────────┘
-                                      │ TCP:1234
-                                      ▼
-                               ┌──────────────┐         ┌──────────────┐
-                               │  FastAPI      │ ◄─────► │   SQLite     │
-                               │  (Backend)   │         │  rtl_sdr.db  │
-                               │  uvicorn:8000│         └──────────────┘
-```
-
-### ส่วนประกอบของระบบ
-| ส่วนประกอบ | เทคโนโลยี |
-|-----------|-----------|
-| **Backend** | Python 3.11+, FastAPI, Uvicorn |
-| **ฐานข้อมูล** | SQLite + aiosqlite (SQLAlchemy async) |
-| **ประมวลผลสัญญาณ** | NumPy, SciPy |
-| **ระบบยืนยันตัวตน** | JWT (python-jose) + bcrypt |
-| **Frontend** | Vanilla JS, HTML5, CSS3 |
-| **สเปกตรัม/Waterfall** | Canvas 2D + Three.js 3D |
-| **สตรีมเสียง** | WebSocket (G.711 µ-law AUD2) |
-| **Deployment** | Docker / Docker Compose |
-
----
-
-## 📋 ความต้องการของระบบ
-
-### เซิร์ฟเวอร์ Backend (ไม่ต้องใช้ USB)
-- Python 3.11+
-- pip, venv
-- แพ็คเกจ build: `gcc`, `libffi-dev`
-
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3-pip gcc libffi-dev
-```
-
-### เครื่องที่เสียบ USB RTL-SDR (เครื่องรัน rtl_tcp)
-- `librtlsdr` (ไดรเวอร์)
-- โปรแกรม `rtl_tcp`
-- USB RTL-SDR dongle (ตระกูล RTL2832U)
-
-```bash
-sudo apt install -y rtl-sdr librtlsdr-dev
-
-# ปิดการใช้งานไดรเวอร์เคอร์เนลที่ขัดแย้ง
-sudo tee /etc/modprobe.d/blacklist-rtl.conf <<'EOF'
-blacklist dvb_usb_rtl28xxu
-blacklist rtl2832
-blacklist rtl2830
-EOF
-
-sudo modprobe -r dvb_usb_rtl28xxu 2>/dev/null
-
-# ทดสอบ
-rtl_test -t
-```
-
----
-
-## 🚀 การติดตั้ง
-
-### วิธีที่ 1: ติดตั้งด้วยตนเอง
-
-```bash
-# 1. โคลนโปรเจกต์
-git clone https://github.com/superogira/rtl-sdr-web.git
-cd rtl-sdr-web
-
-# 2. สร้าง Virtual Environment และติดตั้ง dependencies
-python3.11 -m venv venv
-./venv/bin/pip install --upgrade pip
-./venv/bin/pip install -r requirements.txt
-
-# 3. ตั้งค่า Environment
-cp .env.example .env
-# แก้ไข .env ด้วยค่าของคุณ (อย่างน้อย: JWT_SECRET_KEY, RTL_TCP_HOST/PORT)
-
-# 4. สร้างโฟลเดอร์ข้อมูล
-mkdir -p data data/recordings
-
-# 5. สร้างผู้ดูแลระบบ
-./venv/bin/python3 -m backend.cli createsuperuser
-
-# 6. เริ่มเซิร์ฟเวอร์
-./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level info
-```
-
-### วิธีที่ 2: Docker
-
-```bash
-# 1. โคลนและตั้งค่า
-git clone https://github.com/superogira/rtl-sdr-web.git
-cd rtl-sdr-web
-cp .env.example .env
-# แก้ไข .env ด้วยค่าของคุณ
-
-# 2. Build และรัน
-docker compose up -d
-```
-
-เปิดเบราว์เซอร์ที่ **http://localhost:8000**
----
-
-## ⚙️ การตั้งค่า
-
-### ตัวแปร Environment (`.env`)
-
-| ตัวแปร | ค่าเริ่มต้น | คำอธิบาย |
-|--------|-----------|----------|
-| `RTL_TCP_HOST` | `127.0.0.1` | ที่อยู่ของ rtl_tcp server |
-| `RTL_TCP_PORT` | `1234` | พอร์ตของ rtl_tcp |
-| `RTL_TCP_SAMPLE_RATE` | `2048000` | อัตราการสุ่มสัญญาณ (2.048 MSPS) |
-| `RTL_TCP_CENTER_FREQ` | `145500000` | ความถี่เริ่มต้น (145.5 MHz) |
-| `RTL_TCP_GAIN` | `30` | ระดับ Gain (dB) |
-| `JWT_SECRET_KEY` | (ต้องเปลี่ยน!) | คีย์เซ็น JWT (อย่างน้อย 32 ตัวอักษร) |
-| `STT_PROVIDER` | `speechmatics` | ผู้ให้บริการ STT: speechmatics / azure / whisper_local |
-| `TELEGRAM_ENABLED` | `false` | เปิดใช้งานการแจ้งเตือน Telegram |
-| `AUTO_START_STREAMING` | `true` | เชื่อมต่ออัตโนมัติเมื่อเริ่มเซิร์ฟเวอร์ |
-
-ดู `.env.example` สำหรับรายการทั้งหมด
-
-### คำสั่ง CLI
-
-```bash
-# สร้างผู้ดูแลระบบ (โต้ตอบ)
-./venv/bin/python3 -m backend.cli createsuperuser
-
-# สร้างผู้ใช้ (ไม่โต้ตอบ)
-./venv/bin/python3 -m backend.cli createuser <username> <password> [admin]
-
-# รีเซ็ตรหัสผ่าน
-./venv/bin/python3 -m backend.cli resetpassword <username>
-```
-
----
-
-## 🖥️ การใช้งาน
-
-### เข้าสู่ระบบครั้งแรก
-1. เปิด **http://localhost:8000** ในเบราว์เซอร์
-2. เข้าสู่ระบบด้วยบัญชีผู้ดูแลที่สร้างไว้ตอนติดตั้ง
-3. จะพบ **แดชบอร์ด** พร้อม waterfall
-
-### ปุ่มควบคุมบนแดชบอร์ด
-- **ปุ่ม Mode** — FM / AM / USB / LSB
-- **ปุ่ม Bandwidth** — 1.8k / 2.4k / 3k / 6k / 12k / 25k / 50k / 200k
-- **ควบคุมความถี่** — คลิกที่ waterfall เพื่อตั้ง VFO, ใช้ช่องใส่ค่าสำหรับ Center Frequency
-- **แถบเลื่อน Gain / PPM** — ปรับค่าตัวรับสัญญาณ
-- **ปุ่มฟังสด** — เปิด/ปิดการฟังเสียงสด
-- **ปุ่มอัด** — อัดเสียงแยกตาม VFO
-- **สลับ 3D** — เปลี่ยนระหว่าง 2D และ 3D waterfall
-
-### หน้าอัดเสียง
-- ดูรายการอัดเสียงทั้งหมด พร้อมกรอง (ความถี่, โหมด, วันที่, แหล่ง)
-- เล่นไฟล์เสียงในเบราว์เซอร์
-- ดูบทถอดเสียง (transcript) พร้อมให้คะแนนคุณภาพ
-- ลบไฟล์อัดเสียงทีละรายการ
-
-### หน้าตั้งค่า
-- **ทั่วไป** — Timezone ของผู้ใช้
-- **แสดงผล** — ช่วง dB ของ waterfall, ขนาด FFT, สี
-- **SDR** — การเชื่อมต่อ, การจัดการอุปกรณ์
-- **อัดเสียง** — อัดอัตโนมัติ, squelch, นโยบายเก็บไฟล์
-- **STT** — เลือกผู้ให้บริการ, API keys, ภาษา, รูปแบบไฟล์เสียง
-- **Telegram** — Token บอท, Chat ID
-- **คำสำคัญ** — จัดการคำสำคัญที่ต้องการแจ้งเตือน
-- **ผู้ใช้** — จัดการผู้ใช้ (เฉพาะ Admin)
-
-### ตั้งเวลาอัด (Recording Jobs)
-ผู้ดูแลระบบสามารถตั้งเวลาอัดเสียงแบบอัตโนมัติ:
-- **ตลอดเวลา** — อัดความถี่ที่กำหนดต่อเนื่อง
-- **ตามตาราง** — อัดตามช่วงเวลาที่กำหนด พร้อมวันในสัปดาห์
-- แต่ละ Job รองรับหลายความถี่ภายใน passband
-- Jobs ทำงานแยกจากการฟังสด
-
----
-
-## 📖 เอกสารเพิ่มเติม
-
-- [`OPERATIONS.md`](./OPERATIONS.md) — คู่มือปฏิบัติการฉบับเต็ม (ติดตั้ง, เริ่ม/หยุด, migration, แก้ปัญหา)
-- [`HOW_TO_RESTART.md`](./HOW_TO_RESTART.md) — คำสั่ง restart ฉบับย่อ
-- [`docs/WHISPER_LOCAL_STT.md`](./docs/WHISPER_LOCAL_STT.md) — คู่มือติดตั้ง Whisper Local STT
-
----
-
-## 🔧 การแก้ปัญหาเบื้องต้น
-
-| ปัญหา | วิธีแก้ |
-|-------|--------|
-| เชื่อมต่อ RTL-TCP ไม่ได้ | ตรวจสอบว่า `rtl_tcp` กำลังรัน: `ss -tlnp \| grep 1234` |
-| ไม่มีเสียง / waterfall | ตรวจสอบว่า `AUTO_START_STREAMING=true` หรือกด Connect + Stream |
-| เสียงกระตุก | ตรวจสอบความหน่วงเครือข่ายไปยัง rtl_tcp; ลด sample rate |
-| STT ไม่ทำงาน | ตรวจสอบ API keys ใน Settings → STT |
-| ข้อผิดพลาด SQLite | ตรวจสอบว่าโฟลเดอร์ `data/` สามารถเขียนได้ |
-
----
-
-## 🤝 การมีส่วนร่วม
-
-เรายินดีรับ Pull Request! หากพบปัญหาหรือมีข้อเสนอแนะ สามารถเปิด Issue ได้ที่ GitHub
-
----
-
-## 📄 ลิขสิทธิ์
-
-โปรเจกต์นี้เป็นซอฟต์แวร์โอเพนซอร์ส ดูรายละเอียดในไฟล์ [LICENSE](LICENSE)
-
----
-
 <div align="center">
 
 **Made with ❤️ for the radio enthusiast community**
