@@ -55,7 +55,7 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 - **Background worker** — polls a database-backed job queue every 2 seconds, evaluates rules against transcripts, and dispatches notifications
 - **Alert history & statistics** — triage events, resend, test channels, and view analytics
 
-### Authentication & Users
+### 🔐 Authentication & Users
 - **JWT authentication** - with access and refresh tokens
 - **Role-based access** — `admin` and `user` roles (admin-only settings & recording controls)
 - **Per-user timezone** - for correct local-time display
@@ -73,13 +73,6 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 - **Active Recordings** — Live status of all manual/auto/scheduled recordings
 - **Status Bar** — Connection status, SDR status, listener count
 
-
-### 👥 User System
-- **JWT Authentication** — Access + refresh token auth
-- **Role-Based Access** — Admin and User roles
-- **Admin Panel** — User management (create, disable, delete)
-- **User Timezone** — Per-user timezone preference for display
-
 ### ⚙️ Settings & Configuration
 - **Web-based Settings UI** — Tabs for General, Display (Waterfall), SDR, Recording, STT, Telegram, Keywords, Users
 - **VFO Passband Margin** — Configurable tuning range limit
@@ -87,7 +80,7 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 - **Server Timezone** — Configurable timezone for job scheduler
 - **Waterfall Display** — Configurable dB range, colors, FFT size
 
-### Internationalization
+### 🌍 Internationalization
 - **Bilingual UI** — Thai (default) and English, toggleable in the header
 
 ---
