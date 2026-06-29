@@ -127,6 +127,26 @@ app = FastAPI(
 # Frontend is served from same origin, so not needed in most cases
 # Only add for production with separate frontend server
 
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    """Disable browser/proxy caching for JS/CSS/HTML during development so
+    edits are picked up on the next page load instead of serving stale files.
+
+    The 'no-store' directive is the strongest cache-buster and works across
+    Chrome/Firefox/Safari. We scope it to the asset paths only; API responses
+    are left untouched.
+    """
+    path = request.url.path
+    if path.startswith("/js/") or path.startswith("/css/") or path.endswith(".html"):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+    return await call_next(request)
+
+
 # === API Routes ===
 app.include_router(auth_router)
 app.include_router(sdr_router)

@@ -212,6 +212,8 @@ const LiveAudio = {
                 await this.startVfo(i);
             }
         }
+        // Persist listening state so a refresh auto-resumes.
+        try { if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('listening', true); } catch {}
     },
 
     async startVfo(idx) {
@@ -259,6 +261,8 @@ const LiveAudio = {
         for (let i = 0; i < this._vfos.length; i++) {
             if (this._vfos[i] && this._vfos[i].isPlaying) this.stopVfo(i);
         }
+        // Persist listening state so a refresh doesn't auto-resume.
+        try { if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('listening', false); } catch {}
     },
 
     stopVfo(idx) {
@@ -285,6 +289,14 @@ const LiveAudio = {
     // ------------------------------------------------------------------
     /** Set speaker routing for a VFO. mode: 'left' | 'both' | 'right'. */
     setSpeaker(idx, mode) {
+        try {
+            if (typeof DashboardPrefs !== 'undefined') {
+                const all = DashboardPrefs.load();
+                const arr = Array.isArray(all.perVfo) ? all.perVfo.slice() : [];
+                arr[idx] = Object.assign({}, arr[idx], { speaker: mode });
+                DashboardPrefs.set('perVfo', arr);
+            }
+        } catch {}
         const v = this._vfos[idx];
         if (!v) return;
         if (!(mode in SPEAKER_PAN)) return;
@@ -303,6 +315,14 @@ const LiveAudio = {
      * (muteNode gain → 0) regardless of its speaker routing. The flag is kept
      * on the VFO state so it survives a WS reconnect / restart. */
     setMute(idx, on) {
+        try {
+            if (typeof DashboardPrefs !== 'undefined') {
+                const all = DashboardPrefs.load();
+                const arr = Array.isArray(all.perVfo) ? all.perVfo.slice() : [];
+                arr[idx] = Object.assign({}, arr[idx], { mute: !!on });
+                DashboardPrefs.set('perVfo', arr);
+            }
+        } catch {}
         const v = this._vfos[idx];
         if (!v) return;
         v.muted = !!on;

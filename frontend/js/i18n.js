@@ -341,6 +341,9 @@ const I18n = {
             'rec.transcribingBtn': '⏳ กำลังถอด...',
             'rec.transcribedBtn': '✓ ถอดแล้ว',
             'common.loading': 'กำลังโหลด...',
+            'common.on': 'เปิด',
+            'common.off': 'ปิด',
+            'common.delete': 'ลบ',
 
             /* ---- Settings page ---- */
             'set.title': 'ตั้งค่า - RTL-SDR Monitor',
@@ -1341,6 +1344,9 @@ const I18n = {
             'rec.transcribingBtn': '⏳ Transcribing...',
             'rec.transcribedBtn': '✓ Transcribed',
             'common.loading': 'Loading...',
+            'common.on': 'On',
+            'common.off': 'Off',
+            'common.delete': 'Delete',
 
             /* ---- Settings page ---- */
             'set.title': 'Settings - RTL-SDR Monitor',

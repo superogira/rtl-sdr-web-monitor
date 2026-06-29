@@ -56,6 +56,33 @@ const App = {
         WS.connect();
         this.setupWSListeners();
 
+        // Restore dashboard UI prefs (VFO count, frequencies, volume, etc.)
+        // so a page refresh keeps the operator's working state. Must run
+        // AFTER syncState (so backend center-freq is known) and AFTER
+        // setupWSListeners (so audio WS control messages route correctly).
+        if (typeof DashboardPrefs !== 'undefined') {
+            try { DashboardPrefs.apply(); } catch (e) { console.warn('Prefs apply:', e); }
+            // Mark the restore time so syncState doesn't immediately overwrite
+            // the restored gain/squelch/ppm with stale backend global values.
+            this._prefsRestoredAt = Date.now();
+
+            // Auto-resume live listening if it was active before refresh.
+            // Browser autoplay policy: AudioContext must resume() from a user
+            // gesture. On a hard refresh there is no gesture, so we attempt
+            // resume() — if it fails, the user just presses ฟังสด again and
+            // the flag is already set so no duplicate logic runs.
+            const wasListening = DashboardPrefs.get('listening', false);
+            if (wasListening && typeof LiveAudio !== 'undefined' && !LiveAudio.anyPlaying) {
+                // Defer slightly so the WS controls (VFO freq, squelch) set
+                // during DashboardPrefs.apply() have a chance to land.
+                setTimeout(() => {
+                    try {
+                        LiveAudio.start().catch(e => console.warn('Auto-resume failed:', e));
+                    } catch (e) { console.warn('Auto-resume error:', e); }
+                }, 600);
+            }
+        }
+
         // Send saved FFT size to backend
         const fftSize = parseInt(localStorage.getItem('fft_size') || '1024');
         API.sdr.setFFTSize(fftSize).catch(() => {});
@@ -97,6 +124,7 @@ const App = {
     setTheme(name) {
         // name: 'classic' | 'v2'
         if (name !== 'classic' && name !== 'v2') return;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('theme', name);
         localStorage.setItem('ui_theme', name);
         if (name === 'v2') {
             document.documentElement.setAttribute('data-theme', 'v2');
@@ -210,7 +238,10 @@ const App = {
         // Sync gain slider + numeric input — but NOT while the user is editing
         // it (mousedown/focus/typing), or the periodic status broadcast would
         // snap the value back to the backend's stale value mid-drag.
-        if (data.gain !== undefined && !this._activeEdits.has('gain')) {
+        // Also skip for 5s after prefs restore so DashboardPrefs.apply() values
+        // are not immediately overwritten by stale backend global values.
+        const _prefsRecent = this._prefsRestoredAt && (Date.now() - this._prefsRestoredAt < 5000);
+        if (data.gain !== undefined && !this._activeEdits.has('gain') && !_prefsRecent) {
             const gs = document.getElementById('gain-slider');
             const gi = document.getElementById('gain-input');
             if (gs) gs.value = data.gain;
@@ -222,7 +253,7 @@ const App = {
         // here would snap the slider back to the global value every ~1s (the
         // "เด้งกลับ" symptom that also let one user move another's slider). We
         // only adopt the global value when NOT listening live.
-        if (data.squelch_level !== undefined && !this._activeEdits.has('squelch')) {
+        if (data.squelch_level !== undefined && !this._activeEdits.has('squelch') && !_prefsRecent) {
             const listeningSql = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
             if (!listeningSql) {
                 const ss = document.getElementById('squelch-slider');
@@ -232,7 +263,7 @@ const App = {
             }
         }
         // Sync PPM (Frequency Correction) slider + numeric input (same guard).
-        if (data.freq_correction_ppm !== undefined && !this._activeEdits.has('ppm')) {
+        if (data.freq_correction_ppm !== undefined && !this._activeEdits.has('ppm') && !_prefsRecent) {
             const ps = document.getElementById('ppm-slider');
             const pi = document.getElementById('ppm-input');
             if (ps) {
@@ -354,6 +385,7 @@ const App = {
             selector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             this.currentMode = mode;
+            if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('mode', mode);
             const radioMode = document.getElementById('radio-mode');
             if (radioMode) radioMode.textContent = mode;
             // Per-listener mode change (audio WS) when listening; else global REST.
@@ -405,7 +437,15 @@ const App = {
     set _vfoOffsetHz(hz) { this._vfos[this._activeVfoIdx].offsetHz = hz; },
     /** Read a VFO's offset by index (used by audio.js to claim its cursor). */
     _vfoOffsetFor(idx) { return this._vfos[idx] ? this._vfos[idx].offsetHz : 0; },
-    _setVfoOffset(idx, hz) { if (this._vfos[idx]) this._vfos[idx].offsetHz = hz; },
+    _setVfoOffset(idx, hz) {
+        if (this._vfos[idx]) {
+            this._vfos[idx].offsetHz = hz;
+            // Persist the full offsets array so refresh restores every VFO's freq.
+            if (typeof DashboardPrefs !== 'undefined') {
+                DashboardPrefs.set('vfoOffsets', this._vfos.map(v => v.offsetHz));
+            }
+        }
+    },
     // Becomes true the first time THIS user moves their own VFO cursor (click,
     // tune buttons, or freq input). After that the global VFO broadcast no
     // longer overwrites the local cursor — so one user tuning cannot drag
@@ -486,6 +526,7 @@ const App = {
                 stepButtons.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this._stepSize = parseInt(btn.dataset.step);
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('stepSize', this._stepSize);
             });
         }
 
@@ -512,6 +553,7 @@ const App = {
                 bwButtons.querySelectorAll('.bw-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this._channelBw = newBw;
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('channelBw', newBw);
                 // Per-VFO bandwidth change (audio WS) when listening; else global REST.
                 if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setBandwidth(newBw)) {
                     console.log(`🎛️ Channel BW (per-VFO): ${newBw/1e3} kHz`);
@@ -618,6 +660,7 @@ const App = {
             syncSigtagBtn();
             sigtagBtn.addEventListener('click', () => {
                 this.signalTagEnabled = !this.signalTagEnabled;
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('signalTag', this.signalTagEnabled);
                 syncSigtagBtn();
                 if (!this.signalTagEnabled) {
                     this._signalAnnotations = [];
@@ -709,7 +752,10 @@ const App = {
         _bindSliderInputPair({
             sliderId: 'gain-slider',
             inputId: 'gain-input',
-            setter: (v) => API.sdr.setGain(v),
+            setter: (v) => {
+                API.sdr.setGain(v);
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('gain', v);
+            },
         });
 
         // Squelch (slider + numeric input) — PER-LISTENER (per-user), like a
@@ -730,6 +776,7 @@ const App = {
                 const level = parseFloat(v);
                 // Remember this user's chosen SQL so it applies on next listen.
                 this._pendingSquelch = level;
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('squelch', level);
                 if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying) {
                     // Per-listener (broadcast to all of THIS user's VFOs only).
                     LiveAudio.setSquelch(level);
@@ -762,7 +809,10 @@ const App = {
         _bindSliderInputPair({
             sliderId: 'ppm-slider',
             inputId: 'ppm-input',
-            setter: (v) => API.sdr.setFreqCorrection(v),
+            setter: (v) => {
+                API.sdr.setFreqCorrection(v);
+                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('ppm', v);
+            },
             debounceMs: 300,
             clampToSliderRange: true,
         });
@@ -1128,6 +1178,7 @@ const App = {
         const sqlInput = document.getElementById('squelch-input');
         const squelch = sqlInput ? parseFloat(sqlInput.value) : -120;
         LiveAudio.setAutoRecord(next, squelch);
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoRecord', next);
         // UI state is finalized in _onAutoRecordAck (server confirms).
     },
 
@@ -1288,6 +1339,7 @@ const App = {
     selectActiveVfo(idx) {
         if (idx < 0 || idx >= this._vfoCount) return;
         this._activeVfoIdx = idx;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('activeVfo', idx);
         if (typeof LiveAudio !== 'undefined') LiveAudio.setActive(idx);
         this._updateVfoRows();
         this.updateFreqDisplay();
@@ -1298,6 +1350,7 @@ const App = {
         const next = Math.max(1, Math.min(this._MAX_VFOS, this._vfoCount + delta));
         if (next === this._vfoCount) return;
         this._vfoCount = next;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('vfoCount', next);
         if (typeof LiveAudio !== 'undefined') LiveAudio.setVfoCount(next);
         if (delta > 0) {
             // Adding a VFO: auto-select the newly-added VFO (last slot) so the
@@ -1410,6 +1463,7 @@ const App = {
     // button active state + disable/enable the manual SQL controls.
     _onAutoSquelchAck(obj) {
         this._autoSquelchOn = !!obj.enabled;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoSquelch', this._autoSquelchOn);
         const btn = document.getElementById('sql-auto-btn');
         const slider = document.getElementById('squelch-slider');
         const input = document.getElementById('squelch-input');
@@ -1577,17 +1631,21 @@ const App = {
             icon.addEventListener('click', () => this._toggleMasterMute());
         }
 
-        slider.addEventListener('input', (e) => {
-            const val = parseInt(e.target.value);
-            if (pct) pct.textContent = val + '%';
-            // Dragging the slider away from 0 clears mute.
-            if (val > 0 && this._masterMuted) this._clearMasterMute();
-            if (val === 0 && !this._masterMuted) this._applyMasterMute();
-            this._updateVolumeIcon(val, icon);
-            if (typeof LiveAudio !== 'undefined') {
-                LiveAudio.setVolume(val / 100);
-            }
-        });
+            slider.addEventListener('input', (e) => {
+                const val = parseInt(e.target.value);
+                if (pct) pct.textContent = val + '%';
+                // Dragging the slider away from 0 clears mute.
+                if (val > 0 && this._masterMuted) this._clearMasterMute();
+                if (val === 0 && !this._masterMuted) this._applyMasterMute();
+                this._updateVolumeIcon(val, icon);
+                if (typeof LiveAudio !== 'undefined') {
+                    LiveAudio.setVolume(val / 100);
+                }
+                // Persist master volume (non-debounced: localStorage write is cheap).
+                if (typeof DashboardPrefs !== 'undefined') {
+                    DashboardPrefs.set('masterVolume', val / 100);
+                }
+            });
     },
 
     _toggleMasterMute() {
@@ -1604,6 +1662,7 @@ const App = {
             this._preMutePct = parseInt(slider.value);
         }
         this._masterMuted = true;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('muted', true);
         if (slider) slider.value = 0;
         const pct = document.getElementById('volume-pct');
         if (pct) pct.textContent = '0%';
@@ -1618,6 +1677,7 @@ const App = {
         const icon = document.getElementById('volume-icon');
         const ctrl = document.getElementById('volume-control');
         this._masterMuted = false;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('muted', false);
         const restore = Math.max(1, this._preMutePct || 80);
         if (slider) slider.value = restore;
         const pct = document.getElementById('volume-pct');
