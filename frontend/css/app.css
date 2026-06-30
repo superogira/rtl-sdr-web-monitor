@@ -273,13 +273,26 @@ a:hover {
     align-items: stretch;
 }
 
-/* === Waterfall Container === */
-.waterfall-container {
+/* === Waterfall Wrapper ===
+   Holds the 2D/3D waterfall views and the floating WF control cluster.
+   Acts as the flex item inside .panel-left and the positioning context
+   for the absolutely-positioned float controls. */
+.waterfall-wrapper {
+    position: relative;
     flex: 1 1 300px;
     min-height: 300px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* === Waterfall Container === */
+.waterfall-container {
+    flex: 1 1 auto;
+    min-height: 0;
     background: var(--bg-primary);
     position: relative;
-    border-bottom: 1px solid var(--border-color);
     overflow: hidden;
 }
 
@@ -381,11 +394,10 @@ a:hover {
    Same sizing/position as .waterfall-container so the 3D view occupies the
    exact same area as the 2D canvas when toggled. */
 .waterfall-3d-container {
-    flex: 1 1 300px;
-    min-height: 300px;
+    flex: 1 1 auto;
+    min-height: 0;
     background: var(--bg-primary);
     position: relative;
-    border-bottom: 1px solid var(--border-color);
     overflow: hidden;
 }
 .waterfall-3d-container canvas {
@@ -428,6 +440,29 @@ a:hover {
     color: #fff;
     border-color: var(--accent-purple);
     box-shadow: 0 0 8px var(--accent-purple)80;
+}
+
+/* === Floating WF control cluster (bottom-right of waterfall) ===
+   Holds AUTO / TAG / 3D buttons. Floats above both 2D and 3D views.
+   Styled like .step-buttons but positioned absolutely with a translucent
+   backdrop so it stays readable over the waterfall. */
+.waterfall-float-controls {
+    position: absolute;
+    bottom: 34px;
+    right: 8px;
+    z-index: 6;
+    display: flex;
+    gap: 2px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    backdrop-filter: blur(3px);
+}
+.waterfall-float-controls .step-btn {
+    /* Slightly larger/more legible when floating over the waterfall. */
+    padding: 3px 9px;
+    font-size: 0.72rem;
 }
 
 /* === Live Audio Listen Button === */

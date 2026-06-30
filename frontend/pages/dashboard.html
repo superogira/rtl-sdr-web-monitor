@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=27">
+    <link rel="stylesheet" href="/css/app.css?v=29">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -70,29 +70,41 @@
             <div class="dashboard">
                 <!-- Left Panel: Waterfall + Signal -->
                 <div class="panel-left">
-                    <!-- Waterfall Display (2D) -->
-                    <div class="waterfall-container" id="waterfall-2d-container">
-                        <canvas id="waterfall-canvas"></canvas>
-                        <!-- Hover frequency tooltip (shown after 0.5s dwell) -->
-                        <div id="waterfall-hover-freq" class="waterfall-hover-freq"></div>
-                        <!-- Center frequency marker (triangle pointing down + vertical line) -->
-                        <!-- center-freq-marker removed: label pill from grid
-                             already marks center frequency clearly. Removing
-                             triangle avoids overlap with freq label at top. -->
-                        <div class="waterfall-overlay">
-                            <span id="freq-low">144.000 MHz</span>
-                            <span id="freq-center" class="text-accent">145.500 MHz</span>
-                            <span id="freq-high">147.000 MHz</span>
+                    <!-- Waterfall wrapper: holds both 2D/3D views + the floating
+                         WF control cluster (AUTO/TAG/3D). -->
+                    <div class="waterfall-wrapper">
+                        <!-- Waterfall Display (2D) -->
+                        <div class="waterfall-container" id="waterfall-2d-container">
+                            <canvas id="waterfall-canvas"></canvas>
+                            <!-- Hover frequency tooltip (shown after 0.5s dwell) -->
+                            <div id="waterfall-hover-freq" class="waterfall-hover-freq"></div>
+                            <!-- Center frequency marker (triangle pointing down + vertical line) -->
+                            <!-- center-freq-marker removed: label pill from grid
+                                 already marks center frequency clearly. Removing
+                                 triangle avoids overlap with freq label at top. -->
+                            <div class="waterfall-overlay">
+                                <span id="freq-low">144.000 MHz</span>
+                                <span id="freq-center" class="text-accent">145.500 MHz</span>
+                                <span id="freq-high">147.000 MHz</span>
+                            </div>
+                        </div>
+
+                        <!-- Waterfall Display (3D) — Three.js terrain view.
+                             Lazily initialized on first toggle to 3D. -->
+                        <div class="waterfall-3d-container" id="waterfall-3d-container" style="display:none;"></div>
+                        <div class="waterfall-3d-hint" id="waterfall-3d-hint" style="display:none;" data-i18n="dash.wf3dHint">
+                            ลากเพื่อหมุน • เลื่อนล้อเพื่อซูม • คลิกขวาเพื่อเลื่อนมุมมอง
+                        </div>
+                        <!-- /Waterfall Display -->
+
+                        <!-- Floating WF control cluster (bottom-right of waterfall).
+                             Hovered over the 2D/3D view, pointer-events on. -->
+                        <div class="waterfall-float-controls" id="wf-auto-buttons">
+                            <button class="step-btn" id="wf-auto-btn" data-i18n-title="dash.wfAutoTitle" data-i18n="dash.wfAuto" title="ปรับ dB range อัตโนมัติแบบต่อเนื่อง (เหมือน OpenWebRX)">🎚️ AUTO</button>
+                            <button class="step-btn" id="sigtag-btn" data-i18n-title="dash.wfTagTitle" data-i18n="dash.wfTagOn" title="แสดงเลขความถี่แนวตั้งตรงสัญญาณที่แรงกว่า SQL (เหมือนทะเบียนความถี่)">📡 TAG</button>
+                            <button class="step-btn" id="wf-3d-btn" data-i18n-title="dash.wf3dTitle" data-i18n="dash.wf3dBtn" title="สลับมุมมอง Waterfall แบบ 3D (หมุน/ซูมได้เหมือนวิทยุ Yaesu/Xiegu)">📊 3D</button>
                         </div>
                     </div>
-
-                    <!-- Waterfall Display (3D) — Three.js terrain view.
-                         Lazily initialized on first toggle to 3D. -->
-                    <div class="waterfall-3d-container" id="waterfall-3d-container" style="display:none;"></div>
-                    <div class="waterfall-3d-hint" id="waterfall-3d-hint" style="display:none;" data-i18n="dash.wf3dHint">
-                        ลากเพื่อหมุน • เลื่อนล้อเพื่อซูม • คลิกขวาเพื่อเลื่อนมุมมอง
-                    </div>
-                    <!-- /Waterfall Display -->
 
                     <!-- Dual-VFO control rows. VFO A is always shown; VFO B is
                          shown only in Dual mode (toggled by App._updateVfoRows).
@@ -328,15 +340,6 @@
                     <button class="step-btn" id="sql-auto-btn" data-i18n-title="dash.sqlAutoTitle" data-i18n="dash.sqlAuto" title="เปิด Auto Squelch — ปรับ threshold ตาม noise floor อัตโนมัติ" style="padding:2px 8px; font-size:0.7rem;">🎚️ AUTO</button>
                 </div>
 
-                <!-- Waterfall Auto Range Toggle + 3D View Toggle -->
-                <div class="step-selector">
-                    <span class="step-label">WF</span>
-                    <div class="step-buttons" id="wf-auto-buttons">
-                        <button class="step-btn" id="wf-auto-btn" data-i18n-title="dash.wfAutoTitle" data-i18n="dash.wfAuto" title="ปรับ dB range อัตโนมัติแบบต่อเนื่อง (เหมือน OpenWebRX)">🎚️ AUTO</button>
-                        <button class="step-btn" id="sigtag-btn" data-i18n-title="dash.wfTagTitle" data-i18n="dash.wfTagOn" title="แสดงเลขความถี่แนวตั้งตรงสัญญาณที่แรงกว่า SQL (เหมือนทะเบียนความถี่)">📡 TAG</button>
-                        <button class="step-btn" id="wf-3d-btn" data-i18n-title="dash.wf3dTitle" data-i18n="dash.wf3dBtn" title="สลับมุมมอง Waterfall แบบ 3D (หมุน/ซูมได้เหมือนวิทยุ Yaesu/Xiegu)">📊 3D</button>
-                    </div>
-                </div>
             </div>
 
             <!-- Row 3: Hardware controls (admin only) — SRATE, GAIN, PPM, CENTER -->
