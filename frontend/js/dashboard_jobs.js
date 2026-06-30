@@ -83,7 +83,7 @@
             wrap.className = 'dj-device-select-wrap';
             wrap.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:0.75rem;';
             wrap.innerHTML = `
-                <span style="opacity:0.7;">📡 ${I18n.t('rj.device')}</span>
+                <span style="opacity:0.7;">${I18n.t('rj.device')}</span>
                 <select id="dj-device-select"
                         style="background:var(--bg-card);color:var(--text-primary);
                                border:1px solid var(--border-color);border-radius:4px;
@@ -160,7 +160,7 @@
             panel.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             font-weight:600;color:var(--text-secondary);margin-bottom:4px;">
-                    <span>🔴 ${I18n.t('rj.autoRecordTitle')}</span>
+                    <span>${I18n.t('rj.autoRecordTitle')}</span>
                     <span id="dj-jobs-count" style="font-weight:400;opacity:0.7;"></span>
                 </div>
                 <div id="dj-jobs-list"></div>
@@ -286,7 +286,7 @@
             const wrap = document.getElementById('dj-device-select-wrap');
             if (wrap) {
                 const span = wrap.querySelector('span');
-                if (span) span.innerHTML = '📡 ' + I18n.t('rj.device');
+                if (span) span.innerHTML = I18n.t('rj.device');
             }
             window.DashboardJobs._renderDeviceSelector();
         }
