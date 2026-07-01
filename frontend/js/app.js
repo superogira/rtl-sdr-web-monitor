@@ -844,16 +844,14 @@ const App = {
             });
         });
 
-        // Record toggle button
+        // Combined record button:
+        // - QUICK CLICK: toggle MANUAL recording (start/stop on demand).
+        // - LONG-PRESS (≥500ms): toggle AUTO-record (auto-capture gated by
+        //   squelch). While auto-record is ON the button shows 🔄 and a
+        //   yellow tint; when it's actively capturing it blinks red.
+        // The separate 🔄 button is no longer needed.
         const btnRecord = document.getElementById('btn-record');
-        if (btnRecord) btnRecord.addEventListener('click', () => this.toggleRecording());
-
-        // Per-user AUTO-record toggle button (live listening only). When ON,
-        // the server auto-records the channel THIS user is listening to, gated
-        // by the user's own squelch + signal (independent of everyone else and
-        // of the global auto-record). Disabled until the user presses ฟังสด.
-        const btnAutoRec = document.getElementById('btn-auto-record');
-        if (btnAutoRec) btnAutoRec.addEventListener('click', () => this.toggleAutoRecord());
+        if (btnRecord) this._bindRecordButton(btnRecord);
 
         // === Multi-VFO controls (1-4 VFOs: A/B/C/D) ===
         // +VFO / -VFO count buttons. NOTE: these now live INSIDE
@@ -1450,6 +1448,55 @@ const App = {
         this._updateVfoRows();
     },
 
+    /** Bind the combined record button:
+     *  - QUICK CLICK: toggle MANUAL recording (start/stop on demand).
+     *  - LONG-PRESS (≥500ms): toggle AUTO-record (auto-capture gated by
+     *    squelch). While auto-record is ON the button shows 🔄 and a yellow
+     *    tint; when it's actively capturing it blinks red (.rec-active).
+     */
+    _bindRecordButton(btn) {
+        if (!btn) return;
+        let holdTimer = null;
+        let didHold = false;
+        const HOLD_MS = 500;
+
+        const startHold = () => {
+            didHold = false;
+            holdTimer = setTimeout(() => {
+                didHold = true;
+                this.toggleAutoRecord();
+            }, HOLD_MS);
+        };
+
+        const endHold = () => {
+            if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        };
+
+        const onClick = (e) => {
+            if (didHold) { didHold = false; return; }
+            this.toggleRecording();
+        };
+
+        btn.addEventListener('mousedown', startHold);
+        btn.addEventListener('mouseup', endHold);
+        btn.addEventListener('mouseleave', endHold);
+        btn.addEventListener('click', onClick);
+        btn.addEventListener('touchstart', () => startHold(), { passive: true });
+        btn.addEventListener('touchend', () => endHold(), { passive: true });
+    },
+
+    /** Update the combined record button icon/class from state.
+     *  Called by _onRecordAck, _onAutoRecordAck, and updateAutoRecordIndicator.
+     *  Priority: rec-active (blinking) > recording (manual) > auto-rec-active.
+     */
+    _updateRecordButton() {
+        const btn = document.getElementById('btn-record');
+        if (!btn) return;
+        if (!btn.classList.contains('rec-active') && !btn.classList.contains('auto-rec-active')) {
+            btn.textContent = btn.classList.contains('recording') ? '⏹' : '⏺';
+        }
+    },
+
     /**
      * Open the recording-job editor modal prefilled with this VFO's current
      * state (device, gain, ppm, start freq, sample rate, frequency, squelch,
@@ -1565,7 +1612,16 @@ const App = {
             data = arguments[2] || {};
         }
 
-        // Blink the auto-record button ONLY when THIS user's per-listener
+        // Compute whether each recording type is active (used by the status
+        // list below AND by the combined record button blink).
+        const hasManual = !!(data && data.manual_recording);
+        const hasListenerRec = !!(data && Array.isArray(data.listener_recordings) &&
+            data.listener_recordings.some(l => l.manual_recording || l.auto_recording));
+        const hasJobRec = !!(data && Array.isArray(data.active_job_captures) &&
+            data.active_job_captures.some(cap =>
+                Array.isArray(cap.frequencies) && cap.frequencies.some(f => f.is_recording)
+            ));
+        // Blink the combined record button ONLY when THIS user's per-listener
         // auto-record (or manual record) is actively capturing audio.
         // Background scheduled jobs and other users' recordings do NOT
         // trigger the blink — only the user's own button press does.
@@ -1575,16 +1631,11 @@ const App = {
             const myListeners = myUserId
                 ? data.listener_recordings.filter(l => l.user_id === myUserId)
                 : [];
-            // If we couldn't identify our user ID, fall back to checking if
-            // this browser's auto-record toggle is ON (the button was pressed).
             myRecActive = myListeners.some(l => l.auto_recording || l.manual_recording);
         }
-        const autoBtn = document.getElementById('btn-auto-record');
-        if (autoBtn) {
-            autoBtn.classList.toggle('rec-active', myRecActive);
-            autoBtn.title = myRecActive
-                ? I18n.t('dash.recStatusTitle', source || 'auto')
-                : I18n.t('dash.autoRecordTitle');
+        const recBtn = document.getElementById('btn-record');
+        if (recBtn) {
+            recBtn.classList.toggle('rec-active', myRecActive);
         }
 
         // Recording status list (below clock) — shows ALL active recordings:
