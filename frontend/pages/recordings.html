@@ -238,6 +238,11 @@
         <div class="app-main" style="padding: 2rem; overflow-y: auto;">
             <h2 style="margin-bottom: 1rem;" data-i18n="rec.pageTitle">📋 รายการบันทึกทั้งหมด</h2>
 
+            <!-- Active recording jobs (scheduled / always-on) -->
+            <div id="active-jobs-panel" style="margin-bottom:1rem; display:none;">
+                <div id="active-jobs-list"></div>
+            </div>
+
             <div class="rec-filter-bar">
                 <label style="font-size:0.85rem;" data-i18n="rec.filterSource">ประเภท:</label>
                 <select id="filter-source" onchange="onSourceChange()">
@@ -1346,6 +1351,44 @@
         resetAndLoad();
         startAutoRefresh();
         setupWS();
+
+        // === Active Jobs Panel ===
+        // Poll SDR status every 5s and show any active background job captures
+        // (scheduled / always-on recordings) at the top of the recordings page.
+        let _jobsTimer = null;
+        async function refreshActiveJobs() {
+            try {
+                const status = await API.sdr.status();
+                const caps = status.active_job_captures || [];
+                const panel = document.getElementById('active-jobs-panel');
+                const list = document.getElementById('active-jobs-list');
+                if (!panel || !list) return;
+                if (!caps.length) {
+                    panel.style.display = 'none';
+                    return;
+                }
+                panel.style.display = '';
+                const items = caps.map(cap => {
+                    const jobId = cap.job_id ? cap.job_id.slice(0, 8) : 'job';
+                    const label = cap.job_label || jobId;
+                    const freqs = (cap.frequencies || []).map(f => {
+                        const freqMhz = (f.frequency_hz / 1e6).toFixed(4);
+                        const bwKhz = ((f.bandwidth_hz || 12000) / 1000).toFixed(0);
+                        const rec = f.is_recording ? '🔴' : '⬜';
+                        return `${rec} ${freqMhz} MHz ${f.demod_mode} (${bwKhz}kHz)`;
+                    }).join(' · ');
+                    return `<div style="display:flex;align-items:center;gap:6px;font-size:0.78rem;padding:6px 10px;background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);border-radius:6px;margin-bottom:4px;">
+                        <span style="animation:blink 1s infinite;">📼</span>
+                        <span style="font-weight:600;color:#c084fc;">${label}</span>
+                        <span style="color:var(--text-muted);">${freqs}</span>
+                    </div>`;
+                }).join('');
+                list.innerHTML = items;
+            } catch (e) { /* silent */ }
+        }
+        refreshActiveJobs();
+        _jobsTimer = setInterval(refreshActiveJobs, 5000);
+        window.addEventListener('beforeunload', () => { if (_jobsTimer) clearInterval(_jobsTimer); });
 
         // Re-render recordings list when language changes
         document.addEventListener('languagechange', () => {

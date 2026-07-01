@@ -1194,10 +1194,10 @@ const App = {
      */
     _onAutoRecordAck(obj) {
         this._autoRecordOn = !!obj.enabled;
-        const btn = document.getElementById('btn-auto-record');
+        // Use the combined record button (was btn-auto-record).
+        const btn = document.getElementById('btn-record');
         if (btn) {
             btn.classList.toggle('auto-rec-active', this._autoRecordOn);
-            btn.textContent = this._autoRecordOn ? '🔄●' : '🔄';
             btn.title = this._autoRecordOn
                 ? I18n.t('dash.autoRecOnTitle')
                 : I18n.t('dash.autoRecOffTitle');
