@@ -220,6 +220,39 @@ const RecordingJobsUI = {
         this._showEditorModal(job);
     },
 
+    /**
+     * Open the editor prefilled with a VFO's current state. Creates a NEW
+     * job (editing=false) with a single window + single frequency, both
+     * seeded from `prefill`. Used by the dashboard ⏰ buttons.
+     *
+     * @param {object} prefill - {
+     *   deviceId, gain, freqCorrectionPpm, startFreqHz, sampleRate,
+     *   frequencyHz, squelchDb, demodMode, bandwidthHz
+     * }
+     */
+    openEditorForVfo(prefill) {
+        this._editingJobId = null;
+        // Build a virtual "new job" with one window + one freq prefilled.
+        const win = this._blankWindow('always');
+        win.gain = Number.isFinite(prefill.gain) ? prefill.gain : 30;
+        win.freq_correction_ppm = Number.isFinite(prefill.freqCorrectionPpm) ? prefill.freqCorrectionPpm : 0;
+        win.start_freq_hz = Number.isFinite(prefill.startFreqHz) ? prefill.startFreqHz : 144000000;
+        win.sample_rate = Number.isFinite(prefill.sampleRate) ? prefill.sampleRate : 2048000;
+        // Replace the blank freq with the prefilled one.
+        win.frequencies = [this._blankFreq(prefill.frequencyHz || 0)];
+        const f = win.frequencies[0];
+        f.frequency_hz = Number.isFinite(prefill.frequencyHz) ? prefill.frequencyHz : 144825000;
+        f.squelch_db = Number.isFinite(prefill.squelchDb) ? prefill.squelchDb : -70;
+        f.auto_squelch = false;
+        f.demod_mode = prefill.demodMode || 'FM';
+        f.bandwidth_hz = prefill.bandwidthHz || 12000;
+
+        // Pre-select the device passed in (usually the active device).
+        this._pendingDeviceId = prefill.deviceId || null;
+
+        this._showEditorModal(null, [win]);
+    },
+
     _availableDeviceOptions(selectedId, currentDeviceId) {
         // A device is selectable if it's free OR it's the current job's device.
         const opts = [];
@@ -236,18 +269,25 @@ const RecordingJobsUI = {
         return '<option value="">' + I18n.t('rje.selectDevice') + '</option>' + opts.join('');
     },
 
-    _showEditorModal(job) {
+    _showEditorModal(job, windowsOverride) {
         const editing = !!job;
         const mode = job ? job.mode : 'always';
         const name = job ? (job.name || '') : '';
         // For a NEW job, auto-select the first free device so its recording
-        // defaults (Gain / PPM) can pre-fill the windows.
+        // defaults (Gain / PPM) can pre-fill the windows. When opened from a
+        // VFO (openEditorForVfo), prefer the pending device id (the active
+        // device) if it is still available.
         let deviceId = job ? job.device_id : '';
         if (!editing) {
-            const firstFree = this._devices.find(d => !this._usedDeviceIds.includes(d.id));
-            if (firstFree) deviceId = firstFree.id;
+            if (this._pendingDeviceId && !this._usedDeviceIds.includes(this._pendingDeviceId)) {
+                deviceId = this._pendingDeviceId;
+            } else {
+                const firstFree = this._devices.find(d => !this._usedDeviceIds.includes(d.id));
+                if (firstFree) deviceId = firstFree.id;
+            }
+            this._pendingDeviceId = null;  // consume
         }
-        const windows = job ? (job.windows || []) : [this._blankWindow('always')];
+        const windows = windowsOverride || (job ? (job.windows || []) : [this._blankWindow('always')]);
 
         // Build modal container
         let modal = document.getElementById('rj-editor-modal');
@@ -288,7 +328,6 @@ const RecordingJobsUI = {
             <div id="rj-windows"></div>
 
             <div class="form-actions">
-                <button class="btn btn-sm" onclick="RecordingJobsUI.addWindow()">${I18n.t('rje.addWindow')}</button>
                 <button class="btn btn-primary" onclick="RecordingJobsUI.save()">${I18n.t('rje.save')}</button>
             </div>
         </div>`;

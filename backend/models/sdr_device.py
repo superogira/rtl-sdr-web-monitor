@@ -40,6 +40,20 @@ DEVICE_TYPES = {
              "placeholder": "เช่น Dongle บนหลังคา"},
         ],
     },
+    "usb": {
+        "label": "USB (Direct)",
+        "description": "อ่านจาก USB RTL-SDR โดยตรง (ไม่ต้องรัน rtl_tcp)",
+        "fields": [
+            {"key": "device_index", "label": "Device Index", "type": "number",
+             "required": False, "default": 0,
+             "placeholder": "0 (ค่าเริ่มต้น = อุปกรณ์ตัวแรก)"},
+            {"key": "serial", "label": "Serial Number", "type": "text",
+             "required": False,
+             "placeholder": "เช่น 00000005 (เว้นว่าง = ใช้ device_index)"},
+            {"key": "note", "label": "หมายเหตุ", "type": "text", "required": False,
+             "placeholder": "เช่น Dongle ห้องสサーヴ"},
+        ],
+    },
 }
 
 
@@ -63,10 +77,32 @@ def _default_rtl_tcp_config() -> dict:
     }
 
 
+def _default_usb_config() -> dict:
+    """Return default config for a USB device (used by the wizard).
+
+    `gain` and `freq_correction_ppm` are *recording defaults* — they are used to
+    pre-fill the "เพิ่มการอัดเสียง" editor so admins don't have to retype them
+    every time. They are NOT applied to the live SDR connection.
+    """
+    return {
+        "device_index": 0,
+        "serial": "",
+        "note": "",
+        "gain": 30,
+        "freq_correction_ppm": 0,
+        # Per-device waterfall dB range used by the live "ฟังสด" view.
+        # These override the global (Display tab) values for this device.
+        "waterfall_db_min": -110,
+        "waterfall_db_max": -55,
+    }
+
+
 def default_config_for_type(device_type: str) -> dict:
     """Return a default config dict for a given device type."""
     if device_type == "rtl_tcp":
         return _default_rtl_tcp_config()
+    if device_type == "usb":
+        return _default_usb_config()
     return {}
 
 

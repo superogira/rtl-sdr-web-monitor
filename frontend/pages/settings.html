@@ -1943,6 +1943,51 @@
                         ${I18n.t('set.dev.freqMovedHint')}
                     </p>
                 `;
+            } else if (type === 'usb') {
+                const defIdx = (cfg.device_index !== undefined && cfg.device_index !== null) ? cfg.device_index : 0;
+                const defSerial = cfg.serial || '';
+                const defGain = (cfg.gain !== undefined && cfg.gain !== null) ? cfg.gain : 30;
+                const defPpm = (cfg.freq_correction_ppm !== undefined && cfg.freq_correction_ppm !== null) ? cfg.freq_correction_ppm : 0;
+                const defWfMin = (cfg.waterfall_db_min !== undefined && cfg.waterfall_db_min !== null) ? cfg.waterfall_db_min : -110;
+                const defWfMax = (cfg.waterfall_db_max !== undefined && cfg.waterfall_db_max !== null) ? cfg.waterfall_db_max : -55;
+                container.innerHTML = `
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Device Index</label>
+                            <input type="number" id="dc-device-index" value="${defIdx}" min="0" placeholder="0">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">0 = first device (check with lsusb)</p>
+                        </div>
+                        <div class="form-group">
+                            <label>Serial Number</label>
+                            <input type="text" id="dc-serial" value="${this._escapeAttr(defSerial)}" placeholder="00000005">
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">Recommended (more stable than index)</p>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>${I18n.t('set.dev.noteLabel')}</label>
+                        <input type="text" id="dc-description" value="${this._escapeAttr(cfg.description || cfg.note || '')}" placeholder="${I18n.t('set.dev.notePh')}">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>${I18n.t('set.dev.gainDefaultLabel')}</label>
+                            <input type="number" id="dc-gain" value="${defGain}" min="0" max="60">
+                        </div>
+                        <div class="form-group">
+                            <label>${I18n.t('set.dev.ppmDefaultLabel')}</label>
+                            <input type="number" id="dc-ppm" value="${defPpm}" min="-200" max="200">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>${I18n.t('set.dev.wfMinLabel')}</label>
+                            <input type="number" id="dc-wf-db-min" value="${defWfMin}" min="-150" max="-50">
+                        </div>
+                        <div class="form-group">
+                            <label>${I18n.t('set.dev.wfMaxLabel')}</label>
+                            <input type="number" id="dc-wf-db-max" value="${defWfMax}" min="-100" max="0">
+                        </div>
+                    </div>
+                `;
             } else {
                 container.innerHTML = `<div class="text-muted">${I18n.t('set.notSupported')}</div>`;
             }
@@ -1961,6 +2006,27 @@
         },
 
         _collectDeviceConfig(type) {
+            if (type === 'usb') {
+                const serial = document.getElementById('dc-serial')?.value.trim() || '';
+                const deviceIndex = parseInt(document.getElementById('dc-device-index')?.value) || 0;
+                const description = document.getElementById('dc-description')?.value.trim() || '';
+                const gain = parseInt(document.getElementById('dc-gain')?.value);
+                const ppm = parseInt(document.getElementById('dc-ppm')?.value);
+                const wfMinEl = document.getElementById('dc-wf-db-min');
+                const wfMaxEl = document.getElementById('dc-wf-db-max');
+                const wfMin = wfMinEl ? parseInt(wfMinEl.value) : NaN;
+                const wfMax = wfMaxEl ? parseInt(wfMaxEl.value) : NaN;
+                return {
+                    device_index: deviceIndex,
+                    serial: serial,
+                    note: description,
+                    description,
+                    gain: Number.isFinite(gain) ? gain : 30,
+                    freq_correction_ppm: Number.isFinite(ppm) ? ppm : 0,
+                    waterfall_db_min: Number.isFinite(wfMin) ? wfMin : -110,
+                    waterfall_db_max: Number.isFinite(wfMax) ? wfMax : -55,
+                };
+            }
             if (type !== 'rtl_tcp') return {};
             const host = document.getElementById('dc-host').value.trim();
             const port = parseInt(document.getElementById('dc-port').value) || 1234;

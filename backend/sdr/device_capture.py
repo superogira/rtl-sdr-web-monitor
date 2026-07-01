@@ -381,6 +381,9 @@ class DeviceCapture:
         self.client = await connection_pool.acquire(
             self.device_id, self._host, self._port,
             consumer_id=self._consumer_id, priority=PRIORITY_JOB,
+            device_type=self._device_type,
+            device_index=self._device_index,
+            serial=self._serial,
         )
         # Register the preemption callback so we get paused when a LIVE
         # consumer claims the tuner, and can reclaim it when LIVE leaves.

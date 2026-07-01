@@ -1,10 +1,13 @@
 """
-Shared RTL-TCP connection pool with IQ fan-out and priority arbitration.
+Shared connection pool with IQ fan-out and priority arbitration.
 
-RTL-TCP servers typically accept only ONE TCP connection per dongle. This
-module ensures that a single RtlTcpClient is used per device, with IQ samples
-fanned out to multiple consumers (SDRManager for live listening, DeviceCapture
-for background recording jobs).
+Supports two device types:
+  - rtl_tcp: TCP/IP connection to an rtl_tcp server (one connection per dongle).
+  - usb: Direct USB access to an RTL-SDR dongle via pyrtlsdr (no rtl_tcp needed).
+
+Both use the same client interface (connect, disconnect, read_samples,
+set_frequency, ...) so the shared connection pool, priority arbitration,
+and consumer fan-out logic work identically for both.
 
 Arbitration rules:
   - Only one consumer ("controller") may set center frequency / sample rate /
@@ -15,15 +18,16 @@ Arbitration rules:
     passband) or pause (wait until the user retunes or disconnects).
   - When the LIVE consumer releases control, JOB consumers may reclaim it.
 
-A SharedConnectionConsumer exposes the same interface as RtlTcpClient
-(connect, disconnect, read_samples, set_frequency, ...), so SDRManager can
-use it as a drop-in replacement.
+A SharedConnectionConsumer exposes the same interface as RtlTcpClient /
+RtlUsbClient (connect, disconnect, read_samples, set_frequency, ...), so
+SDRManager can use it as a drop-in replacement.
 """
 import asyncio
 import logging
 from typing import Dict, Optional
 
 from backend.sdr.rtl_tcp import RtlTcpClient
+from backend.sdr.rtl_usb import RtlUsbClient
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +144,7 @@ class SharedConnectionConsumer:
         """Set tuner values on the underlying client BEFORE connecting.
 
         Called right after acquire() but before connect() so that the
-        RtlTcpClient sends the correct freq/sr/gain/ppm during its handshake.
+        client sends the correct freq/sr/gain/ppm during its handshake.
         """
         self._conn.client._frequency = freq
         self._conn.client._sample_rate = sample_rate
@@ -156,15 +160,22 @@ class SharedConnectionConsumer:
 
 
 class SharedDeviceConnection:
-    """One RTL-TCP connection shared by multiple consumers.
+    """One SDR connection shared by multiple consumers.
 
-    Owns exactly one RtlTcpClient and a background read loop that fans out
-    IQ chunks to every registered consumer via individual queues.
+    Owns exactly one client (RtlTcpClient or RtlUsbClient) and a background
+    read loop that fans out IQ chunks to every registered consumer via
+    individual queues.
     """
 
-    def __init__(self, device_id: str, host: str, port: int):
+    def __init__(self, device_id: str, host: str = None, port: int = None,
+                 device_type: str = "rtl_tcp",
+                 device_index: Optional[int] = None,
+                 serial: Optional[str] = None):
         self.device_id = device_id
-        self.client = RtlTcpClient(host=host, port=port)
+        if device_type == "usb":
+            self.client = RtlUsbClient(device_index=device_index, serial=serial)
+        else:
+            self.client = RtlTcpClient(host=host or "127.0.0.1", port=port or 1234)
         self._consumers: Dict[str, SharedConnectionConsumer] = {}
         self._read_task: Optional[asyncio.Task] = None
         self._controller_id: Optional[str] = None
@@ -199,8 +210,8 @@ class SharedDeviceConnection:
         """Connect the underlying client if not already connected."""
         if self.client.connected:
             return True
-        # apply pending host/port if any
-        if self._pending_host:
+        # apply pending host/port if any (only relevant for rtl_tcp)
+        if self._pending_host and hasattr(self.client, 'set_connection'):
             self.client.host = self._pending_host
             self.client.port = self._pending_port or self.client.port
             self._pending_host = None
@@ -403,14 +414,32 @@ class SharedDeviceConnection:
     async def _read_loop(self) -> None:
         consecutive_errors = 0
         max_errors = 50
+        empty_read_count = 0
+        max_empty_reads = 200  # tolerate transient empty reads (USB short reads)
         try:
             while self.client.connected and self._refcount > 0:
                 try:
                     chunk = max(1024, int(self.client._sample_rate * 0.05))
                     iq = await self.client.read_samples(chunk * 2)
                     if not iq:
+                        # Empty read (b"" or None) — this is NORMAL for USB
+                        # devices (short reads, buffer flushing during retune).
+                        # Do NOT count as an error; just back off slightly.
+                        empty_read_count += 1
+                        if empty_read_count > max_empty_reads:
+                            # Too many consecutive empty reads — something
+                            # is genuinely wrong (device stuck)
+                            logger.warning(
+                                f"SharedConnection {self.device_id}: "
+                                f"{empty_read_count} consecutive empty reads, "
+                                f"treating as error"
+                            )
+                            consecutive_errors += 1
+                            empty_read_count = 0
                         await asyncio.sleep(0.01)
                         continue
+                    # Got data — reset both counters
+                    empty_read_count = 0
                     consecutive_errors = 0
                     # fan-out to every consumer
                     for c in list(self._consumers.values()):
@@ -443,15 +472,30 @@ class DeviceConnectionPool:
         self._conns: Dict[str, SharedDeviceConnection] = {}
         self._lock = asyncio.Lock()
 
-    async def acquire(self, device_id: str, host: str, port: int,
-                      consumer_id: str, priority: int) -> SharedConnectionConsumer:
-        """Get/create a shared connection and return a consumer adapter."""
+    async def acquire(self, device_id: str, host: str = None, port: int = None,
+                      consumer_id: str = "", priority: int = 1,
+                      device_type: str = "rtl_tcp",
+                      device_index: Optional[int] = None,
+                      serial: Optional[str] = None) -> SharedConnectionConsumer:
+        """Get/create a shared connection and return a consumer adapter.
+
+        For rtl_tcp devices: pass host and port.
+        For usb devices: pass device_index and/or serial; host/port are ignored.
+        """
         async with self._lock:
             conn = self._conns.get(device_id)
             if conn is None:
-                conn = SharedDeviceConnection(device_id, host, port)
+                conn = SharedDeviceConnection(
+                    device_id, host=host, port=port,
+                    device_type=device_type,
+                    device_index=device_index,
+                    serial=serial,
+                )
                 self._conns[device_id] = conn
-                logger.info(f"🆕 Pool: created SharedConnection for {device_id}")
+                logger.info(
+                    f"🆕 Pool: created SharedConnection for {device_id} "
+                    f"(type={device_type})"
+                )
         consumer = SharedConnectionConsumer(conn, consumer_id, priority)
         return consumer
 

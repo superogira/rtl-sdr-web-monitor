@@ -844,6 +844,7 @@ python -m backend.cli createuser <username> <password> admin
 * [`OPERATIONS.md`](https://www.google.com/search?q=./OPERATIONS.md) — คู่มือปฏิบัติการฉบับเต็ม (การติดตั้ง, เริ่ม/หยุด, การทำ migration, การแก้ไขปัญหา)
 * [`HOW_TO_RESTART.md`](https://www.google.com/search?q=./HOW_TO_RESTART.md) — การรีสตาร์ทระบบอย่างรวดเร็ว
 * [`docs/WHISPER_LOCAL_STT.md`](https://www.google.com/search?q=./docs/WHISPER_LOCAL_STT.md) — คู่มือการตั้งค่า Whisper STT สำหรับใช้งานในเครื่อง
+* [`docs/USB_RTL_SDR_SETUP.md`](./docs/USB_RTL_SDR_SETUP.md) — คู่มือการตั้งค่า USB RTL-SDR อ่านโดยตรง (ไม่ต้องใช้ rtl_tcp)
 
 ---
 

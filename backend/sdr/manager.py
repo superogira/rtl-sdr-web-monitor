@@ -373,23 +373,46 @@ class SDRManager:
             return result.scalar_one_or_none()
 
     def _apply_device_config(self, device) -> None:
-        """Apply a device's connection config (host/port only) to the client.
+        """Apply a device's connection config to the client.
 
-        Per the new recording-jobs design, device config stores ONLY host/port
-        (+ optional note). Tuner parameters (frequency/sample_rate/gain/ppm)
-        are intentionally NOT part of the device config anymore — they are
-        managed per recording-job window and via the legacy live tuner
-        endpoints. We keep the current client tuner values untouched here so
-        switching active devices does not clobber the live frequency with a
-        stale/dummy value (which caused "Failed to connect to RTL-TCP").
+        For rtl_tcp devices: stores host/port.
+        For usb devices: stores device_index/serial.
+
+        Per the new recording-jobs design, device config stores ONLY
+        connection parameters (+ optional note). Tuner parameters
+        (frequency/sample_rate/gain/ppm) are intentionally NOT part of the
+        device config anymore — they are managed per recording-job window
+        and via the legacy live tuner endpoints. We keep the current client
+        tuner values untouched here so switching active devices does not
+        clobber the live frequency with a stale/dummy value.
 
         Sync; only updates the in-memory client target. The caller is
         responsible for (re)connecting if desired.
         """
         cfg = device.get_config()
-        host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
-        port = int(cfg.get("port") or settings.RTL_TCP_PORT)
-        self.client.set_connection(host, port)
+        device_type = getattr(device, 'type', None) or 'rtl_tcp'
+
+        # Cache the active device type + USB params for connect()
+        self._active_device_type = device_type
+        self._active_device_index = None
+        self._active_serial = None
+
+        if device_type == "usb":
+            # USB device: cache device_index / serial
+            serial = str(cfg.get("serial") or "").strip()
+            try:
+                device_index = int(cfg.get("device_index", 0))
+            except (TypeError, ValueError):
+                device_index = 0
+            if serial:
+                self._active_serial = serial
+            self._active_device_index = device_index
+        else:
+            # rtl_tcp device: set host/port on the client
+            host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
+            port = int(cfg.get("port") or settings.RTL_TCP_PORT)
+            self.client.set_connection(host, port)
+
         # NOTE: We deliberately do NOT overwrite frequency/sample_rate/gain/ppm
         # from the device config. Those values are now per-recording-job.
         # We do, however, accept them if present (backward compat with rows
@@ -420,12 +443,21 @@ class SDRManager:
             self._device_waterfall_db_max = int(_wmax) if _wmax is not None else None
         except (TypeError, ValueError):
             self._device_waterfall_db_max = None
-        # Keep legacy sdr_settings.json in sync (host/port at minimum)
+        # Keep legacy sdr_settings.json in sync
         self._save_persisted_settings()
-        logger.info(f"Applied device '{device.name}' ({device.type}) config: "
-                    f"{host}:{port} (tuner values preserved: "
-                    f"{self.client._frequency} Hz, {self.client._sample_rate} SPS, "
-                    f"gain {self.client._gain})")
+        if device_type == "usb":
+            ident = f"serial='{self._active_serial}'" if self._active_serial else f"index={self._active_device_index}"
+            logger.info(f"Applied device '{device.name}' (usb) config: {ident} "
+                        f"(tuner values preserved: "
+                        f"{self.client._frequency} Hz, {self.client._sample_rate} SPS, "
+                        f"gain {self.client._gain})")
+        else:
+            host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
+            port = int(cfg.get("port") or settings.RTL_TCP_PORT)
+            logger.info(f"Applied device '{device.name}' ({device_type}) config: "
+                        f"{host}:{port} (tuner values preserved: "
+                        f"{self.client._frequency} Hz, {self.client._sample_rate} SPS, "
+                        f"gain {self.client._gain})")
 
     async def load_active_device(self) -> bool:
         """Load and apply the active device's config at startup.
@@ -539,10 +571,15 @@ class SDRManager:
         # Release any existing pool consumer first
         await self._release_pool_consumer()
 
-        # Determine device_id and host/port from current client state
+        # Determine device_id and connection params from current client state
         device_id = self._active_device_id or "_legacy"
         host = self.client.host
         port = self.client.port
+        # Pass device type + USB params to the pool so it creates the correct
+        # client (RtlTcpClient or RtlUsbClient).
+        device_type = getattr(self, '_active_device_type', 'rtl_tcp')
+        device_index = getattr(self, '_active_device_index', None)
+        serial = getattr(self, '_active_serial', None)
 
         # Acquire a shared consumer for live listening. Use PRIORITY_IDLE when
         # there are no listeners so background recording jobs (PRIORITY_JOB=5)
@@ -557,6 +594,9 @@ class SDRManager:
         consumer = await connection_pool.acquire(
             device_id, host, port,
             consumer_id="live", priority=initial_prio,
+            device_type=device_type,
+            device_index=device_index,
+            serial=serial,
         )
         if initial_prio == PRIORITY_IDLE:
             logger.info(
