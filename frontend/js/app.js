@@ -3333,8 +3333,11 @@ const App = {
         const transcript = rec.transcript || rec.transcription || `<span class="text-muted">${I18n.t('dash.transcribing')}</span>`;
         const audioUrl = rec.url || (rec.audio_file_name ? `/recordings/${rec.audio_file_name}` : '');
         const source = rec.source || 'auto';
-        const badgeClass = source === 'manual' ? 'manual' : 'auto';
-        const badgeLabel = source === 'manual' ? I18n.t('dash.sourceManual') : I18n.t('dash.sourceAuto');
+        const badgeClass = source === 'manual' ? 'manual' : (source === 'auto_job' ? 'auto_job' : 'auto');
+        const badgeLabel = source === 'manual' ? I18n.t('dash.sourceManual')
+            : (source === 'auto_job' ? I18n.t('dash.sourceAutoJob') : I18n.t('dash.sourceAuto'));
+        const badgeTitle = source === 'manual' ? I18n.t('dash.sourceManualTitle')
+            : (source === 'auto_job' ? I18n.t('dash.sourceAutoJobTitle') : I18n.t('dash.sourceAutoTitle'));
         // Show recorder's name for manual recordings (per-user)
         const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
         const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
@@ -3363,7 +3366,7 @@ const App = {
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span class="feed-time">${time}</span>
                     <div style="display:flex; gap:6px; align-items:center;">
-                        <span class="source-badge ${badgeClass}" title="${source === 'manual' ? I18n.t('dash.sourceManualTitle') : I18n.t('dash.sourceAutoTitle')}">${badgeLabel}</span>
+                        <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
                         ${recorderLabel ? `<span style="font-size:0.65rem; color:var(--text-muted); white-space:nowrap;">${recorderLabel}</span>` : ''}
                         <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
                         ${_delBtn}

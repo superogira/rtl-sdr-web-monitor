@@ -108,8 +108,10 @@ const I18n = {
             'dash.delFail': 'ลบไม่สำเร็จ: ',
             'dash.sourceManual': '✋ บันทึก',
             'dash.sourceAuto': '🔄 อัตโนมัติ',
+            'dash.sourceAutoJob': '🟣 ตามกำหนดการ',
             'dash.sourceManualTitle': 'ผู้ใช้กดบันทึก',
             'dash.sourceAutoTitle': 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ',
+            'dash.sourceAutoJobTitle': 'อัดตามกำหนดการอัตโนมัติ (Background Job)',
             'dash.outOfRange': '⚠ นอกช่วงรับสัญญาณ',
 
             /* ---- Dashboard: Radio controls ---- */
@@ -1115,8 +1117,10 @@ const I18n = {
             'dash.delFail': 'Delete failed: ',
             'dash.sourceManual': '✋ Manual',
             'dash.sourceAuto': '🔄 Auto',
+            'dash.sourceAutoJob': '🟣 Scheduled',
             'dash.sourceManualTitle': 'User pressed record',
             'dash.sourceAutoTitle': 'Auto-recorded when signal detected',
+            'dash.sourceAutoJobTitle': 'Scheduled automatic recording (Background Job)',
             'dash.outOfRange': '⚠ Out of receive range',
 
             /* ---- Dashboard: Radio controls ---- */
