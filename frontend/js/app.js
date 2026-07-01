@@ -1987,6 +1987,12 @@ const App = {
                 if (btn) btn.classList.remove('recording');
             }
         });
+
+        // After a WS reconnect, reload the latest recordings to pick up any
+        // new_recording events that were missed while the WS was down.
+        WS.on('reconnected', () => {
+            this.loadRecentRecordings();
+        });
     },
 
     // === Waterfall Display (scroll-blit, OpenWebRX style) ===

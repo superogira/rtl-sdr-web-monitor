@@ -7,6 +7,7 @@ const WS = {
     listeners: {},
     reconnectTimer: null,
     heartbeatTimer: null,
+    _wasConnected: false,  // tracks if we've connected at least once (for reconnect detection)
 
     connect() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -24,6 +25,16 @@ const WS = {
             this.ws.onopen = () => {
                 console.log('🔌 WebSocket connected');
                 this._updateStatus('🟢');
+                // If this isn't the first connection, it's a reconnect —
+                // notify listeners so they can refresh state (e.g. reload
+                // the latest recordings that may have been missed during
+                // the disconnect gap).
+                if (this._wasConnected) {
+                    console.log('🔄 WebSocket reconnected — refreshing state');
+                    this._emit('reconnected', {});
+                } else {
+                    this._wasConnected = true;
+                }
                 this._emit('connected', {});
                 this.startHeartbeat();
             };
@@ -117,6 +128,14 @@ const WS = {
             console.log('🔌 Reconnecting WebSocket...');
             this._doConnect();
         }, 3000);
+    },
+
+    /** Called after a successful reconnect so listeners can refresh
+     *  state that may have been missed while the WS was down (e.g.
+     *  reload the latest recordings feed to pick up any events that
+     *  were emitted during the disconnect gap). */
+    _notifyReconnected() {
+        this._emit('reconnected', {});
     },
 
     _updateStatus(icon) {
