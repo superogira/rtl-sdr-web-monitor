@@ -718,6 +718,14 @@ class DeviceCapture:
         else:
             actual_center = self.center_hz
             actual_sr = self.sample_rate
+        # Guard: if the shared client reported a None/0 sample_rate (e.g.
+        # during RTL-TCP reconnect), fall back to our configured value.
+        # Without this, compute_signal_level receives sample_rate=None →
+        # "unsupported operand type(s) for /: 'NoneType' and 'NoneType'"
+        # on every chunk, which silently breaks squelch and leaves signal_level
+        # stuck at -120 dB.
+        if not actual_sr or actual_sr <= 0:
+            actual_sr = self.sample_rate
 
         # === DIAGNOSTIC: log actual tuner state + per-channel signal level
         # every ~5s so we can compare JOB-alone vs JOB+LIVE behavior.
@@ -920,6 +928,20 @@ class DeviceCapture:
                 logger.warning(
                     f"DeviceCapture process error freq={ch.frequency_hz}: {e}"
                 )
+                # If the channel is stuck "recording" because DSP errors
+                # keep skipping the gate/silence logic, force-finish it so
+                # it doesn't hold is_recording=True forever (the
+                # "🔒อัดอยู่" stuck symptom). We only force-finish if the
+                # recording has been running longer than max_recording_duration
+                # OR silence_timeout has clearly elapsed.
+                if ch.is_recording and ch.start_time:
+                    elapsed = time.time() - ch.start_time
+                    if elapsed > self.max_recording_duration:
+                        logger.warning(
+                            f"📼 [job={self.job_id}] Force-finish stuck recording "
+                            f"{ch.frequency_hz/1e6:.4f} MHz (DSP error + elapsed {elapsed:.0f}s)"
+                        )
+                        await self._finish_recording(ch)
 
     async def _finish_recording(self, ch: _FrequencyChannel) -> None:
         """Save buffered audio to WAV + DB, then reset channel state."""
