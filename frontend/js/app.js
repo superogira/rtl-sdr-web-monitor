@@ -161,6 +161,10 @@ const App = {
             // Sync sliders + SRATE button active state from backend reality
             this.syncControlsFromStatus(status);
             this.updateUI();
+            // If already connected, fetch capabilities (sample rates + gains)
+            if (status.connected) {
+                this.loadCapabilities();
+            }
             console.log('🔄 State synced:', status);
         } catch (err) {
             console.warn('Sync failed:', err);
