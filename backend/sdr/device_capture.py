@@ -297,6 +297,16 @@ class DeviceCapture:
         self.min_recording_duration = min_recording_duration
         self.audio_rate = settings.AUDIO_SAMPLE_RATE
 
+        # Build frequency channels FIRST so len(self.channels) is valid when
+        # sizing the DSP thread pool below. (Previously self.channels was
+        # referenced in the ThreadPoolExecutor's max_workers= BEFORE it was
+        # assigned, raising AttributeError on every job start and silently
+        # breaking ALL scheduled recordings.)
+        self.channels: List[_FrequencyChannel] = [
+            _FrequencyChannel(f, self.center_hz, self.audio_rate)
+            for f in (window.frequencies or [])
+        ]
+
         # Dedicated thread pool for the per-channel CPU-heavy DSP step
         # (compute_signal_level ~21 ms + demod.process ~15 ms at 2.4 MSPS, per
         # channel per 50 ms chunk). With N channels that's N × ~36 ms every
@@ -310,12 +320,6 @@ class DeviceCapture:
             max_workers=max(2, len(self.channels)),
             thread_name_prefix=f"job-dsp-{job.id[:8]}",
         )
-
-        # Build frequency channels
-        self.channels: List[_FrequencyChannel] = [
-            _FrequencyChannel(f, self.center_hz, self.audio_rate)
-            for f in (window.frequencies or [])
-        ]
 
         # Resolve device host/port from the SdrDevice row
         self._host: Optional[str] = None

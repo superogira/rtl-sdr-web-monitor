@@ -1564,7 +1564,15 @@ class SDRManager:
                         rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
                         rec_info_copy["stt_duration"] = stt_dur
-                        self._new_recordings.append({**rec_info_copy, "_transcribed": True})
+                        # Broadcast the transcript update to connected WebSocket
+                        # clients so the live feed updates in real time. Without
+                        # this, the frontend only saw the initial new_recording
+                        # (transcript=None) and required a page refresh.
+                        for cb in self._callbacks:
+                            try:
+                                await cb({**rec_info_copy, "_transcribed": True})
+                            except Exception as cb_e:
+                                logger.error(f"Callback error (STT update): {cb_e}")
                         logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
                         # Enqueue keyword-alert evaluation (non-blocking).
                         try:
@@ -1756,7 +1764,13 @@ class SDRManager:
                         rec_info_copy["stt_model"] = model
                         rec_info_copy["stt_error"] = error
                         rec_info_copy["stt_duration"] = stt_dur
-                        self._new_recordings.append({**rec_info_copy, "_transcribed": True})
+                        # Broadcast the transcript update to connected WebSocket
+                        # clients so the live feed updates in real time.
+                        for cb in self._callbacks:
+                            try:
+                                await cb({**rec_info_copy, "_transcribed": True})
+                            except Exception as cb_e:
+                                logger.error(f"Callback error (STT update): {cb_e}")
                         logger.info(f"✅ Auto-transcribed {rec_id}: {len(text)} chars (provider={provider}, model={model}, duration={stt_dur}s)")
                         # Enqueue keyword-alert evaluation (non-blocking).
                         try:

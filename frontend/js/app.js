@@ -3355,8 +3355,16 @@ const App = {
     },
 
     addLiveFeedItem(data) {
-        this.recordings.unshift(data);
-        if (this.recordings.length > 20) this.recordings.pop();
+        // STT completion re-broadcasts the same recording id with the
+        // transcript filled in. Update the existing item in place so the
+        // feed shows the text without requiring a page refresh.
+        const existingIdx = this.recordings.findIndex(r => r && r.id === data.id);
+        if (existingIdx >= 0) {
+            this.recordings[existingIdx] = { ...this.recordings[existingIdx], ...data };
+        } else {
+            this.recordings.unshift(data);
+            if (this.recordings.length > 20) this.recordings.pop();
+        }
         this.renderLiveFeed();
     },
 
