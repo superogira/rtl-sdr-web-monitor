@@ -213,6 +213,9 @@ class _FrequencyChannel:
         self.bandwidth_hz = int(freq.bandwidth_hz)
         self.label = freq.label
         self.audio_rate = audio_rate
+        # VFO passband margin ratio (default 0.45; overridden by DeviceCapture
+        # from the System Policy "sdr_vfo_margin_ratio" app setting).
+        self._margin_ratio: float = 0.45
         # Streaming demodulator carrying filter state across chunks
         self.demod = StreamingDemodulator()
         self.demod.set_vfo_offset(self.offset_hz)
@@ -249,7 +252,14 @@ class _FrequencyChannel:
         a recording, the caller should finish that recording to avoid
         splicing audio from different frequencies.
         """
-        max_offset = sample_rate * 0.45  # 45% margin to avoid edge aliasing
+        # Use the same margin ratio as the System Policy (sdr_vfo_margin_ratio),
+        # defaulting to 0.45 only if the setting hasn't been loaded yet.
+        # This was previously hardcoded to 0.45, which was NARROWER than the
+        # System Policy value (e.g. 0.49) → channels near the passband edge
+        # were incorrectly marked "out of passband" and skipped → stuck at
+        # -120 dB in the dashboard.
+        ratio = getattr(self, '_margin_ratio', 0.45)
+        max_offset = sample_rate * ratio
         new_offset = float(self.frequency_hz - actual_center_hz)
         if abs(new_offset) > max_offset:
             self.in_passband = False
@@ -396,6 +406,22 @@ class DeviceCapture:
             raise RuntimeError(
                 f"DeviceCapture: failed to connect {self._host}:{self._port}"
             )
+        # Load the VFO passband margin ratio from the System Policy setting
+        # (sdr_vfo_margin_ratio) so the JOB uses the SAME margin as the LIVE
+        # side. Previously this was hardcoded to 0.45, which was narrower
+        # than the configured 0.49 → channels near the passband edge were
+        # incorrectly marked "out of passband" and skipped → stuck at -120 dB.
+        try:
+            from backend.services.app_settings import get_setting
+            raw_ratio = await get_setting("sdr_vfo_margin_ratio", "0.49")
+            ratio = float(raw_ratio)
+            if 0.40 <= ratio <= 0.49:
+                for ch in self.channels:
+                    ch._margin_ratio = ratio
+                logger.info(f"📐 [job={self.job_id}] VFO margin ratio: {ratio}")
+        except Exception as e:
+            logger.warning(f"Failed to load VFO margin ratio: {e}")
+
         # CRITICAL FIX: explicitly apply tuner settings to the HARDWARE.
         # preconfigure() only writes Python mirrors on the shared RtlTcpClient;
         # it does NOT send commands to the dongle. And _ensure_connected()
