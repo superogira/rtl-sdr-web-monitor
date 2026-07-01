@@ -116,6 +116,10 @@ const API = {
         async setVFOMargin(ratio) {
             return API.request('POST', '/api/sdr/vfo-margin', { ratio: parseFloat(ratio) });
         },
+        async getCapabilities() {
+            return API.request('GET', '/api/sdr/capabilities');
+        },
+
         async setSampleRate(rate) {
             return API.request('POST', '/api/sdr/sample-rate', { sample_rate: rate });
         },

@@ -218,6 +218,20 @@ async def set_max_listeners(
     return await sdr_manager.set_max_listeners(req.max_listeners)
 
 
+@router.get("/capabilities")
+async def get_capabilities(
+    current_user: User = Depends(get_current_user),
+):
+    """Get supported sample rates and gains for the connected device."""
+    if not sdr_manager.client or not sdr_manager.client.connected:
+        raise HTTPException(status_code=400, detail="Not connected")
+    try:
+        caps = sdr_manager.client.get_capabilities()
+        return caps
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/sample-rate")
 async def set_sample_rate(
     req: SampleRateRequest,

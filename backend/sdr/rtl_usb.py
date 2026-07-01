@@ -395,3 +395,22 @@ class RtlUsbClient:
             "device_index": self.device_index,
             "serial": self.serial,
         }
+
+    def get_capabilities(self) -> dict:
+        """Return supported sample rates and gains for this device."""
+        gains = []
+        if self._sdr:
+            try:
+                gains = list(self._sdr.valid_gains)
+            except Exception:
+                pass
+        if not gains:
+            gains = [0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7,
+                     16.6, 19.7, 20.7, 22.9, 25.4, 28.0, 29.7, 32.8, 33.8,
+                     36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0,
+                     49.6]
+        return {
+            "sample_rates": sorted(VALID_SAMPLE_RATES),
+            "gains": gains,
+            "tuner_type": "R820T2",
+        }

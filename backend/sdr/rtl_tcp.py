@@ -205,6 +205,21 @@ class RtlTcpClient:
             self.connected = False
             return None
 
+    def get_capabilities(self) -> dict:
+        """Return supported sample rates and gains for RTL-TCP."""
+        # RTL-TCP doesn't have a direct query command, so we return
+        # the standard RTL-SDR values. These work for all R820T/R820T2 tuners.
+        return {
+            "sample_rates": sorted([250000, 1024000, 1536000, 1792000,
+                                     1920000, 2048000, 2160000, 2400000,
+                                     2560000, 2880000, 3200000]),
+            "gains": [0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7,
+                      16.6, 19.7, 20.7, 22.9, 25.4, 28.0, 29.7, 32.8, 33.8,
+                      36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0,
+                      49.6],
+            "tuner_type": "R820T2",
+        }
+
     def get_status(self) -> dict:
         """Get current SDR status."""
         return {

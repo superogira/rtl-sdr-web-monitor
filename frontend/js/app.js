@@ -301,6 +301,47 @@ const App = {
         }
     },
 
+    /** Fetch device capabilities (supported sample rates + gains) and update UI. */
+    async loadCapabilities() {
+        try {
+            const caps = await API.sdr.getCapabilities();
+            this._capabilities = caps;
+            this._renderSampleRateButtons();
+            this._updateGainControls();
+        } catch (e) {
+            // Not connected or error — use fallback defaults
+            console.warn('Could not load capabilities:', e);
+            this._renderSampleRateButtons(); // uses defaults
+        }
+    },
+
+    /** Render sample rate buttons from _capabilities (or defaults). */
+    _renderSampleRateButtons() {
+        const container = document.getElementById('srate-buttons');
+        if (!container) return;
+        const rates = (this._capabilities && this._capabilities.sample_rates)
+            || [250000, 1024000, 1536000, 2048000, 2400000, 3200000];
+        const currentSr = this._sampleRate || 2048000;
+        const labelFor = (sr) => {
+            if (sr >= 1e6) return (sr / 1e6).toFixed(sr % 1e6 === 0 ? 0 : 2) + 'M';
+            return (sr / 1e3).toFixed(0) + 'k';
+        };
+        container.innerHTML = rates.map(sr =>
+            `<button class="step-btn ${sr === currentSr ? 'active' : ''}" data-srate="${sr}">${labelFor(sr)}</button>`
+        ).join('');
+    },
+
+    /** Update gain slider/input limits from _capabilities. */
+    _updateGainControls() {
+        const caps = this._capabilities;
+        if (!caps || !caps.gains || !caps.gains.length) return;
+        const maxGain = Math.ceil(Math.max(...caps.gains));
+        const slider = document.getElementById('gain-slider');
+        const input = document.getElementById('gain-input');
+        if (slider) { slider.max = maxGain; }
+        if (input) { input.max = maxGain; }
+    },
+
     async toggleStream() {
         const btn = document.getElementById('btn-stream');
         if (!btn) return;
@@ -530,7 +571,7 @@ const App = {
             });
         }
 
-        // Sample rate selector
+        // Sample rate selector (buttons created dynamically in loadCapabilities)
         const srateButtons = document.getElementById('srate-buttons');
         if (srateButtons) {
             srateButtons.addEventListener('click', (e) => {
