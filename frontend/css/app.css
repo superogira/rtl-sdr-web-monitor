@@ -1279,10 +1279,10 @@ a:hover {
    center auto / per-listener auto / job captures) so the operator has a
    single clear "recording in progress" cue without a separate indicator. */
 .radio-btn.rec-active {
-    border-color: var(--accent-red);
-    background: var(--accent-red)20;
-    color: var(--accent-red);
-    animation: pulse-rec 1s infinite;
+    border-color: var(--accent-red) !important;
+    background: var(--accent-red) !important;
+    color: #fff !important;
+    animation: blink 1s infinite;
 }
 
 /* === Volume Control === */
