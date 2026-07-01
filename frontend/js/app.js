@@ -1565,10 +1565,8 @@ const App = {
             data = arguments[2] || {};
         }
 
-        // Inline button indicator (next to record button).
-        // Show if ANY recording is active (manual / center auto / per-listener
-        // auto / job captures) so the icon reflects all activity, not just the
-        // global center auto-record.
+        // Blink the auto-record button when ANY recording is active, instead
+        // of showing a separate "🔄REC" indicator next to the record button.
         const hasManual = !!(data && data.manual_recording);
         const hasListenerRec = !!(data && Array.isArray(data.listener_recordings) &&
             data.listener_recordings.some(l => l.manual_recording || l.auto_recording));
@@ -1577,20 +1575,12 @@ const App = {
                 Array.isArray(cap.frequencies) && cap.frequencies.some(f => f.is_recording)
             ));
         const anyActive = isAuto || hasManual || hasListenerRec || hasJobRec;
-
-        let el = document.getElementById('auto-rec-indicator');
-        if (anyActive) {
-            if (!el) {
-                el = document.createElement('span');
-                el.id = 'auto-rec-indicator';
-                el.style.cssText = 'font-size:0.7rem;color:var(--accent-yellow);margin-left:4px;animation:blink 1s infinite;';
-                const btn = document.getElementById('btn-record');
-                if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
-            }
-            el.textContent = '🔄REC';
-            el.title = I18n.t('dash.recStatusTitle', source || 'auto');
-        } else if (el) {
-            el.remove();
+        const autoBtn = document.getElementById('btn-auto-record');
+        if (autoBtn) {
+            autoBtn.classList.toggle('rec-active', anyActive);
+            autoBtn.title = anyActive
+                ? I18n.t('dash.recStatusTitle', source || 'auto')
+                : I18n.t('dash.autoRecordTitle');
         }
 
         // Recording status list (below clock) — shows ALL active recordings:
