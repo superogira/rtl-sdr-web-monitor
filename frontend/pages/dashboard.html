@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=30">
+    <link rel="stylesheet" href="/css/app.css?v=32">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -120,6 +120,7 @@
                             <button class="vfo-sel-btn vfo-sel-a" id="btn-vfo-a" data-i18n-title="dash.vfoSelA" title="เลือก VFO A เป็นเป้าหมายคลิก">A</button>
                             <span class="vfo-live" id="vfo-a-live"></span>
                             <span class="vfo-freq" id="vfo-a-freq">--- MHz</span>
+                            <button class="vfo-sched-btn admin-only" id="vfo-a-sched" data-i18n-title="dash.schedVfoA" title="ตั้งเวลาบันทึกเสียง VFO A" onclick="App.openVfoScheduleModal('A')">⏰</button>
                             <div class="vfo-sig-meter" data-i18n-title="dash.vfoSigA" title="กำลังสัญญาณ VFO A">
                                 <div class="vfo-sig-bars" id="vfo-a-sig-bars">
                                     <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
@@ -140,6 +141,7 @@
                             <button class="vfo-sel-btn vfo-sel-b" id="btn-vfo-b" data-i18n-title="dash.vfoSelB" title="เลือก VFO B เป็นเป้าหมายคลิก">B</button>
                             <span class="vfo-live" id="vfo-b-live"></span>
                             <span class="vfo-freq" id="vfo-b-freq">--- MHz</span>
+                            <button class="vfo-sched-btn admin-only" id="vfo-b-sched" data-i18n-title="dash.schedVfoB" title="ตั้งเวลาบันทึกเสียง VFO B" onclick="App.openVfoScheduleModal('B')">⏰</button>
                             <div class="vfo-sig-meter" data-i18n-title="dash.vfoSigB" title="กำลังสัญญาณ VFO B">
                                 <div class="vfo-sig-bars" id="vfo-b-sig-bars">
                                     <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
@@ -160,6 +162,7 @@
                             <button class="vfo-sel-btn vfo-sel-c" id="btn-vfo-c" data-i18n-title="dash.vfoSelC" title="เลือก VFO C เป็นเป้าหมายคลิก">C</button>
                             <span class="vfo-live" id="vfo-c-live"></span>
                             <span class="vfo-freq" id="vfo-c-freq">--- MHz</span>
+                            <button class="vfo-sched-btn admin-only" id="vfo-c-sched" data-i18n-title="dash.schedVfoC" title="ตั้งเวลาบันทึกเสียง VFO C" onclick="App.openVfoScheduleModal('C')">⏰</button>
                             <div class="vfo-sig-meter" data-i18n-title="dash.vfoSigC" title="กำลังสัญญาณ VFO C">
                                 <div class="vfo-sig-bars" id="vfo-c-sig-bars">
                                     <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
@@ -180,6 +183,7 @@
                             <button class="vfo-sel-btn vfo-sel-d" id="btn-vfo-d" data-i18n-title="dash.vfoSelD" title="เลือก VFO D เป็นเป้าหมายคลิก">D</button>
                             <span class="vfo-live" id="vfo-d-live"></span>
                             <span class="vfo-freq" id="vfo-d-freq">--- MHz</span>
+                            <button class="vfo-sched-btn admin-only" id="vfo-d-sched" data-i18n-title="dash.schedVfoD" title="ตั้งเวลาบันทึกเสียง VFO D" onclick="App.openVfoScheduleModal('D')">⏰</button>
                             <div class="vfo-sig-meter" data-i18n-title="dash.vfoSigD" title="กำลังสัญญาณ VFO D">
                                 <div class="vfo-sig-bars" id="vfo-d-sig-bars">
                                     <div class="vfo-bar"></div><div class="vfo-bar"></div><div class="vfo-bar"></div>
@@ -406,7 +410,8 @@
 <script src="/js/audio.js?v=16"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=8"></script>
-<script src="/js/app.js?v=58"></script>
-    <script src="/js/dashboard_jobs.js?v=3"></script>
+<script src="/js/app.js?v=60"></script>
+    <script src="/js/dashboard_jobs.js?v=4"></script>
+<script src="/js/recording_jobs.js?v=7"></script>
 </body>
 </html>

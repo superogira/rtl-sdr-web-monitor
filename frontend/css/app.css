@@ -1486,14 +1486,62 @@ a:hover {
 
 /* === Form Elements === */
 .form-group {
-    margin-bottom: 1rem;
+    margin-bottom: 12px;
 }
 
 .form-group label {
     display: block;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--text-secondary);
     margin-bottom: 4px;
+}
+
+/* Inputs/selects/textarea inside .form-group render at full width with the
+   app's surface styling. This mirrors the inline <style> in settings.html so
+   modals built by JS (e.g. RecordingJobsUI editor) look consistent on the
+   dashboard, which does NOT load settings.html's styles. */
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: 'JetBrains Mono', monospace;
+    box-sizing: border-box;
+}
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+}
+
+/* Two-column row used by modal forms (matches settings.html layout). */
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+/* Action button row (right-aligned, like settings.html). */
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+/* Primary button (cyan) used in modal save buttons. */
+.btn-primary {
+    background: var(--accent-cyan);
+    color: #000;
+    font-weight: 600;
+}
+.btn-primary:hover {
+    opacity: 0.9;
 }
 
 .form-input {
@@ -2147,6 +2195,13 @@ a:hover {
     background: rgba(255,255,255,0.02);
     font-size: 0.78rem;
     transition: border-color 0.15s, background 0.15s;
+    cursor: pointer;
+}
+/* Hover highlight for non-active rows so the user gets feedback that the
+   whole bar (not just the A/B/C/D button) is clickable to select a VFO. */
+.vfo-row:not(.vfo-active):hover {
+    border-color: rgba(255, 255, 255, 0.35);
+    background: rgba(255, 255, 255, 0.06);
 }
 .vfo-row.vfo-active {
     border-color: rgba(234, 179, 8, 0.7);
@@ -2295,6 +2350,26 @@ a:hover {
 @keyframes vfo-solo-pulse {
     0%, 100% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.5); }
     50%      { box-shadow: 0 0 10px rgba(234, 179, 8, 0.9); }
+}
+
+/* VFO schedule-record button (⏰). Opens the recording-job editor prefilled
+   with this VFO's current state. Admin-only. Same compact styling as the
+   mute button so the row stays tidy. */
+.vfo-sched-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    line-height: 1;
+    color: var(--text-secondary);
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.vfo-sched-btn:hover {
+    color: var(--accent-cyan);
+    border-color: var(--accent-cyan);
+    background: rgba(34, 211, 238, 0.12);
 }
 
 /* VFO count control (+/- buttons + label). Now placed inside the main

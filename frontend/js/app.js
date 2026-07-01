@@ -873,6 +873,14 @@ const App = {
             if (sp) sp.addEventListener('change', (e) => this.setVfoSpeaker(i, e.target.value));
             const mu = document.getElementById(`vfo-${lo}-mute`);
             if (mu) this._bindVfoMuteButton(mu, i);
+            // Click anywhere on the row (the empty bar / freq label) selects
+            // this VFO — but NOT when clicking interactive controls (mute /
+            // speaker / schedule), which have their own handlers.
+            const row = document.getElementById(`vfo-row-${lo}`);
+            if (row) row.addEventListener('click', (e) => {
+                if (e.target.closest('button, select, input')) return;
+                this.selectActiveVfo(i);
+            });
         }
         // Initial state.
         this._updateVfoCountBtn();
@@ -1440,6 +1448,59 @@ const App = {
         if (typeof LiveAudio === 'undefined') return;
         LiveAudio.toggleMute(idx);
         this._updateVfoRows();
+    },
+
+    /**
+     * Open the recording-job editor modal prefilled with this VFO's current
+     * state (device, gain, ppm, start freq, sample rate, frequency, squelch,
+     * demod, bandwidth). Admin only.
+     *
+     * @param {string} vfoId — 'A' | 'B' | 'C' | 'D'
+     */
+    async openVfoScheduleModal(vfoId) {
+        if (typeof Auth === 'undefined' || !Auth.isAdmin()) return;
+        const idx = this._VFO_IDS.indexOf(vfoId);
+        if (idx < 0) return;
+
+        // Gather current values from the dashboard state + DOM.
+        const centerFreq = this.currentFreq || 0;
+        const vfoOffset = this._vfos[idx] ? (this._vfos[idx].offsetHz || 0) : 0;
+        const vfoFreq = centerFreq + vfoOffset;
+
+        const gainEl = document.getElementById('gain-input');
+        const ppmEl = document.getElementById('ppm-input');
+        const sqEl = document.getElementById('squelch-input');
+
+        const sr = this._sampleRate || 2048000;
+        const prefill = {
+            deviceId: (typeof DashboardJobs !== 'undefined' && DashboardJobs.activeDeviceId) ? DashboardJobs.activeDeviceId : null,
+            gain: gainEl ? parseInt(gainEl.value) : 30,
+            freqCorrectionPpm: ppmEl ? parseInt(ppmEl.value) : 0,
+            // Start frequency is the LOWER EDGE of the passband
+            // (center - sampleRate/2), so the VFO frequency lands inside the
+            // recordable range. Using the center freq here would put the VFO
+            // at the very bottom edge of the window.
+            startFreqHz: Math.round(centerFreq - sr / 2),
+            sampleRate: sr,
+            frequencyHz: vfoFreq,
+            squelchDb: sqEl ? parseFloat(sqEl.value) : -70,
+            demodMode: this.currentMode || 'FM',
+            bandwidthHz: this._channelBw || 12000,
+        };
+
+        if (typeof RecordingJobsUI === 'undefined') {
+            alert('RecordingJobsUI not loaded');
+            return;
+        }
+
+        // Ensure devices list is loaded (required by the editor's device dropdown).
+        try {
+            await RecordingJobsUI.refresh();
+        } catch (e) {
+            console.warn('openVfoScheduleModal: refresh failed', e);
+        }
+
+        RecordingJobsUI.openEditorForVfo(prefill);
     },
 
     // Server confirmed THIS listener's per-listener squelch (the value the
