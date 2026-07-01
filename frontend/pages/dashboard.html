@@ -311,13 +311,12 @@
 
                 <!-- Record toggle -->
                 <div class="radio-controls">
-                    <button class="radio-btn" id="btn-record" data-i18n-title="dash.recordTitle" title="บันทึก (กดอีกครั้งเพื่อหยุด)">⏺</button>
-                    <!-- Per-user AUTO-record toggle (live listening only).
-                         When ON, the server auto-records the channel THIS user is
-                         listening to, gated by the user's own squelch + signal —
-                         fully independent of other users and of the global
-                         auto-record. Requires "ฟังสด" to be active. -->
-                    <button class="radio-btn" id="btn-auto-record" data-i18n-title="dash.autoRecordTitle" title="อัดอัตโนมัติของฉัน (ต้องกดฟังสดก่อน)">🔄</button>
+                    <!-- Combined record button:
+                         - QUICK CLICK: toggle MANUAL recording (start/stop).
+                         - LONG-PRESS (≥500ms): toggle AUTO-record (auto-capture
+                           gated by squelch). Requires "ฟังสด" to be active.
+                         The separate 🔄 button has been merged into this one. -->
+                    <button class="radio-btn" id="btn-record" data-i18n-title="dash.recordTitle" title="กด = อัดด้วยตนเอง / กดค้าง = อัดอัตโนมัติ (ต้องกดฟังสดก่อน)">⏺</button>
                 </div>
 
                 <!-- Volume control -->
