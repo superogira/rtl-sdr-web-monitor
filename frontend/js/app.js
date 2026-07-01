@@ -1565,20 +1565,24 @@ const App = {
             data = arguments[2] || {};
         }
 
-        // Blink the auto-record button when ANY recording is active, instead
-        // of showing a separate "🔄REC" indicator next to the record button.
-        const hasManual = !!(data && data.manual_recording);
-        const hasListenerRec = !!(data && Array.isArray(data.listener_recordings) &&
-            data.listener_recordings.some(l => l.manual_recording || l.auto_recording));
-        const hasJobRec = !!(data && Array.isArray(data.active_job_captures) &&
-            data.active_job_captures.some(cap =>
-                Array.isArray(cap.frequencies) && cap.frequencies.some(f => f.is_recording)
-            ));
-        const anyActive = isAuto || hasManual || hasListenerRec || hasJobRec;
+        // Blink the auto-record button ONLY when THIS user's per-listener
+        // auto-record (or manual record) is actively capturing audio.
+        // Background scheduled jobs and other users' recordings do NOT
+        // trigger the blink — only the user's own button press does.
+        let myRecActive = false;
+        if (data && Array.isArray(data.listener_recordings)) {
+            const myUserId = (typeof Auth !== 'undefined' && Auth.getUser()) ? Auth.getUser().id : null;
+            const myListeners = myUserId
+                ? data.listener_recordings.filter(l => l.user_id === myUserId)
+                : [];
+            // If we couldn't identify our user ID, fall back to checking if
+            // this browser's auto-record toggle is ON (the button was pressed).
+            myRecActive = myListeners.some(l => l.auto_recording || l.manual_recording);
+        }
         const autoBtn = document.getElementById('btn-auto-record');
         if (autoBtn) {
-            autoBtn.classList.toggle('rec-active', anyActive);
-            autoBtn.title = anyActive
+            autoBtn.classList.toggle('rec-active', myRecActive);
+            autoBtn.title = myRecActive
                 ? I18n.t('dash.recStatusTitle', source || 'auto')
                 : I18n.t('dash.autoRecordTitle');
         }
