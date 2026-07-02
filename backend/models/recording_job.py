@@ -49,8 +49,8 @@ class RecordingJob(Base):
     name = Column(String(100), nullable=True,
                   comment="Optional human label for the job")
     device_id = Column(String(36), ForeignKey("sdr_devices.id"),
-                       nullable=False,
-                       comment="Exclusive: one active job per device")
+                       nullable=True,
+                       comment="Exclusive: one active job per device; NULL when the device has been deleted")
     mode = Column(String(20), nullable=False, default=RecordingJobMode.ALWAYS.value)
     enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),

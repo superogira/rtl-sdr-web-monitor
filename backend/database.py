@@ -249,6 +249,24 @@ def _run_migrations(conn):
         ))
         print("[migration] Added 'device_name' column to alert_events table")
 
+    # === recording_jobs: make device_id nullable (allow deleting devices without deleting jobs) ===
+    # SQLite doesn't support ALTER COLUMN, so we rebuild the table if device_id is still NOT NULL.
+    result = conn.execute(text("PRAGMA table_info(recording_jobs)"))
+    rj_cols = {row[1]: row for row in result}
+    if "device_id" in rj_cols and rj_cols["device_id"][3] == 1:
+        # device_id is NOT NULL (notnull=1) → rebuild table to make it nullable.
+        # PRAGMA legacy_alter_table=ON makes ALTER TABLE bypass FK checks during
+        # the rename, so the child table (recording_job_windows.job_id) doesn't
+        # block the operation. (foreign_keys=OFF alone isn't sufficient inside
+        # run_sync because the connect-event listener re-enables it.)
+        conn.execute(text("PRAGMA legacy_alter_table=ON"))
+        conn.execute(text("CREATE TABLE recording_jobs_new (id VARCHAR(36) NOT NULL PRIMARY KEY, name VARCHAR(100), device_id VARCHAR(36) REFERENCES sdr_devices(id), mode VARCHAR(20) NOT NULL, enabled BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"))
+        conn.execute(text("INSERT INTO recording_jobs_new (id, name, device_id, mode, enabled, created_at, updated_at) SELECT id, name, device_id, mode, enabled, created_at, updated_at FROM recording_jobs"))
+        conn.execute(text("DROP TABLE recording_jobs"))
+        conn.execute(text("ALTER TABLE recording_jobs_new RENAME TO recording_jobs"))
+        conn.execute(text("PRAGMA legacy_alter_table=OFF"))
+        print("[migration] Made recording_jobs.device_id nullable (table rebuilt)")
+
 
 def _seed_app_settings(conn):
     """Seed default global app settings (STT config, etc.) if not present.

@@ -147,6 +147,7 @@ const RecordingJobsUI = {
     },
 
     _renderJobCard(j) {
+        const noDevice = !j.device_id;
         const devName = this._escape(this._deviceName(j.device_id));
         const enabledBadge = j.enabled
             ? '<span class="status-badge status-on">' + I18n.t('rje.enabled') + '</span>'
@@ -173,14 +174,19 @@ const RecordingJobsUI = {
             </div>`;
         }).join('');
 
+        const cardBorder = noDevice ? 'border:2px solid var(--accent-red, #ef4444);' : 'border:1px solid var(--border);';
+        const deviceLine = noDevice
+            ? `<div style="font-size:0.78rem; color:var(--accent-red, #ef4444); font-weight:600;">⚠️ ${I18n.t('rje.noDeviceWarning')}</div>`
+            : `<div style="font-size:0.78rem; color:var(--text-secondary);">🔌 ${devName}</div>`;
+
         return `
-        <div style="background:var(--surface-1); border:1px solid var(--border); border-radius:6px; padding:12px; margin-bottom:8px;">
+        <div style="background:var(--surface-1); ${cardBorder} border-radius:6px; padding:12px; margin-bottom:8px;">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                 <div style="flex:1; min-width:200px;">
                     <strong>${this._escape(j.name || devName)}</strong>
                     ${enabledBadge}
                     <span class="status-badge" style="background:rgba(14,165,233,0.15); color:var(--accent-cyan);">${modeLabel}</span>
-                    <div style="font-size:0.78rem; color:var(--text-secondary);">🔌 ${devName}</div>
+                    ${deviceLine}
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     <button class="btn btn-sm" onclick="RecordingJobsUI.toggleEnabled('${j.id}', ${!j.enabled})">
