@@ -1283,9 +1283,10 @@ async def delete_device(
     recs = (await db.execute(select(Recording).where(Recording.device_id == device_id))).scalars().all()
     for rec in recs:
         rec.device_id = None
+    # recording_jobs.device_id is NOT NULL — must delete the jobs, not null them.
     jobs = (await db.execute(select(RecordingJob).where(RecordingJob.device_id == device_id))).scalars().all()
     for job in jobs:
-        job.device_id = None
+        await db.delete(job)
 
     was_active = bool(device.is_active)
     await db.delete(device)
