@@ -553,6 +553,7 @@ async def get_alert(event_id: str, current_user: User = Depends(get_current_user
 
 
 @alerts_router.delete("/{event_id}", dependencies=[Depends(require_admin)])
+@alerts_router.post("/{event_id}/delete", dependencies=[Depends(require_admin)])
 async def delete_alert(event_id: str, db: AsyncSession = Depends(get_db)):
     """Delete an alert event (admin only).
 

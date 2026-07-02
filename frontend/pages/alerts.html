@@ -233,7 +233,7 @@ const Alerts = {
 <div class="fg"><label>${I18n.t('al.delivery')}</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;">${deliveries}</div> ${resendBtn}</div>
 <div class="fg"><label>${I18n.t('al.notes')}</label><textarea id="ad-notes" rows="2" ${isAdmin?'':'disabled'}>${this._esc(e.notes||'')}</textarea>${isAdmin?`<div class="actions-row"><button class="btn btn-sm btn-primary" onclick="Alerts.saveNotes()">💾 ${I18n.t('al.saveNotes')}</button></div>`:''}</div>
 <div class="fg"><label>${I18n.t('al.transcript')}</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:0.8rem;max-height:160px;overflow-y:auto;white-space:pre-wrap;">${this._esc(e.snippet||'')}</div></div>
-<div class="actions-row">${isAdmin?`<a class="btn btn-sm" href="/recordings" target="_blank">🔗 ${I18n.t('al.gotoRecordings')}</a>`:''} ${delBtn}</div>
+<div class="actions-row">${isAdmin?`<a class="btn btn-sm" href="/recordings" target="_blank">${I18n.t('al.gotoRecordings')}</a>`:''} ${delBtn}</div>
 `;
     },
 
