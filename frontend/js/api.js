@@ -366,6 +366,7 @@ const API = {
         async get(id) { return API.request('GET',`/api/alerts/${id}`); },
         async ack(id, acknowledged=true) { return API.request('POST',`/api/alerts/${id}/ack`, { acknowledged }); },
         async delete(id) { return API.request('POST', `/api/alerts/${id}/delete`); },
+        async bulkDelete(ids) { return API.request('POST', '/api/alerts/bulk-delete', { ids }); },
         async verdict(id, verdict) { return API.request('POST',`/api/alerts/${id}/verdict`, { verdict }); },
         async notes(id, notes) { return API.request('POST',`/api/alerts/${id}/notes`, { notes }); },
         async resend(id, channel_ids) { return API.request('POST',`/api/alerts/${id}/resend`, { channel_ids }); },

@@ -569,6 +569,30 @@ async def delete_alert(event_id: str, db: AsyncSession = Depends(get_db)):
     return {"success": True, "id": event_id}
 
 
+class BulkDeleteIn(BaseModel):
+    ids: list[str]
+
+
+@alerts_router.post("/bulk-delete", dependencies=[Depends(require_admin)])
+async def bulk_delete_alerts(req: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    """Bulk delete alert events (admin only).
+
+    Cascade-deletes associated AlertDelivery rows automatically.
+    Returns count of deleted and not-found ids.
+    """
+    if not req.ids:
+        raise HTTPException(400, "ids must not be empty")
+    res = await db.execute(select(AlertEvent).where(AlertEvent.id.in_(req.ids)))
+    events = res.scalars().all()
+    deleted_ids = [e.id for e in events]
+    found_set = set(deleted_ids)
+    not_found = [i for i in req.ids if i not in found_set]
+    for ev in events:
+        await db.delete(ev)
+    await db.commit()
+    return {"success": True, "deleted_count": len(deleted_ids), "deleted_ids": deleted_ids, "not_found_ids": not_found}
+
+
 class AckIn(BaseModel):
     acknowledged: bool = True
 

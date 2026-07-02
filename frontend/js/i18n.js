@@ -1776,6 +1776,10 @@ const I18n = {
             'al.unspecified': 'Unspecified',
             'al.failGeneric': 'Failed: ',
             'al.deleteConfirm': 'Delete this alert? (This removes AlertEvent + Delivery History but does NOT delete the recording.)',
+            'al.selectAll': 'Select all',
+            'al.clearSel': 'Clear selection',
+            'al.deleteSelected': '🗑 Delete selected (0)',
+            'al.bulkDeleteConfirm': (n) => `Delete ${n} selected items?`,
             'al.detailSelectHint': '← Select an alert on the left',
             'al.rule': 'Rule',
 

@@ -58,6 +58,10 @@
 .kw-pill .sc{opacity:0.7;font-size:0.64rem;margin-left:2px;}
 .actions-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
 .empty{padding:30px;text-align:center;color:var(--text-muted);font-size:0.85rem;}
+.ad-bulk-bar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;font-size:0.78rem;}
+.ad-bulk-bar .btn{padding:3px 8px;font-size:0.7rem;}
+.ad-item-checkbox{width:16px;height:16px;cursor:pointer;accent-color:var(--accent-cyan);flex-shrink:0;margin-top:2px;}
+.ad-item.bulk-selected{border-color:var(--accent-cyan);background:rgba(34,211,238,0.06);}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:1000;}
 .modal-overlay.show{display:flex;}
 .modal{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:18px;max-width:500px;width:90%;}
@@ -105,6 +109,11 @@
 </select>
 <button class="btn btn-sm" onclick="Alerts.load()" data-i18n="al.refresh">🔄 รีเฟรช</button>
 </div>
+<div id="ad-bulk-bar" class="ad-bulk-bar" style="display:none;">
+<label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="ad-select-all" class="ad-item-checkbox" onchange="Alerts._onSelectAll(this.checked)"> <span data-i18n="al.selectAll">เลือกทั้งหมด</span></label>
+<button class="btn" onclick="Alerts._clearSel()" data-i18n="al.clearSel">ยกเลิกการเลือก</button>
+<button id="ad-bulk-delete-btn" class="btn btn-red" onclick="Alerts._bulkDelete()" disabled data-i18n="al.deleteSelected">🗑 ลบรายการที่เลือก (0)</button>
+</div>
 <div class="ad-list" id="ad-list"><div class="empty" data-i18n="al.loading">กำลังโหลด...</div></div>
 </div>
 </div>
@@ -129,7 +138,7 @@
 </div>
 </div>
 
-<script src="/js/api.js?v=14"></script>
+<script src="/js/api.js?v=15"></script>
 <script src="/js/auth.js?v=5"></script>
 <script>
 const Alerts = {
@@ -179,22 +188,65 @@ const Alerts = {
         } catch(e) { if(!silent) alert(I18n.t('al.loadFail')+': '+(e.detail||e.message||e)); }
     },
 
+    _isAdmin: null,
+    _isAdminChecked: false,
+    _getIsAdmin() { if(!this._isAdminChecked){this._isAdmin=Auth.isAdmin();this._isAdminChecked=true;} return this._isAdmin; },
+    _selectedIds: new Set(),
+
     render() {
         const el = document.getElementById('ad-list');
-        if (!this.items.length) { el.innerHTML = `<div class="empty">${I18n.t('al.noAlerts')}</div>`; return; }
+        const isAdmin = this._getIsAdmin();
+        // Show/hide bulk bar
+        document.getElementById('ad-bulk-bar').style.display = (isAdmin && this.items.length) ? '' : 'none';
+        if (!this.items.length) { el.innerHTML = `<div class="empty">${I18n.t('al.noAlerts')}</div>`; this._syncSelUI(); return; }
         el.innerHTML = this.items.map(e => {
             const sel = (this.current && this.current.id===e.id) ? 'selected' : '';
+            const bulkSel = this._selectedIds.has(e.id) ? 'bulk-selected' : '';
             const dt = e.recorded_at ? this._fmt(e.recorded_at) : this._fmt(e.created_at);
             const kws = (e.matched_keywords||[]).map(m=>`<span class="kw-pill">${this._esc(m.keyword)}<span class="sc">${m.score>=0?'+':''}${m.score}</span></span>`).join('');
-            return `<div class="ad-item ${sel}" onclick="Alerts.select('${e.id}')">
-<div class="top">
-<div><span class="badge sev-${e.severity}">${e.severity}</span> ${e.verdict!=='unconfirmed'?`<span class="badge verd-${e.verdict}">${e.verdict}</span>`:''} <b style="font-size:0.82rem;">${this._esc(e.rule_name||'—')}</b></div>
-<b style="font-size:0.85rem;color:var(--accent-cyan);">${e.total_score}</b>
+            const cb = isAdmin ? `<input type="checkbox" class="ad-item-checkbox" data-id="${e.id}" onclick="event.stopPropagation()" onchange="Alerts._onRowCheck('${e.id}', this.checked)" ${this._selectedIds.has(e.id)?'checked':''}>` : '';
+            return `<div class="ad-item ${sel} ${bulkSel}" onclick="Alerts.select('${e.id}')">
+<div class="top" style="${isAdmin?'gap:6px;':''}">
+${cb}
+<div style="flex:1;"><div style="display:flex;justify-content:space-between;gap:4px;"><div><span class="badge sev-${e.severity}">${e.severity}</span> ${e.verdict!=='unconfirmed'?`<span class="badge verd-${e.verdict}">${e.verdict}</span>`:''} <b style="font-size:0.82rem;">${this._esc(e.rule_name||'—')}</b></div><b style="font-size:0.85rem;color:var(--accent-cyan);">${e.total_score}</b></div></div>
 </div>
 <div class="meta">${e.frequency_mhz||'—'} MHz · ${e.mode||''} · 📡 ${this._esc(e.device_name||I18n.t('al.unspecified'))} · ${dt}</div>
 <div class="kws">${kws}</div>
 </div>`;
         }).join('');
+        this._syncSelUI();
+    },
+
+    _onRowCheck(id, on) { if(on) this._selectedIds.add(id); else this._selectedIds.delete(id); this._syncSelUI(); this.render(); },
+    _onSelectAll(on) {
+        if(on) { this.items.forEach(e=>this._selectedIds.add(e.id)); }
+        else { this._selectedIds.clear(); }
+        this.render();
+    },
+    _clearSel() { this._selectedIds.clear(); this.render(); },
+    _syncSelUI() {
+        const n = this._selectedIds.size;
+        const btn = document.getElementById('ad-bulk-delete-btn');
+        if(btn) { btn.disabled = n===0; btn.textContent = I18n.t('al.deleteSelected').replace('(0)',`(${n})`); }
+        const sa = document.getElementById('ad-select-all');
+        if(sa) {
+            const visible = this.items.map(e=>e.id);
+            const selectedVisible = visible.filter(id=>this._selectedIds.has(id));
+            sa.checked = visible.length>0 && selectedVisible.length===visible.length;
+            sa.indeterminate = selectedVisible.length>0 && selectedVisible.length<visible.length;
+        }
+    },
+    async _bulkDelete() {
+        const ids = [...this._selectedIds];
+        if(!ids.length) return;
+        if(!confirm(I18n.t('al.bulkDeleteConfirm', ids.length))) return;
+        try {
+            const r = await API.alerts.bulkDelete(ids);
+            this._selectedIds.clear();
+            if(this.current && ids.includes(this.current.id)) { this.current=null; document.getElementById('ad-detail').innerHTML=`<div class="empty">${I18n.t('al.detailSelectHint')}</div>`; }
+            await this.load();
+            await this.loadStats();
+        } catch(e){ alert(I18n.t('al.failGeneric')+': '+(e.detail||e.message||e)); }
     },
 
     _fmt(iso){ try { return new Date(iso).toLocaleString('th-TH',{timeZone:getUserTimezone()}); } catch(e){ return iso; } },
