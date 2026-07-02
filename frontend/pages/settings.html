@@ -1506,6 +1506,8 @@
             const speed = localStorage.getItem('waterfall_speed') || '1';
             const fftSize = localStorage.getItem('fft_size') || '1024';
             const theme = localStorage.getItem('ui_theme') || 'classic';
+            const dbMin = localStorage.getItem('waterfall_db_min') || '-110';
+            const dbMax = localStorage.getItem('waterfall_db_max') || '-55';
             const elSpeed = document.getElementById('wf-speed');
             const elDbMin = document.getElementById('wf-db-min');
             const elDbMax = document.getElementById('wf-db-max');
@@ -1959,12 +1961,6 @@
                         <div class="form-group">
                             <label>${I18n.t('set.dev.ppmDefaultLabel')}</label>
                             <input type="number" id="dc-ppm" value="${defPpm}" min="-200" max="200">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                        </div>
-                        <div class="form-group">
                         </div>
                     </div>
                 `;
