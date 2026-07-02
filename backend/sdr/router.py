@@ -1274,6 +1274,19 @@ async def delete_device(
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
+    # Null out FK references from recordings and recording_jobs before deleting.
+    # SQLite's FK enforcement may or may not be active, so we handle it manually
+    # to avoid "FOREIGN KEY constraint failed" (500 Internal Server Error).
+    from backend.models.recording import Recording
+    from backend.models.recording_job import RecordingJob
+
+    recs = (await db.execute(select(Recording).where(Recording.device_id == device_id))).scalars().all()
+    for rec in recs:
+        rec.device_id = None
+    jobs = (await db.execute(select(RecordingJob).where(RecordingJob.device_id == device_id))).scalars().all()
+    for job in jobs:
+        job.device_id = None
+
     was_active = bool(device.is_active)
     await db.delete(device)
     await db.commit()
