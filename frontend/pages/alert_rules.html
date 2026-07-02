@@ -216,7 +216,8 @@ const Mng = {
 
     async init() {
         if (!Auth.requireAuth()) return;
-        if (!Auth.isAdmin()) { document.body.innerHTML = `<p style="padding:40px;text-align:center;color:var(--text-muted);">${I18n.t('ar.adminRequired')}</p>`; return; }
+        this._isAdmin = Auth.isAdmin();
+        if (!this._isAdmin) { document.querySelectorAll("h2 .ar-btn-primary").forEach(b => b.style.display = "none"); }
         await this.reload();
     },
 
@@ -263,7 +264,8 @@ const Mng = {
         if (!this.kwGroups.length) { el.innerHTML = `<div class="empty">${I18n.t('ar.noKeywordGroupsHint')}</div>`; return; }
         el.innerHTML = this.kwGroups.map(g => {
             const n = this.keywords.filter(k=>k.group_id===g.id).length;
-            return `<div class="group-card"><span><span class="group-dot" style="background:${g.color||'#888'};"></span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${n} keyword${g.description?" · "+this._esc(g.description):""})</span></span><span><button class="ar-btn ar-btn-sm" onclick="Mng.openKwGroupEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKwGroup('${g.id}')">🗑</button></span></div>`;
+            const act = this._isAdmin ? `<span><button class="ar-btn ar-btn-sm" onclick="Mng.openKwGroupEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKwGroup('${g.id}')">🗑</button></span>` : '';
+            return `<div class="group-card"><span><span class="group-dot" style="background:${g.color||'#888'};"></span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${n} keyword${g.description?" · "+this._esc(g.description):""})</span></span>${act}</div>`;
         }).join('');
     },
 
@@ -306,8 +308,8 @@ const Mng = {
 <td><span class="badge ${typeClass}">${k.type||'other'}</span></td>
 <td class="${sc}">${scTxt}</td>
 <td style="font-size:0.72rem;">${k.is_case_sensitive?I18n.t('ar.caseMatch'):I18n.t('ar.caseIgnore')}</td>
-<td><span class="${k.is_active?'tg-on':'tg-off'}" onclick="Mng.toggleKw('${k.id}')">${k.is_active?'✅':'⚪'}</span></td>
-<td style="white-space:nowrap;"><button class="ar-btn ar-btn-sm" onclick="Mng.openKwEditor('${k.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKw('${k.id}')">🗑</button></td>
+<td><span class="${k.is_active?'tg-on':'tg-off'}" ${this._isAdmin?`onclick="Mng.toggleKw('${k.id}')"`:''} style="${this._isAdmin?'':'cursor:default;'}">${k.is_active?'✅':'⚪'}</span></td>
+<td style="white-space:nowrap;">${this._isAdmin?`<button class="ar-btn ar-btn-sm" onclick="Mng.openKwEditor('${k.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delKw('${k.id}')">🗑</button>`:''}</td>
 </tr>`;
         }).join('');
     },
@@ -366,7 +368,8 @@ const Mng = {
         if (!this.notifGroups.length) { el.innerHTML = `<div class="empty">${I18n.t('ar.noNotifGroupsHint')}</div>`; return; }
         el.innerHTML = this.notifGroups.map(g => {
             // count channels in this group via the API list (groups carry channel_count)
-            return `<div class="group-card"><span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${I18n.t('ar.channelCount', g.channel_count||0)}${g.description?" · "+this._esc(g.description):""})</span></span><span><button class="ar-btn ar-btn-sm" onclick="Mng.openNgEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delNg('${g.id}')">🗑</button></span></div>`;
+            const act = this._isAdmin ? `<span><button class="ar-btn ar-btn-sm" onclick="Mng.openNgEditor('${g.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delNg('${g.id}')">🗑</button></span>` : '';
+            return `<div class="group-card"><span><b>${this._esc(g.name)}</b> <span style="font-size:0.72rem;color:var(--text-muted);">(${I18n.t('ar.channelCount', g.channel_count||0)}${g.description?" · "+this._esc(g.description):""})</span></span>${act}</div>`;
         }).join('');
     },
 
@@ -409,9 +412,9 @@ const Mng = {
 <td><b>${this._esc(c.name)}</b></td>
 <td><span class="badge sev-other">${this._esc(label)}</span></td>
 <td style="font-family:'JetBrains Mono',monospace;font-size:0.74rem;">${this._esc(c.target)}</td>
-<td><span class="${c.is_active?'tg-on':'tg-off'}" onclick="Mng.toggleCh('${c.id}')">${c.is_active?'✅':'⚪'}</span></td>
-<td><button class="ar-btn ar-btn-sm ar-btn-test" onclick="Mng.testCh('${c.id}')" ${c.is_active?'':'disabled'}>${I18n.t('ar.testBtn')}</button></td>
-<td style="white-space:nowrap;"><button class="ar-btn ar-btn-sm" onclick="Mng.openChEditor('${c.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delCh('${c.id}')">🗑</button></td>
+<td><span class="${c.is_active?'tg-on':'tg-off'}" ${this._isAdmin?`onclick="Mng.toggleCh('${c.id}')"`:''} style="${this._isAdmin?'':'cursor:default;'}">${c.is_active?'✅':'⚪'}</span></td>
+<td>${this._isAdmin?`<button class="ar-btn ar-btn-sm ar-btn-test" onclick="Mng.testCh('${c.id}')" ${c.is_active?'':'disabled'}>${I18n.t('ar.testBtn')}</button>`:''}</td>
+<td style="white-space:nowrap;">${this._isAdmin?`<button class="ar-btn ar-btn-sm" onclick="Mng.openChEditor('${c.id}')">✏️</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delCh('${c.id}')">🗑</button>`:''}</td>
 </tr>`;
         }).join('');
     },
@@ -486,8 +489,8 @@ const Mng = {
 <td style="font-size:0.72rem;">${chN}</td>
 <td style="font-size:0.7rem;">${time}</td>
 <td style="font-size:0.72rem;">${r.cooldown_seconds}s</td>
-<td><span class="${r.is_enabled?'tg-on':'tg-off'}" onclick="Mng.toggleRule('${r.id}',${!r.is_enabled})">${r.is_enabled?'✅':'⚪'}</span></td>
-<td style="white-space:nowrap;"><button class="ar-btn ar-btn-sm" onclick="Mng.openRuleEditor('${r.id}')">✏️</button> <button class="ar-btn ar-btn-sm" onclick="Mng.testRule('${r.id}')">🧪</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delRule('${r.id}')">🗑</button></td>
+<td><span class="${r.is_enabled?'tg-on':'tg-off'}" ${this._isAdmin?`onclick="Mng.toggleRule('${r.id}',${!r.is_enabled})"`:''} style="${this._isAdmin?'':'cursor:default;'}">${r.is_enabled?'✅':'⚪'}</span></td>
+<td style="white-space:nowrap;">${this._isAdmin?`<button class="ar-btn ar-btn-sm" onclick="Mng.openRuleEditor('${r.id}')">✏️</button> <button class="ar-btn ar-btn-sm" onclick="Mng.testRule('${r.id}')">🧪</button> <button class="ar-btn ar-btn-sm ar-btn-danger" onclick="Mng.delRule('${r.id}')">🗑</button>`:''}</td>
 </tr>`;
         }).join('');
     },
