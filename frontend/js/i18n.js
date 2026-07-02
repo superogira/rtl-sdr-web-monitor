@@ -764,6 +764,7 @@ const I18n = {
             'al.transcript': 'ข้อความที่ถูกถอดเสียง',
             'al.gotoRecordings': '🔗 ไปหน้าไฟล์เสียง',
             'al.unspecified': 'ไม่ระบุ',
+            'al.deleteConfirm': 'ต้องการลบแจ้งเตือนนี้ใช่ไหม? (จะลบ AlertEvent + Delivery History แต่ไม่ลบไฟล์บันทึกเสียง)',
             'al.failGeneric': 'ไม่สำเร็จ: ',
             'al.detailSelectHint': '← เลือกแจ้งเตือนทางซ้าย',
             'al.rule': 'กฎ',

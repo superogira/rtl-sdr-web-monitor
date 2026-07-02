@@ -211,14 +211,14 @@ const Alerts = {
         const kws = (e.matched_keywords||[]).map(m=>`<span class="kw-pill">${this._esc(m.keyword)} (${this._esc(m.group||'-')} · ${this._esc(m.type||'other')}) <span class="sc">${m.score>=0?'+':''}${m.score}</span></span>`).join('');
         const deliveries = (e.deliveries||[]).map(d=>`<div class="del-row"><span>${this._esc(d.channel_name||d.channel_id)} <span style="opacity:0.6;font-size:0.7rem;">(${this._esc(d.channel_app_type)})</span></span><span class="del-status-${d.status}">${d.status}${d.app_message_id?` #${d.app_message_id}`:''}${d.last_error?` — ${this._esc(d.last_error).slice(0,40)}`:''}</span></div>`).join('') || '<div style="font-size:0.78rem;color:var(--text-muted);">—</div>';
         const ackBtn = isAdmin ? (e.acknowledged_by_user_id
-            ? `<button class="btn btn-sm" onclick="Alerts.ack(false)">↩️ ${I18n.t('al.unackBtn')}</button>`
-            : `<button class="btn btn-sm btn-primary" onclick="Alerts.ack(true)">👤 ${I18n.t('al.ackBtn')}</button>`) : '';
+            ? `<button class="btn btn-sm" onclick="Alerts.ack(false)">${I18n.t('al.unackBtn')}</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="Alerts.ack(true)">${I18n.t('al.ackBtn')}</button>`) : '';
         const verdictBtns = isAdmin ? `
-<button class="btn btn-sm ${e.verdict==='confirmed'?'btn-green':''}" onclick="Alerts.verdict('confirmed')">✅ ${I18n.t('al.verdictConfirmed')}</button>
-<button class="btn btn-sm ${e.verdict==='false_alarm'?'btn-red':''}" onclick="Alerts.verdict('false_alarm')">❌ ${I18n.t('al.verdictFalseAlarm')}</button>
-<button class="btn btn-sm" onclick="Alerts.verdict('unconfirmed')">↩️ ${I18n.t('al.verdictCancel')}</button>` : '';
-        const resendBtn = isAdmin ? `<button class="btn btn-sm" onclick="Alerts.openResend()">📤 ${I18n.t('al.resendBtn')}</button>` : '';
-        const delBtn = isAdmin ? `<button class="btn btn-sm btn-red" onclick="Alerts.del()">🗑 ${I18n.t('common.delete')}</button>` : '';
+<button class="btn btn-sm ${e.verdict==='confirmed'?'btn-green':''}" onclick="Alerts.verdict('confirmed')">${I18n.t('al.verdictConfirmed')}</button>
+<button class="btn btn-sm ${e.verdict==='false_alarm'?'btn-red':''}" onclick="Alerts.verdict('false_alarm')">${I18n.t('al.verdictFalseAlarm')}</button>
+<button class="btn btn-sm" onclick="Alerts.verdict('unconfirmed')">${I18n.t('al.verdictCancel')}</button>` : '';
+        const resendBtn = isAdmin ? `<button class="btn btn-sm" onclick="Alerts.openResend()">${I18n.t('al.resendBtn')}</button>` : '';
+        const delBtn = isAdmin ? `<button class="btn btn-sm btn-red" onclick="Alerts.del()">${I18n.t('common.delete')}</button>` : '';
         document.getElementById('ad-detail').innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
 <h2 style="margin:0;border:none;padding:0;">${this._esc(e.rule_name||'Alert')} <span class="badge sev-${e.severity}">${e.severity}</span></h2>
@@ -231,7 +231,7 @@ const Alerts = {
 <div class="fg"><label>${I18n.t('al.ackStatus')}</label><div style="font-size:0.78rem;">${e.acknowledged_by_user_id?(I18n.t('al.ackUser')+': '+this._esc(e.acknowledged_by_username)+' @ '+this._fmt(e.acknowledged_at)):`<span style=\"color:var(--text-muted);\">${I18n.t('al.noAck')}</span>`} ${ackBtn}</div></div>
 <div class="fg"><label>${I18n.t('al.verdict')}</label><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span class="badge verd-${e.verdict}">${e.verdict}</span> ${e.verdict_by_user_id?(`<span style=\"font-size:0.72rem;color:var(--text-muted);\">${I18n.t('al.verdictBy')} ${this._esc(e.verdict_by_username)}</span>`):''} ${verdictBtns}</div></div>
 <div class="fg"><label>${I18n.t('al.delivery')}</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;">${deliveries}</div> ${resendBtn}</div>
-<div class="fg"><label>${I18n.t('al.notes')}</label><textarea id="ad-notes" rows="2" ${isAdmin?'':'disabled'}>${this._esc(e.notes||'')}</textarea>${isAdmin?`<div class="actions-row"><button class="btn btn-sm btn-primary" onclick="Alerts.saveNotes()">💾 ${I18n.t('al.saveNotes')}</button></div>`:''}</div>
+<div class="fg"><label>${I18n.t('al.notes')}</label><textarea id="ad-notes" rows="2" ${isAdmin?'':'disabled'}>${this._esc(e.notes||'')}</textarea>${isAdmin?`<div class="actions-row"><button class="btn btn-sm btn-primary" onclick="Alerts.saveNotes()">${I18n.t('al.saveNotes')}</button></div>`:''}</div>
 <div class="fg"><label>${I18n.t('al.transcript')}</label><div style="background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:0.8rem;max-height:160px;overflow-y:auto;white-space:pre-wrap;">${this._esc(e.snippet||'')}</div></div>
 <div class="actions-row">${isAdmin?`<a class="btn btn-sm" href="/recordings" target="_blank">${I18n.t('al.gotoRecordings')}</a>`:''} ${delBtn}</div>
 `;
