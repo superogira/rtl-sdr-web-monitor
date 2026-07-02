@@ -18,6 +18,30 @@ A self-hosted web-based RTL-SDR receiver, recorder, and intelligent monitoring p
 
 Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many listeners, each with their own VFO offset, bookmarks.
 
+## 📸 Screenshots
+
+<div align="center">
+
+| Dashboard (Waterfall + Controls) | Alert Management |
+|:---:|:---:|
+| ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![Alerts](frontend/assets/images/screenshot2.jpeg) |
+
+| Recordings + Transcription | Settings (Devices) |
+|:---:|:---:|
+| ![Recordings](frontend/assets/images/screenshot3.jpeg) | ![Settings](frontend/assets/images/screenshot4.jpg) |
+
+| 3D Waterfall | Keyword Rules |
+|:---:|:---:|
+| ![3D Waterfall](frontend/assets/images/screenshot5.jpg) | ![Rules](frontend/assets/images/screenshot6.jpg) |
+
+| Alert Rules Editor | Stats Dashboard |
+|:---:|:---:|
+| ![Rule Editor](frontend/assets/images/screenshot7.jpg) | ![Stats](frontend/assets/images/screenshot8.jpg) |
+
+</div>
+
+---
+
 ## ✨ Features
 
 ### 📻 Core SDR
