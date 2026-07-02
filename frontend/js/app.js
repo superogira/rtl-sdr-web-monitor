@@ -161,7 +161,10 @@ const App = {
             // Sync sliders + SRATE button active state from backend reality
             this.syncControlsFromStatus(status);
             this.updateUI();
-            // If already connected, fetch capabilities (sample rates + gains)
+            // Always render default SRATE buttons so the UI isn't empty
+            // before connecting. When connected, loadCapabilities() will
+            // overwrite with the device's actual supported rates/gains.
+            this._renderSampleRateButtons();
             if (status.connected) {
                 this.loadCapabilities();
             }
