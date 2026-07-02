@@ -1774,6 +1774,7 @@ const I18n = {
             'al.gotoRecordings': '🔗 Go to Recordings',
             'al.unspecified': 'Unspecified',
             'al.failGeneric': 'Failed: ',
+            'al.deleteConfirm': 'Delete this alert? (This removes AlertEvent + Delivery History but does NOT delete the recording.)',
             'al.detailSelectHint': '← Select an alert on the left',
             'al.rule': 'Rule',
 

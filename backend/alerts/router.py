@@ -552,6 +552,22 @@ async def get_alert(event_id: str, current_user: User = Depends(get_current_user
     return d
 
 
+@alerts_router.delete("/{event_id}", dependencies=[Depends(require_admin)])
+async def delete_alert(event_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete an alert event (admin only).
+
+    Cascade-deletes all associated AlertDelivery rows automatically
+    (cascade="all, delete-orphan"). Does NOT delete the recording.
+    """
+    result = await db.execute(select(AlertEvent).where(AlertEvent.id == event_id))
+    ev = result.scalar_one_or_none()
+    if not ev:
+        raise HTTPException(404, "Alert event not found")
+    await db.delete(ev)
+    await db.commit()
+    return {"success": True, "id": event_id}
+
+
 class AckIn(BaseModel):
     acknowledged: bool = True
 
