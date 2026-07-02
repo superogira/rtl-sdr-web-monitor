@@ -87,7 +87,7 @@ rtl_test -t
 
 ```bash
 # 1. Clone repo
-git clone https://github.com/superogira/cw-sdr-simulator.git rtl-sdr-web
+git clone https://github.com/superogira/rtl-sdr-web-monitor.git rtl-sdr-web
 cd rtl-sdr-web
 
 # 2. สร้าง venv + ติดตั้ง dependencies
@@ -278,7 +278,7 @@ sudo apt install -y rtl-sdr python3.11 python3.11-venv gcc libffi-dev git
 # สร้าง blacklist (section 2.3) แล้วถอดเสียบ USB ใหม่
 
 # 2. Clone + ติดตั้ง Backend (section 3)
-git clone https://github.com/superogira/cw-sdr-simulator.git rtl-sdr-web
+git clone https://github.com/superogira/rtl-sdr-web-monitor.git rtl-sdr-web
 cd rtl-sdr-web
 python3.11 -m venv venv
 ./venv/bin/pip install -r requirements.txt
@@ -331,7 +331,7 @@ rtl_tcp -a 0.0.0.0 -p 1234 &
 # จด IP: เช่น 192.168.1.50
 
 # === ที่เครื่อง Backend ===
-git clone https://github.com/superogira/cw-sdr-simulator.git rtl-sdr-web
+git clone https://github.com/superogira/rtl-sdr-web-monitor.git rtl-sdr-web
 cd rtl-sdr-web
 python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt
 cp .env.example .env
