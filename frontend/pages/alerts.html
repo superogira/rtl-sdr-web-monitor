@@ -218,6 +218,7 @@ const Alerts = {
 <button class="btn btn-sm ${e.verdict==='false_alarm'?'btn-red':''}" onclick="Alerts.verdict('false_alarm')">❌ ${I18n.t('al.verdictFalseAlarm')}</button>
 <button class="btn btn-sm" onclick="Alerts.verdict('unconfirmed')">↩️ ${I18n.t('al.verdictCancel')}</button>` : '';
         const resendBtn = isAdmin ? `<button class="btn btn-sm" onclick="Alerts.openResend()">📤 ${I18n.t('al.resendBtn')}</button>` : '';
+        const delBtn = isAdmin ? `<button class="btn btn-sm btn-red" onclick="Alerts.del()">🗑 ${I18n.t('common.delete')}</button>` : '';
         document.getElementById('ad-detail').innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
 <h2 style="margin:0;border:none;padding:0;">${this._esc(e.rule_name||'Alert')} <span class="badge sev-${e.severity}">${e.severity}</span></h2>
