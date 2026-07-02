@@ -402,9 +402,9 @@
             const recorderName = rec.recorded_by_username || '';
             const deviceName = rec.device_name || '';
             const SOURCE_BADGES = {
-                'auto':     { label: '🔵 ' + I18n.t('rec.sourceAuto'),     title: I18n.t('rec.sourceAutoTitle') },
-                'manual':   { label: '🟢 ' + I18n.t('rec.sourceManual'),   title: I18n.t('rec.sourceManualTitle') },
-                'auto_job': { label: '🟣 ' + I18n.t('rec.sourceAutoJob'),  title: I18n.t('rec.sourceAutoJobTitle') },
+                'auto':     { label: I18n.t('rec.sourceAuto'),     title: I18n.t('rec.sourceAutoTitle') },
+                'manual':   { label: I18n.t('rec.sourceManual'),   title: I18n.t('rec.sourceManualTitle') },
+                'auto_job': { label: I18n.t('rec.sourceAutoJob'),  title: I18n.t('rec.sourceAutoJobTitle') },
             };
             const sb = SOURCE_BADGES[source] || SOURCE_BADGES['auto'];
             const badgeLabel = sb.label;
@@ -442,7 +442,7 @@
                         <div class="rec-actions">
                             ${metaHtml}
                             ${btnHtml}
-                            ${Auth.isAdmin() ? `<button class="rec-del-btn" onclick="deleteRec('${rec.id}')">🗑 ${I18n.t('rec.deleteBtn')}</button>` : ''}
+                            ${Auth.isAdmin() ? `<button class="rec-del-btn" onclick="deleteRec('${rec.id}')">${I18n.t('rec.deleteBtn')}</button>` : ''}
                         </div>
                     </div>
                     <div class="feed-text" style="margin-top:6px;">
@@ -983,7 +983,7 @@
             const delBtn = document.getElementById('rec-bulk-delete-btn');
             if (delBtn) {
                 delBtn.disabled = (n === 0);
-                delBtn.textContent = `🗑 ลบรายการที่เลือก (${n})`;
+                delBtn.textContent = I18n.t('rec.deleteSelected', n);
             }
         }
 
