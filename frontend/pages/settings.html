@@ -1504,8 +1504,6 @@
         // === Display / Waterfall Settings ===
         loadDisplaySettings() {
             const speed = localStorage.getItem('waterfall_speed') || '1';
-            const dbMin = localStorage.getItem('waterfall_db_min') || '-110';
-            const dbMax = localStorage.getItem('waterfall_db_max') || '-55';
             const fftSize = localStorage.getItem('fft_size') || '1024';
             const theme = localStorage.getItem('ui_theme') || 'classic';
             const elSpeed = document.getElementById('wf-speed');
@@ -1578,8 +1576,6 @@
             const fftSize = parseInt(document.getElementById('wf-fft-size').value);
             const theme = document.getElementById('ui-theme').value;
             localStorage.setItem('waterfall_speed', speed);
-            localStorage.setItem('waterfall_db_min', dbMin);
-            localStorage.setItem('waterfall_db_max', dbMax);
             localStorage.setItem('fft_size', String(fftSize));
             localStorage.setItem('ui_theme', theme);
             // Apply theme immediately (live preview already did, but ensure)
@@ -1888,10 +1884,6 @@
                 const defGain = (cfg.gain !== undefined && cfg.gain !== null) ? cfg.gain : 30;
                 const defPpm = (cfg.freq_correction_ppm !== undefined && cfg.freq_correction_ppm !== null)
                     ? cfg.freq_correction_ppm : 0;
-                const defWfMin = (cfg.waterfall_db_min !== undefined && cfg.waterfall_db_min !== null)
-                    ? cfg.waterfall_db_min : -110;
-                const defWfMax = (cfg.waterfall_db_max !== undefined && cfg.waterfall_db_max !== null)
-                    ? cfg.waterfall_db_max : -55;
                 container.innerHTML = `
                     <div class="form-row">
                         <div class="form-group">
@@ -1925,17 +1917,11 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>${I18n.t('set.dev.wfMinLabel')}</label>
-                            <input type="number" id="dc-wf-db-min" value="${defWfMin}" min="-150" max="-50">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ${I18n.t('set.dev.wfMinHint')}
                             </p>
                         </div>
                         <div class="form-group">
-                            <label>${I18n.t('set.dev.wfMaxLabel')}</label>
-                            <input type="number" id="dc-wf-db-max" value="${defWfMax}" min="-100" max="0">
                             <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">
-                                ${I18n.t('set.dev.wfMaxHint')}
                             </p>
                         </div>
                     </div>
@@ -1948,8 +1934,6 @@
                 const defSerial = cfg.serial || '';
                 const defGain = (cfg.gain !== undefined && cfg.gain !== null) ? cfg.gain : 30;
                 const defPpm = (cfg.freq_correction_ppm !== undefined && cfg.freq_correction_ppm !== null) ? cfg.freq_correction_ppm : 0;
-                const defWfMin = (cfg.waterfall_db_min !== undefined && cfg.waterfall_db_min !== null) ? cfg.waterfall_db_min : -110;
-                const defWfMax = (cfg.waterfall_db_max !== undefined && cfg.waterfall_db_max !== null) ? cfg.waterfall_db_max : -55;
                 container.innerHTML = `
                     <div class="form-row">
                         <div class="form-group">
@@ -1979,12 +1963,8 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>${I18n.t('set.dev.wfMinLabel')}</label>
-                            <input type="number" id="dc-wf-db-min" value="${defWfMin}" min="-150" max="-50">
                         </div>
                         <div class="form-group">
-                            <label>${I18n.t('set.dev.wfMaxLabel')}</label>
-                            <input type="number" id="dc-wf-db-max" value="${defWfMax}" min="-100" max="0">
                         </div>
                     </div>
                 `;
@@ -2012,10 +1992,6 @@
                 const description = document.getElementById('dc-description')?.value.trim() || '';
                 const gain = parseInt(document.getElementById('dc-gain')?.value);
                 const ppm = parseInt(document.getElementById('dc-ppm')?.value);
-                const wfMinEl = document.getElementById('dc-wf-db-min');
-                const wfMaxEl = document.getElementById('dc-wf-db-max');
-                const wfMin = wfMinEl ? parseInt(wfMinEl.value) : NaN;
-                const wfMax = wfMaxEl ? parseInt(wfMaxEl.value) : NaN;
                 return {
                     device_index: deviceIndex,
                     serial: serial,
@@ -2023,8 +1999,6 @@
                     description,
                     gain: Number.isFinite(gain) ? gain : 30,
                     freq_correction_ppm: Number.isFinite(ppm) ? ppm : 0,
-                    waterfall_db_min: Number.isFinite(wfMin) ? wfMin : -110,
-                    waterfall_db_max: Number.isFinite(wfMax) ? wfMax : -55,
                 };
             }
             if (type !== 'rtl_tcp') return {};
@@ -2036,10 +2010,6 @@
             // the recording job editor. User can override per job later.
             const gain = parseInt(document.getElementById('dc-gain').value);
             const ppm = parseInt(document.getElementById('dc-ppm').value);
-            const wfMinEl = document.getElementById('dc-wf-db-min');
-            const wfMaxEl = document.getElementById('dc-wf-db-max');
-            const wfMin = wfMinEl ? parseInt(wfMinEl.value) : NaN;
-            const wfMax = wfMaxEl ? parseInt(wfMaxEl.value) : NaN;
             // Preserve any legacy tuner fields that may already be stored, but
             // the UI no longer exposes them (they're managed per recording job).
             const legacy = this._wizardConfig || {};
@@ -2049,8 +2019,6 @@
                 description,
                 gain: Number.isFinite(gain) ? gain : 30,
                 freq_correction_ppm: Number.isFinite(ppm) ? ppm : 0,
-                waterfall_db_min: Number.isFinite(wfMin) ? wfMin : -110,
-                waterfall_db_max: Number.isFinite(wfMax) ? wfMax : -55,
                 // Keep legacy values if present (so existing deployments don't
                 // lose their last-known-good tuner config), but they're not edited here.
                 frequency: legacy.frequency,

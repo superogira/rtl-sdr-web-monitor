@@ -2464,7 +2464,7 @@ const App = {
         // Read live settings from localStorage (only when NOT in auto mode
         // AND no per-device override is active — _applyDeviceWaterfallRange
         // sets _dbMin/_dbMax directly from the active device config).
-        if (this._autoMode === 'off' && !this._deviceWaterfallActive) {
+        if (this._autoMode === 'off') {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
         }
