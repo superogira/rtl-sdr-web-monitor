@@ -159,9 +159,11 @@ a:hover {
 
 .header-center {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: 3px;
+    gap: 8px;
+    position: relative; /* anchor for the BW popover */
+    flex-wrap: wrap;
 }
 
 .header-right {
