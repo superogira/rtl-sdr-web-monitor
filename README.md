@@ -26,9 +26,9 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 |:---:|:---:|
 | ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![3D Waterfall](frontend/assets/images/screenshot9.jpeg) |
 
-| Dashboard (Waterfall + Controls) | Recordings + Transcription |
+| STT Settings  | Recordings + Transcription |
 |:---:|:---:|
-| ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![Recordings & Transcription](frontend/assets/images/screenshot2.jpeg) |
+| ![Dashboard](frontend/assets/images/screenshot5.jpg) | ![Recordings & Transcription](frontend/assets/images/screenshot2.jpeg) |
 
 | Devices Settings | Schedule Recordings |
 |:---:|:---:|
@@ -41,6 +41,9 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 | Alert Management | Alert Statistics |
 |:---:|:---:|
 | ![Alert Management](frontend/assets/images/screenshot7.jpg) | ![Stats](frontend/assets/images/screenshot8.jpg) |
+
+| Alert Statistics |
+| ![Stats](frontend/assets/images/screenshot8.jpg) |
 
 </div>
 
