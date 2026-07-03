@@ -1360,7 +1360,15 @@ const App = {
             row.classList.toggle('vfo-active', i === this._activeVfoIdx);
             // Frequency label.
             const f = document.getElementById(`vfo-${lo}-freq`);
-            if (f) f.textContent = ((cf + (this._vfos[i].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz';
+            if (f) {
+                // Update only the text node, preserving the inline ⏰ button
+                const freqText = ((cf + (this._vfos[i].offsetHz || 0)) / 1e6).toFixed(4) + ' MHz ';
+                if (f.childNodes.length > 0 && f.childNodes[0].nodeType === Node.TEXT_NODE) {
+                    f.childNodes[0].nodeValue = freqText;
+                } else {
+                    f.insertBefore(document.createTextNode(freqText), f.firstChild);
+                }
+            }
             // Live indicator.
             const live = document.getElementById(`vfo-${lo}-live`);
             if (live) live.textContent = (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(i)) ? '🔴' : '';
