@@ -110,10 +110,13 @@
 
                         <!-- Floating WF control cluster (bottom-right of waterfall).
                              Hovered over the 2D/3D view, pointer-events on. -->
-                        <div class="waterfall-float-controls" id="wf-auto-buttons">
-                            <button class="step-btn" id="wf-auto-btn" data-i18n-title="dash.wfAutoTitle" data-i18n="dash.wfAuto" title="ปรับ dB range อัตโนมัติแบบต่อเนื่อง (เหมือน OpenWebRX)">🎚️ AUTO</button>
-                            <button class="step-btn" id="sigtag-btn" data-i18n-title="dash.wfTagTitle" data-i18n="dash.wfTagOn" title="แสดงเลขความถี่แนวตั้งตรงสัญญาณที่แรงกว่า SQL (เหมือนทะเบียนความถี่)">📡 TAG</button>
-                            <button class="step-btn" id="wf-3d-btn" data-i18n-title="dash.wf3dTitle" data-i18n="dash.wf3dBtn" title="สลับมุมมอง Waterfall แบบ 3D (หมุน/ซูมได้เหมือนวิทยุ Yaesu/Xiegu)">📊 3D</button>
+                        <div class="waterfall-float-controls" id="wf-auto-buttons" style="flex-direction:column;">
+                            <button class="step-btn" id="wf-tools-trigger" onclick="App.toggleWfTools(event)" title="เครื่องมือ Waterfall">⚙️</button>
+                            <div id="wf-tools-popover" style="display:none;position:absolute;right:100%;top:0;margin-right:4px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius);padding:4px;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,0.5);display:none;flex-direction:column;gap:2px;min-width:100px;">
+                                <button class="step-btn" id="wf-auto-btn" data-i18n-title="dash.wfAutoTitle" data-i18n="dash.wfAuto" title="ปรับ dB range อัตโนมัติแบบต่อเนื่อง (เหมือน OpenWebRX)" style="white-space:nowrap;">🎚️ AUTO</button>
+                                <button class="step-btn" id="sigtag-btn" data-i18n-title="dash.wfTagTitle" data-i18n="dash.wfTagOn" title="แสดงเลขความถี่แนวตั้งตรงสัญญาณที่แรงกว่า SQL (เหมือนทะเบียนความถี่)" style="white-space:nowrap;">📡 TAG</button>
+                                <button class="step-btn" id="wf-3d-btn" data-i18n-title="dash.wf3dTitle" data-i18n="dash.wf3dBtn" title="สลับมุมมอง Waterfall แบบ 3D (หมุน/ซูมได้เหมือนวิทยุ Yaesu/Xiegu)" style="white-space:nowrap;">📊 3D</button>
+                            </div>
                         </div>
                     </div>
 
@@ -411,7 +414,7 @@
 <script src="/js/audio.js?v=16"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=8"></script>
-<script src="/js/app.js?v=70"></script>
+<script src="/js/app.js?v=71"></script>
     <script src="/js/dashboard_jobs.js?v=5"></script>
 <script src="/js/recording_jobs.js?v=7"></script>
 </body>

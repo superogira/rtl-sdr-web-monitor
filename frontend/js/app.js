@@ -666,6 +666,13 @@ const App = {
                     morePopover.style.display = 'none';
                 }
             }
+            const wfToolsPopover = document.getElementById('wf-tools-popover');
+            const wfToolsTrigger = document.getElementById('wf-tools-trigger');
+            if (wfToolsPopover && wfToolsPopover.style.display !== 'none') {
+                if (!wfToolsPopover.contains(e.target) && wfToolsTrigger !== e.target && !(wfToolsTrigger && wfToolsTrigger.contains(e.target))) {
+                    wfToolsPopover.style.display = 'none';
+                }
+            }
         });
 
         // Panel-right collapse toggle (for small screens / tablets)
