@@ -537,6 +537,14 @@ const App = {
     },
 
     // === BW Popover ===
+    // === More Menu ===
+    toggleMoreMenu(e) {
+        if (e) e.stopPropagation();
+        const popover = document.getElementById('more-popover');
+        if (!popover) return;
+        popover.style.display = (popover.style.display === 'none') ? '' : 'none';
+    },
+
     toggleBwPopover(e) {
         if (e) e.stopPropagation();
         const popover = document.getElementById('bw-popover');
@@ -2025,7 +2033,7 @@ const App = {
             if (data.listeners !== undefined) {
                 const el = document.getElementById('listener-count');
                 if (el) {
-                    el.textContent = data.listeners > 0 ? `👥 ${data.listeners}` : '';
+                    el.textContent = data.listeners > 0 ? `🔊 ${data.listeners}` : '';
                 }
             }
             // Sync auto-recording indicator (independent from manual record button).
