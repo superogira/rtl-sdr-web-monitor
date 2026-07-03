@@ -57,16 +57,25 @@
                 <span id="audio-status" style="font-size:0.7rem;"></span>
                 <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
                 <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
-                <button class="lang-toggle-btn" onclick="I18n.toggle()" data-i18n="lang.toggle">🌐 EN</button>
-                <span class="theme-switch" role="group" data-i18n-title="dash.switchTheme" title="สลับ Theme">
-                    <button id="theme-btn-classic" onclick="App.setTheme('classic')">Classic</button>
-                    <button id="theme-btn-v2" onclick="App.setTheme('v2')">V2</button>
-                </span>
                 <a href="/alerts" class="btn btn-sm" id="btn-alerts" data-i18n="nav.alerts" data-i18n-title="nav.alertsTitle" title="แจ้งเตือน">🚨 แจ้งเตือน</a>
-                <a href="/stats" class="btn btn-sm" id="btn-stats" data-i18n="nav.stats" data-i18n-title="nav.statsTitle" title="สถิติ">📊 สถิติ</a>
                 <a href="/recordings" class="btn btn-sm" id="btn-recordings" data-i18n="nav.recordings">📂 บันทึก</a>
                 <a href="/settings" class="btn btn-sm" id="btn-settings" data-i18n="nav.settings">⚙️ ตั้งค่า</a>
-                <button class="btn btn-sm" onclick="Auth.logout()" data-i18n="nav.logout">ออกจากระบบ</button>
+                <!-- More menu: Language, Theme, Stats (collapsed to save space) -->
+                <div class="more-menu" style="position:relative;">
+                    <button class="btn btn-sm" id="btn-more" onclick="App.toggleMoreMenu(event)" data-i18n-title="dash.moreMenu" title="เพิ่มเติม">☰</button>
+                    <div class="more-popover" id="more-popover" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius);padding:8px;z-index:200;min-width:160px;box-shadow:0 8px 24px rgba(0,0,0,0.5);">
+                        <button class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" onclick="I18n.toggle();App.toggleMoreMenu()" data-i18n="lang.toggle">🌐 EN</button>
+                        <div class="more-item" style="margin-bottom:6px;">
+                            <span style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="dash.theme">🎨 Theme</span>
+                            <span class="theme-switch" role="group" style="display:inline-flex;width:100%;">
+                                <button class="btn btn-sm" id="theme-btn-classic" style="flex:1;" onclick="App.setTheme('classic')">Classic</button>
+                                <button class="btn btn-sm" id="theme-btn-v2" style="flex:1;" onclick="App.setTheme('v2')">V2</button>
+                            </span>
+                        </div>
+                        <a href="/stats" class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" data-i18n="nav.stats" data-i18n-title="nav.statsTitle" title="สถิติ">📊 สถิติ</a>
+                        <button class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;color:var(--accent-red);" onclick="Auth.logout()" data-i18n="nav.logout">ออกจากระบบ</button>
+                    </div>
+                </div>
             </div>
         </header>
 
@@ -405,7 +414,7 @@
 <script src="/js/audio.js?v=16"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=8"></script>
-<script src="/js/app.js?v=68"></script>
+<script src="/js/app.js?v=69"></script>
     <script src="/js/dashboard_jobs.js?v=4"></script>
 <script src="/js/recording_jobs.js?v=7"></script>
 </body>

@@ -642,13 +642,22 @@ const App = {
             });
         }
 
-        // Close BW popover on outside click
+        // Close BW + More popovers on outside click
         document.addEventListener('click', (e) => {
-            const popover = document.getElementById('bw-popover');
-            const trigger = document.getElementById('bw-trigger');
-            if (!popover || popover.style.display === 'none') return;
-            if (popover.contains(e.target) || trigger === e.target || (trigger && trigger.contains(e.target))) return;
-            popover.style.display = 'none';
+            const bwPopover = document.getElementById('bw-popover');
+            const bwTrigger = document.getElementById('bw-trigger');
+            if (bwPopover && bwPopover.style.display !== 'none') {
+                if (!bwPopover.contains(e.target) && bwTrigger !== e.target && !(bwTrigger && bwTrigger.contains(e.target))) {
+                    bwPopover.style.display = 'none';
+                }
+            }
+            const morePopover = document.getElementById('more-popover');
+            const moreTrigger = document.getElementById('btn-more');
+            if (morePopover && morePopover.style.display !== 'none') {
+                if (!morePopover.contains(e.target) && moreTrigger !== e.target && !(moreTrigger && moreTrigger.contains(e.target))) {
+                    morePopover.style.display = 'none';
+                }
+            }
         });
 
         // Panel-right collapse toggle (for small screens / tablets)
