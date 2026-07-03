@@ -22,21 +22,25 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 
 <div align="center">
 
-| Dashboard (Waterfall + Controls) | Alert Management |
+| Dashboard (Waterfall + Controls) | 3D Waterfall |
 |:---:|:---:|
-| ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![Alerts](frontend/assets/images/screenshot2.jpeg) |
+| ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![3D Waterfall](frontend/assets/images/screenshot9.jpeg) |
 
-| Recordings + Transcription | Settings (Devices) |
+| Dashboard (Waterfall + Controls) | Recordings + Transcription |
 |:---:|:---:|
-| ![Recordings](frontend/assets/images/screenshot3.jpeg) | ![Settings](frontend/assets/images/screenshot4.jpg) |
+| ![Dashboard](frontend/assets/images/screenshot1.jpeg) | ![Recordings & Transcription](frontend/assets/images/screenshot2.jpeg) |
 
-| 3D Waterfall | Keyword Rules |
+| Devices Settings | Schedule Recordings |
+|:---:|:---:|
+| ![Devices Settings](frontend/assets/images/screenshot4.jpeg) | ![Schedule Recordings](frontend/assets/images/screenshot3.jpg) |
+
+| 3D Waterfall | Keyword & Alert Rules Editor |
 |:---:|:---:|
 | ![3D Waterfall](frontend/assets/images/screenshot5.jpg) | ![Rules](frontend/assets/images/screenshot6.jpg) |
 
-| Alert Rules Editor | Stats Dashboard |
+| Alert Management | Alert Statistics |
 |:---:|:---:|
-| ![Rule Editor](frontend/assets/images/screenshot7.jpg) | ![Stats](frontend/assets/images/screenshot8.jpg) |
+| ![Alert Management](frontend/assets/images/screenshot7.jpg) | ![Stats](frontend/assets/images/screenshot8.jpg) |
 
 </div>
 
