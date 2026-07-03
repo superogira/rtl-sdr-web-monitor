@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=39">
+    <link rel="stylesheet" href="/css/app.css?v=40">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -112,7 +112,7 @@
                              Hovered over the 2D/3D view, pointer-events on. -->
                         <div class="waterfall-float-controls" id="wf-auto-buttons" style="flex-direction:column;">
                             <button class="step-btn" id="wf-tools-trigger" onclick="App.toggleWfTools(event)" title="เครื่องมือ Waterfall">⚙️</button>
-                            <div id="wf-tools-popover" style="display:none;position:absolute;bottom:100%;right:0;margin-right:4px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius);padding:4px;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,0.5);display:none;flex-direction:column;gap:2px;min-width:100px;">
+                            <div id="wf-tools-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;margin-right:4px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius);padding:4px;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,0.5);display:none;flex-direction:column;gap:2px;min-width:100px;">
                                 <button class="step-btn" id="wf-auto-btn" data-i18n-title="dash.wfAutoTitle" data-i18n="dash.wfAuto" title="ปรับ dB range อัตโนมัติแบบต่อเนื่อง (เหมือน OpenWebRX)" style="white-space:nowrap;">🎚️ AUTO</button>
                                 <button class="step-btn" id="sigtag-btn" data-i18n-title="dash.wfTagTitle" data-i18n="dash.wfTagOn" title="แสดงเลขความถี่แนวตั้งตรงสัญญาณที่แรงกว่า SQL (เหมือนทะเบียนความถี่)" style="white-space:nowrap;">📡 TAG</button>
                                 <button class="step-btn" id="wf-3d-btn" data-i18n-title="dash.wf3dTitle" data-i18n="dash.wf3dBtn" title="สลับมุมมอง Waterfall แบบ 3D (หมุน/ซูมได้เหมือนวิทยุ Yaesu/Xiegu)" style="white-space:nowrap;">📊 3D</button>
