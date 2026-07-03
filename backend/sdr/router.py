@@ -1285,8 +1285,18 @@ async def delete_device(
         rec.device_id = None
     # recording_jobs.device_id is now nullable — null it out so the job
     # survives (with no device) and the UI can show a red-border warning.
+    # BUT first stop any active DeviceCapture for those jobs to prevent
+    # the scheduler from trying to use a deleted device.
+    from backend.sdr.job_scheduler import job_scheduler
     jobs = (await db.execute(select(RecordingJob).where(RecordingJob.device_id == device_id))).scalars().all()
     for job in jobs:
+        # Stop the capture if it's currently running
+        cap = job_scheduler.get_capture(job.id)
+        if cap:
+            try:
+                await cap.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping capture for job {job.id} during device delete: {e}")
         job.device_id = None
 
     was_active = bool(device.is_active)

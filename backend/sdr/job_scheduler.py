@@ -194,6 +194,7 @@ class JobScheduler:
                     .selectinload(RecordingJobWindow.frequencies)
                 )
                 .where(RecordingJob.enabled == True)  # noqa: E712
+                .where(RecordingJob.device_id.is_not(None))  # skip orphaned jobs (device deleted)
             )
             return list(result.scalars().all())
 
