@@ -537,6 +537,14 @@ const App = {
     },
 
     // === BW Popover ===
+    // === Waterfall Tools Popover ===
+    toggleWfTools(e) {
+        if (e) e.stopPropagation();
+        const popover = document.getElementById('wf-tools-popover');
+        if (!popover) return;
+        popover.style.display = (popover.style.display === 'none') ? 'flex' : 'none';
+    },
+
     // === More Menu ===
     toggleMoreMenu(e) {
         if (e) e.stopPropagation();
