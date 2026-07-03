@@ -12,6 +12,9 @@ const WS = {
     connect() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.url = `${protocol}//${window.location.host}/ws`;
+        // Append JWT token as query param for WebSocket auth
+        const _token = Auth.getToken();
+        if (_token) this.url += `?token=${encodeURIComponent(_token)}`;
         this._doConnect();
     },
 

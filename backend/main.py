@@ -117,11 +117,16 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI app
+# Disable auto docs in production to avoid exposing API structure to attackers.
+_is_prod = settings.APP_ENV.lower() in ("production", "prod")
 app = FastAPI(
     title=settings.APP_NAME,
     description="RTL-SDR Web Monitor - Radio signal monitoring, recording, and transcription",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None if _is_prod else "/docs",
+    redoc_url=None if _is_prod else "/redoc",
+    openapi_url=None if _is_prod else "/openapi.json",
 )
 
 # Frontend is served from same origin, so not needed in most cases
@@ -182,18 +187,34 @@ async def health_check():
 # === WebSocket endpoint ===
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Main WebSocket endpoint for real-time updates."""
+    """Main WebSocket endpoint for real-time updates (requires auth)."""
     import asyncio
     import json
     import logging
     from backend.sdr.manager import sdr_manager
     from backend.audio.broadcaster import audio_broadcaster
+    from backend.auth.jwt import decode_token
 
     logger_ws = logging.getLogger("websocket")
 
+    # === Authenticate via query param ?token=JWT (same as /ws/audio) ===
+    token = websocket.query_params.get("token")
+    if not token:
+        # Reject unauthenticated connections
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+    try:
+        payload = decode_token(token)
+        if not payload or payload.get("type") != "access":
+            await websocket.close(code=4401, reason="Invalid or expired token")
+            return
+    except Exception:
+        await websocket.close(code=4401, reason="Invalid token")
+        return
+
     try:
         await websocket.accept()
-        logger_ws.info("🔌 WebSocket client connected")
+        logger_ws.info("🔌 WebSocket client connected (auth OK)")
     except Exception as e:
         logger_ws.error(f"WebSocket accept failed: {e}")
         return
@@ -356,22 +377,23 @@ async def audio_websocket_endpoint(websocket: WebSocket):
 
     logger_aud = logging.getLogger("audio_ws")
 
-    # === Authenticate the WS connection via query param ?token=JWT ===
-    # We can't use HTTP headers on WebSocket handshake from browsers, so the
-    # client passes the access token as a query parameter. If valid, we attach
-    # user_id + role to the listener so per-user manual recordings can be owned.
+    # === Authenticate the WS connection via query param ?token=JWT (required) ===
     token = websocket.query_params.get("token")
     ws_user_id = None
     ws_user_role = None
-    if token:
-        try:
-            payload = decode_token(token)
-            if payload and payload.get("type") == "access":
-                ws_user_id = payload.get("sub")
-                # Role may be in token; otherwise we trust the listener's later actions
-                ws_user_role = payload.get("role")
-        except Exception as e:
-            logger_aud.debug(f"🔊 Audio WS token decode failed (anonymous): {e}")
+    if not token:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+    try:
+        payload = decode_token(token)
+        if not payload or payload.get("type") != "access":
+            await websocket.close(code=4401, reason="Invalid or expired token")
+            return
+        ws_user_id = payload.get("sub")
+        ws_user_role = payload.get("role")
+    except Exception:
+        await websocket.close(code=4401, reason="Invalid token")
+        return
 
     try:
         await websocket.accept()

@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     SPEECHMATICS_API_KEY: str = ""
     SPEECHMATICS_LANGUAGE: str = "th"
     # Whisper Local (faster-whisper-server / Gradio API)
-    WHISPER_LOCAL_HOST: str = "192.168.1.201"
+    WHISPER_LOCAL_HOST: str = ""  # Set via .env (e.g. 192.168.x.x)
     WHISPER_LOCAL_PORT: int = 8100
     WHISPER_LOCAL_MODEL: str = "Systran/faster-whisper-small"
     WHISPER_LOCAL_TASK: str = "transcribe"  # transcribe | translate
