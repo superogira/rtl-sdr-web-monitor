@@ -57,9 +57,6 @@
                 <span id="audio-status" style="font-size:0.7rem;"></span>
                 <span id="listener-count" style="font-size:0.75rem; color:var(--text-muted);"></span>
                 <span class="text-muted" id="user-display" style="font-size:0.8rem;">👤</span>
-                <a href="/alerts" class="btn btn-sm" id="btn-alerts" data-i18n="nav.alerts" data-i18n-title="nav.alertsTitle" title="แจ้งเตือน">🚨 แจ้งเตือน</a>
-                <a href="/recordings" class="btn btn-sm" id="btn-recordings" data-i18n="nav.recordings">📂 บันทึก</a>
-                <a href="/settings" class="btn btn-sm" id="btn-settings" data-i18n="nav.settings">⚙️ ตั้งค่า</a>
                 <!-- More menu: Language, Theme, Stats (collapsed to save space) -->
                 <div class="more-menu" style="position:relative;">
                     <button class="btn btn-sm" id="btn-more" onclick="App.toggleMoreMenu(event)" data-i18n-title="dash.moreMenu" title="เพิ่มเติม">☰</button>
@@ -72,6 +69,9 @@
                                 <button class="btn btn-sm" id="theme-btn-v2" style="flex:1;" onclick="App.setTheme('v2')">V2</button>
                             </span>
                         </div>
+                        <a href="/alerts" class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" data-i18n="nav.alerts" data-i18n-title="nav.alertsTitle" title="แจ้งเตือน">🚨 แจ้งเตือน</a>
+                        <a href="/recordings" class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" data-i18n="nav.recordings">📂 บันทึก</a>
+                        <a href="/settings" class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" data-i18n="nav.settings">⚙️ ตั้งค่า</a>
                         <a href="/stats" class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;margin-bottom:4px;" data-i18n="nav.stats" data-i18n-title="nav.statsTitle" title="สถิติ">📊 สถิติ</a>
                         <button class="btn btn-sm more-item" style="width:100%;justify-content:flex-start;color:var(--accent-red);" onclick="Auth.logout()" data-i18n="nav.logout">ออกจากระบบ</button>
                     </div>
