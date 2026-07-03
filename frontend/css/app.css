@@ -1317,16 +1317,9 @@ a:hover {
    accent + a slow pulse so it's visually distinct from the red manual
    record button and from the global auto-record indicator. */
 .radio-btn.auto-rec-active {
-    border-color: var(--accent-yellow);
-    background: var(--accent-yellow)20;
-    color: var(--accent-yellow);
-    animation: pulse-auto-rec 1.4s infinite;
+    /* Overridden by #btn-auto-record.auto-rec-active with valid rgba colors */
 }
 
-@keyframes pulse-auto-rec {
-    0%, 100% { box-shadow: 0 0 0 0 var(--accent-yellow)40; }
-    50% { box-shadow: 0 0 0 5px transparent; }
-}
 
 @keyframes blink {
     0%, 100% { opacity: 1; }
@@ -2498,14 +2491,16 @@ a:hover {
 }
 @keyframes rec-auto-pulse {
     0%, 100% {
-        border-color: var(--accent-yellow);
-        background: var(--accent-yellow)20;
-        box-shadow: 0 0 0 0 var(--accent-yellow)60;
+        border-color: rgba(234, 179, 8, 0.6);
+        background: rgba(234, 179, 8, 0.15);
+        box-shadow: 0 0 2px rgba(234, 179, 8, 0.4);
+        color: rgba(234, 179, 8, 0.8);
     }
     50% {
-        border-color: var(--accent-yellow);
-        background: var(--accent-yellow)40;
-        box-shadow: 0 0 10px 2px var(--accent-yellow)80;
+        border-color: rgba(234, 179, 8, 1);
+        background: rgba(234, 179, 8, 0.4);
+        box-shadow: 0 0 12px 3px rgba(234, 179, 8, 0.9);
+        color: #fff;
     }
 }
 .radio-btn.recording {
