@@ -34,16 +34,13 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 |:---:|:---:|
 | ![Devices Settings](frontend/assets/images/screenshot4.jpeg) | ![Schedule Recordings](frontend/assets/images/screenshot3.jpg) |
 
-| 3D Waterfall | Keyword & Alert Rules Editor |
+| Keyword & Alert Rules Editor | Alert Management |
 |:---:|:---:|
-| ![3D Waterfall](frontend/assets/images/screenshot5.jpg) | ![Rules](frontend/assets/images/screenshot6.jpg) |
-
-| Alert Management | Alert Statistics |
-|:---:|:---:|
-| ![Alert Management](frontend/assets/images/screenshot7.jpg) | ![Stats](frontend/assets/images/screenshot8.jpg) |
+| ![Rules](frontend/assets/images/screenshot6.jpg) | ![Alert Management](frontend/assets/images/screenshot7.jpg) |
 
 | Alert Statistics |
-| ![Stats](frontend/assets/images/screenshot8.jpg) |
+|:---:|:---:|
+|  ![Stats](frontend/assets/images/screenshot8.jpg) |
 
 </div>
 
