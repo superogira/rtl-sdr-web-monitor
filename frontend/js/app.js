@@ -2099,7 +2099,9 @@ const App = {
             const listening = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
             if (listening) return;  // live mode uses per-listener 'sig' frames
             if (data && typeof data.db === 'number') {
-                this._updateVfoBars(0, data.db);
+                // Route through _vfoSig[0] with EMA smoothing (prevents bouncing)
+                this._onVfoSig(0, data.db, false);
+                this._renderVfoSig();
             }
         });
 
