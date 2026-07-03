@@ -204,6 +204,61 @@ a:hover {
     box-shadow: 0 0 8px var(--accent-blue)40;
 }
 
+/* === BW Trigger Button + Popover === */
+.bw-trigger-btn {
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    letter-spacing: 0.5px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    background: var(--bg-input);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+}
+.bw-trigger-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border-color: var(--accent-yellow);
+}
+.bw-trigger-btn.active {
+    background: var(--accent-yellow);
+    color: #000;
+    border-color: var(--accent-yellow);
+}
+.bw-trigger-btn #bw-trigger-label {
+    font-weight: 700;
+}
+.bw-popover {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 6px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.bw-popover .bw-selector {
+    background: transparent;
+    border: none;
+    padding: 0;
+    box-shadow: none;
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 3px;
+}
+.bw-popover .bw-btn {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+}
+
 /* === Channel Bandwidth Selector (1.8k - 200k) === */
 .bw-selector {
     display: flex;

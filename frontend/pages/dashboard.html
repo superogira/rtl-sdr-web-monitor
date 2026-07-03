@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=35">
+    <link rel="stylesheet" href="/css/app.css?v=36">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -32,15 +32,20 @@
                     <button class="mode-btn" data-mode="USB">USB</button>
                     <button class="mode-btn" data-mode="LSB">LSB</button>
                 </div>
-                <div class="bw-selector" id="bw-buttons">
-                    <button class="bw-btn" data-bw="1800" title="SSB Narrow (1.8 kHz)">1.8k</button>
-                    <button class="bw-btn" data-bw="2400" title="SSB Voice (2.4 kHz) - USB/LSB voice">2.4k</button>
-                    <button class="bw-btn" data-bw="3000" title="SSB Wide (3 kHz)">3k</button>
-                    <button class="bw-btn" data-bw="6000" title="Narrow (6 kHz) - NBFM/CW">6k</button>
-                    <button class="bw-btn active" data-bw="12000" title="Normal (12 kHz) - NBFM voice">12k</button>
-                    <button class="bw-btn" data-bw="25000" title="Wide (25 kHz)">25k</button>
-                    <button class="bw-btn" data-bw="50000" title="Extra Wide (50 kHz)">50k</button>
-                    <button class="bw-btn" data-bw="200000" title="Broadcast (200 kHz) - WBFM">200k</button>
+                <button class="bw-trigger-btn" id="bw-trigger" onclick="App.toggleBwPopover(event)">
+                    BW <span id="bw-trigger-label">12k</span> ▾
+                </button>
+                <div class="bw-popover" id="bw-popover" style="display:none;">
+                    <div class="bw-selector" id="bw-buttons">
+                        <button class="bw-btn" data-bw="1800" title="SSB Narrow (1.8 kHz)">1.8k</button>
+                        <button class="bw-btn" data-bw="2400" title="SSB Voice (2.4 kHz) - USB/LSB voice">2.4k</button>
+                        <button class="bw-btn" data-bw="3000" title="SSB Wide (3 kHz)">3k</button>
+                        <button class="bw-btn" data-bw="6000" title="Narrow (6 kHz) - NBFM/CW">6k</button>
+                        <button class="bw-btn active" data-bw="12000" title="Normal (12 kHz) - NBFM voice">12k</button>
+                        <button class="bw-btn" data-bw="25000" title="Wide (25 kHz)">25k</button>
+                        <button class="bw-btn" data-bw="50000" title="Extra Wide (50 kHz)">50k</button>
+                        <button class="bw-btn" data-bw="200000" title="Broadcast (200 kHz) - WBFM">200k</button>
+                    </div>
                 </div>
             </div>
             <div class="header-right">
@@ -400,7 +405,7 @@
 <script src="/js/audio.js?v=16"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=8"></script>
-<script src="/js/app.js?v=67"></script>
+<script src="/js/app.js?v=68"></script>
     <script src="/js/dashboard_jobs.js?v=4"></script>
 <script src="/js/recording_jobs.js?v=7"></script>
 </body>

@@ -240,6 +240,8 @@ const App = {
                         b.classList.toggle('active', parseInt(b.dataset.bw) === data.channel_bw)
                     );
                 }
+                // Keep the trigger button label in sync with the actual BW
+                this._updateBwTriggerLabel(data.channel_bw);
             }
         }
         // Sync gain slider + numeric input — but NOT while the user is editing
@@ -534,6 +536,25 @@ const App = {
         }, holdMs);
     },
 
+    // === BW Popover ===
+    toggleBwPopover(e) {
+        if (e) e.stopPropagation();
+        const popover = document.getElementById('bw-popover');
+        if (!popover) return;
+        popover.style.display = (popover.style.display === 'none') ? '' : 'none';
+    },
+
+    _updateBwTriggerLabel(bw) {
+        const label = document.getElementById('bw-trigger-label');
+        if (!label) return;
+        if (bw >= 1e6) label.textContent = (bw / 1e6).toFixed(bw % 1e6 === 0 ? 0 : 2) + 'M';
+        else if (bw >= 1e3) label.textContent = (bw / 1e3).toFixed(bw % 1e3 === 0 ? 0 : 1) + 'k';
+        else label.textContent = String(bw);
+        // Reflect active state on the trigger when a BW button is active
+        const trigger = document.getElementById('bw-trigger');
+        if (trigger) trigger.classList.toggle('active', bw > 0);
+    },
+
     setupRadioControls() {
         // Role-based visibility:
         // - Tune buttons + freq display box: ALL users (used to tune the VFO /
@@ -602,19 +623,33 @@ const App = {
                 btn.classList.add('active');
                 this._channelBw = newBw;
                 if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('channelBw', newBw);
+                // Update the trigger button label
+                this._updateBwTriggerLabel(newBw);
                 // Per-VFO bandwidth change (audio WS) when listening; else global REST.
                 if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setBandwidth(newBw)) {
                     console.log(`🎛️ Channel BW (per-VFO): ${newBw/1e3} kHz`);
-                    return;
+                } else {
+                    try {
+                        await API.sdr.setBandwidth(newBw);
+                        console.log(`🎛️ Channel BW set to ${newBw/1e3} kHz`);
+                    } catch (err) {
+                        console.error('Set bandwidth failed:', err);
+                    }
                 }
-                try {
-                    await API.sdr.setBandwidth(newBw);
-                    console.log(`🎛️ Channel BW set to ${newBw/1e3} kHz`);
-                } catch (err) {
-                    console.error('Set bandwidth failed:', err);
-                }
+                // Close the popover after selection
+                const popover = document.getElementById('bw-popover');
+                if (popover) popover.style.display = 'none';
             });
         }
+
+        // Close BW popover on outside click
+        document.addEventListener('click', (e) => {
+            const popover = document.getElementById('bw-popover');
+            const trigger = document.getElementById('bw-trigger');
+            if (!popover || popover.style.display === 'none') return;
+            if (popover.contains(e.target) || trigger === e.target || (trigger && trigger.contains(e.target))) return;
+            popover.style.display = 'none';
+        });
 
         // Panel-right collapse toggle (for small screens / tablets)
         const collapseBtn = document.getElementById('panel-collapse-btn');
