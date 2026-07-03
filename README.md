@@ -18,6 +18,18 @@ A self-hosted web-based RTL-SDR receiver, recorder, and intelligent monitoring p
 
 Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many listeners, each with their own VFO offset, bookmarks.
 
+## 🌐 Live Demo
+
+Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
+
+| Field | Value |
+|-------|-------|
+| URL | https://sdr.e25wop.com |
+| Username | `demo_user` |
+| Password | `demo1234` |
+
+> ⚠️ The demo account is read-only (regular user). Some admin features (device settings, recording config, user management) are hidden.
+
 ## 📸 Screenshots
 
 <div align="center">
