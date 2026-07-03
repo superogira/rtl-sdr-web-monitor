@@ -32,7 +32,7 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 
 | Devices Settings | Schedule Recordings |
 |:---:|:---:|
-| ![Devices Settings](frontend/assets/images/screenshot4.jpeg) | ![Schedule Recordings](frontend/assets/images/screenshot3.jpg) |
+| ![Devices Settings](frontend/assets/images/screenshot4.jpg) | ![Schedule Recordings](frontend/assets/images/screenshot3.jpeg) |
 
 | Keyword & Alert Rules Editor | Alert Management |
 |:---:|:---:|
