@@ -143,7 +143,14 @@ async def no_cache_static(request, call_next):
     are left untouched.
     """
     path = request.url.path
-    if path.startswith("/js/") or path.startswith("/css/") or path.endswith(".html"):
+    # Disable cache for all JS/CSS and ALL page routes (not just *.html),
+    # because routes like /dashboard, /alert-rules, /settings etc. serve
+    # HTML via FileResponse but don't end with .html in the URL.
+    _PAGE_ROUTES = {
+        "/", "/login", "/dashboard", "/recordings", "/settings",
+        "/alert-rules", "/alerts", "/stats", "/admin/users", "/waterfall-test",
+    }
+    if path.startswith("/js/") or path.startswith("/css/") or path.endswith(".html") or path in _PAGE_ROUTES:
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
