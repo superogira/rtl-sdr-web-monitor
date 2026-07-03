@@ -86,6 +86,11 @@ class SharedConnectionConsumer:
                 break
 
     # ---- RtlTcpClient-compatible API ----
+    def get_capabilities(self) -> dict:
+        """Delegate to the underlying RtlTcpClient (tuner caps don't change
+        per-consumer)."""
+        return self._conn.client.get_capabilities()
+
     @property
     def connected(self) -> bool:
         return self._conn.client.connected

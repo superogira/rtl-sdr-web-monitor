@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: '2026.06.29-v2',  // Waterfall AUTO (once/cont) fix: no longer
+    VERSION: 'v1.10-2026.07.03',  // Waterfall AUTO (once/cont) fix: no longer
                                // clobbered by periodic status sync. AUTO
                                // values now persist until the user changes
                                // them or the active device changes.
