@@ -39,7 +39,7 @@ Built for shared-tuner, multi-user environments: one RTL-SDR dongle serves many 
 | ![Rules](frontend/assets/images/screenshot6.jpg) | ![Alert Management](frontend/assets/images/screenshot7.jpg) |
 
 | Alert Statistics |
-|:---:|:---:|
+|:---:|
 |  ![Stats](frontend/assets/images/screenshot8.jpg) |
 
 </div>
