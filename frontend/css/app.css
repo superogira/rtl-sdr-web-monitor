@@ -2127,6 +2127,15 @@ a:hover {
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
 }
 
+/* Bookmark/freq NAME text should use the readable body font, not the
+   7-segment/mono display font (which is hard to read for English text). */
+[data-theme="v2"] .bookmark-item .name,
+[data-theme="v2"] .bookmark-chip-name,
+[data-theme="v2"] .bm-dialog input[type="text"],
+[data-theme="v2"] .bm-dialog select {
+    font-family: var(--font-sans), 'Sarabun', 'Inter', sans-serif !important;
+}
+
 [data-theme="v2"] .bookmark-item .freq,
 [data-theme="v2"] .freq-item .freq-value {
     font-family: var(--v2-mono-font);
