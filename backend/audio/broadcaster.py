@@ -621,7 +621,9 @@ class AudioBroadcaster:
                     # === Per-listener AUTO-RECORD (multi-user) ===
                     # NOTE: uses PRE-squelch audio (the real content) so a user
                     # with live squelch OFF still records complete audio.
-                    if ln.auto_record:
+                    # Also process when _ar_recording is True even if auto_record
+                    # was just disabled — so the sentinel (-1.0) triggers finish.
+                    if ln.auto_record or ln._ar_recording:
                         self._process_auto_record(ln, audio, audio_rate)
 
                     # Apply per-listener squelch + batch into an AUD2 frame.
