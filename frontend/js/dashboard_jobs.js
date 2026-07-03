@@ -91,8 +91,10 @@
                     <option value="">${I18n.t('rj.loadingDevice')}</option>
                 </select>
             `;
-            const settingsBtn = document.getElementById('btn-settings');
-            if (settingsBtn) headerRight.insertBefore(wrap, settingsBtn);
+            // Insert before the More menu (☰) so ☰ stays rightmost
+            const moreBtn = document.getElementById('btn-more');
+            const moreMenu = moreBtn ? moreBtn.closest('.more-menu') : null;
+            if (moreMenu) headerRight.insertBefore(wrap, moreMenu);
             else headerRight.appendChild(wrap);
 
             const sel = document.getElementById('dj-device-select');
