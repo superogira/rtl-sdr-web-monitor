@@ -966,7 +966,9 @@ const App = {
         //   yellow tint; when it's actively capturing it blinks red.
         // The separate 🔄 button is no longer needed.
         const btnRecord = document.getElementById('btn-record');
-        if (btnRecord) this._bindRecordButton(btnRecord);
+        if (btnRecord) btnRecord.addEventListener('click', () => this.toggleRecording());
+        const btnAutoRecord = document.getElementById('btn-auto-record');
+        if (btnAutoRecord) btnAutoRecord.addEventListener('click', () => this.toggleAutoRecord());
 
         // === Multi-VFO controls (1-4 VFOs: A/B/C/D) ===
         // +VFO / -VFO count buttons. NOTE: these now live INSIDE
@@ -1309,8 +1311,8 @@ const App = {
      */
     _onAutoRecordAck(obj) {
         this._autoRecordOn = !!obj.enabled;
-        // Use the combined record button (was btn-auto-record).
-        const btn = document.getElementById('btn-record');
+        // Toggle visual state on the dedicated auto-record button (🔄).
+        const btn = document.getElementById('btn-auto-record');
         if (btn) {
             btn.classList.toggle('auto-rec-active', this._autoRecordOn);
             btn.title = this._autoRecordOn

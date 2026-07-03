@@ -2480,3 +2480,19 @@ a:hover {
     white-space: nowrap;
 }
 
+
+/* === Record button states (manual=red slow, auto=yellow fast) === */
+@keyframes rec-manual-blink {
+    0%, 100% { box-shadow: 0 0 8px var(--accent-red)80; }
+    50% { box-shadow: 0 0 0 transparent; }
+}
+@keyframes rec-auto-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0.4; }
+}
+.radio-btn.recording {
+    animation: rec-manual-blink 1.5s infinite;
+}
+#btn-auto-record.auto-rec-active {
+    animation: rec-auto-blink 0.8s infinite;
+}

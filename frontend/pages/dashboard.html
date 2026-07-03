@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
     <!-- DSEG7 Classic (7-segment display font for Theme V2). Loaded from CDN; falls back to monospace if offline. -->
     <link href="https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css" rel="stylesheet">
-    <link rel="stylesheet" href="/css/app.css?v=37">
+    <link rel="stylesheet" href="/css/app.css?v=38">
     <script>
         // Apply saved theme before first paint to avoid a flash of the wrong theme.
         (function () {
@@ -319,14 +319,10 @@
                     </div>
                 </div>
 
-                <!-- Record toggle -->
+                <!-- Record buttons: Manual (⏺) + Auto (🔄) -->
                 <div class="radio-controls">
-                    <!-- Combined record button:
-                         - QUICK CLICK: toggle MANUAL recording (start/stop).
-                         - LONG-PRESS (≥500ms): toggle AUTO-record (auto-capture
-                           gated by squelch). Requires "ฟังสด" to be active.
-                         The separate 🔄 button has been merged into this one. -->
-                    <button class="radio-btn" id="btn-record" data-i18n-title="dash.recordTitle" title="กด = อัดด้วยตนเอง / กดค้าง = อัดอัตโนมัติ (ต้องกดฟังสดก่อน)">⏺</button>
+                    <button class="radio-btn" id="btn-record" data-i18n-title="dash.recordTitle" title="อัดด้วยตนเอง (Manual) — ต้องกดฟังสดก่อน">⏺</button>
+                    <button class="radio-btn" id="btn-auto-record" data-i18n-title="dash.autoRecOffTitle" title="อัดอัตโนมัติ (Auto) — บันทึกเมื่อมีสัญญาณผ่าน SQL (ต้องกดฟังสดก่อน)">🔄</button>
                 </div>
 
                 <!-- Volume control -->
@@ -414,7 +410,7 @@
 <script src="/js/audio.js?v=16"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=8"></script>
-<script src="/js/app.js?v=73"></script>
+<script src="/js/app.js?v=74"></script>
     <script src="/js/dashboard_jobs.js?v=5"></script>
 <script src="/js/recording_jobs.js?v=7"></script>
 </body>
