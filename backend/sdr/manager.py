@@ -70,8 +70,16 @@ class SDRManager:
     # device so background recording jobs can use it.
     _IDLE_STREAMING_TIMEOUT = 60  # seconds
 
-    def __init__(self):
+    def __init__(self, broadcaster: "AudioBroadcaster" = None):
         persisted = self._load_persisted_settings()
+        # Bind the AudioBroadcaster used by this manager. When None (the
+        # default for the global singleton), the module-level audio_broadcaster
+        # is used. Per-device runtimes pass their own isolated broadcaster.
+        global audio_broadcaster
+        if broadcaster is not None:
+            self._broadcaster = broadcaster
+        else:
+            self._broadcaster = audio_broadcaster
         # Keep a plain client for status/host/port before the first connect.
         # On connect() we swap self.client to a SharedConnectionConsumer from
         # the connection pool so that recording jobs and live listening share
@@ -169,7 +177,7 @@ class SDRManager:
         # take over the tuner. When a listener connects we promote back to
         # PRIORITY_LIVE (10) so the user retunes instantly.
         self._last_listener_count: int = 0
-        audio_broadcaster.on_listener_count_change(
+        self._broadcaster.on_listener_count_change(
             self._on_listener_count_changed
         )
         # Register the per-listener auto-record callback so finished segments
@@ -177,7 +185,7 @@ class SDRManager:
         # manual per-user recordings. This gives every user an independent
         # auto-record on their own VFO/mode/bandwidth, fully decoupled from
         # the global (center-channel) auto-record in _stream_loop.
-        audio_broadcaster.on_auto_recording(self._on_listener_auto_recording)
+        self._broadcaster.on_auto_recording(self._on_listener_auto_recording)
         self._sync_auto_record_policy()
 
     # ------------------------------------------------------------------
@@ -227,8 +235,8 @@ class SDRManager:
             "vfo_offset_hz": round(self._vfo_offset_hz, 1),
             "vfo_frequency": self.vfo_frequency,
             "vfo_margin_ratio": round(self._vfo_margin_ratio, 2),
-            "listeners": audio_broadcaster.listener_count,
-            "max_listeners": audio_broadcaster.max_listeners,
+            "listeners": self._broadcaster.listener_count,
+            "max_listeners": self._broadcaster.max_listeners,
             "device_id": self._active_device_id,
             # Per-device waterfall dB range (None = use frontend global/localStorage).
             "waterfall_db_min": self._device_waterfall_db_min,
@@ -240,7 +248,7 @@ class SDRManager:
             # listener's manual + per-listener auto-record state, channel and
             # owning user. Drives the dashboard indicator below the clock so
             # admins can see who is recording what (manual vs auto, which user).
-            "listener_recordings": audio_broadcaster.get_listener_recordings(),
+            "listener_recordings": self._broadcaster.get_listener_recordings(),
         }
 
     def cursor_signal_level(self, offset_hz: float) -> Optional[float]:
@@ -459,6 +467,25 @@ class SDRManager:
                         f"{self.client._frequency} Hz, {self.client._sample_rate} SPS, "
                         f"gain {self.client._gain})")
 
+    def _apply_device_config_by_dict(self, device_dict: dict) -> None:
+        """Apply a device's config from a dict (used by per-device runtimes).
+
+        This is a lightweight wrapper that constructs a minimal object with the
+        attributes ``get_config()``, ``name``, and ``type`` so the existing
+        ``_apply_device_config`` logic can be reused without an ORM row.
+        """
+        class _DeviceShim:
+            def __init__(self, d):
+                self.id = d.get("id")
+                self.name = d.get("name", "")
+                self.type = d.get("type", "rtl_tcp")
+                self._config = d.get("config", {}) or {}
+
+            def get_config(self):
+                return self._config
+
+        self._apply_device_config(_DeviceShim(device_dict))
+
     async def load_active_device(self) -> bool:
         """Load and apply the active device's config at startup.
 
@@ -588,7 +615,7 @@ class SDRManager:
         # soon as a user connects to /ws/audio. This is what allows scheduled
         # jobs to run even while the 24/7 autostart stream is up.
         initial_prio = (
-            PRIORITY_LIVE if audio_broadcaster.listener_count > 0
+            PRIORITY_LIVE if self._broadcaster.listener_count > 0
             else PRIORITY_IDLE
         )
         consumer = await connection_pool.acquire(
@@ -774,7 +801,7 @@ class SDRManager:
         self._clamp_vfo_offset()
         # Reset EVERY listener's per-user VFO offset, since their offsets
         # were relative to the old center frequency too.
-        audio_broadcaster.reset_all_vfo()
+        self._broadcaster.reset_all_vfo()
         # Persist the (now-current) shared tuner state so a restart does not
         # boot back to a stale center/sample_rate that the JOB had moved away
         # from.
@@ -831,7 +858,7 @@ class SDRManager:
             self._vfo_margin_ratio = 0.40
         # Keep the per-listener broadcaster in sync so listener VFO clamping
         # uses the same ratio.
-        audio_broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
+        self._broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
 
     async def set_vfo_margin_ratio(self, ratio: float) -> dict:
         """Set VFO passband margin ratio (0.40–0.49) and persist to app settings."""
@@ -846,7 +873,7 @@ class SDRManager:
             self._demod.set_vfo_offset(clamped)
         # Propagate to the per-listener broadcaster (used for clamping each
         # listener's VFO offset).
-        audio_broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
+        self._broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
         logger.info(f"VFO margin ratio set to {ratio:.2f} (max offset {max_offset:.0f} Hz)")
         return {"vfo_margin_ratio": self._vfo_margin_ratio}
 
@@ -883,24 +910,24 @@ class SDRManager:
         try:
             raw = await get_setting("sdr_max_listeners", "8")
             n = self._validate_max_listeners(int(raw))
-            audio_broadcaster.set_max_listeners(n)
+            self._broadcaster.set_max_listeners(n)
             logger.info(f"Max listeners loaded: {n}")
         except Exception as e:
             logger.warning(f"Failed to load max listeners, using 8: {e}")
-            audio_broadcaster.set_max_listeners(8)
+            self._broadcaster.set_max_listeners(8)
 
     async def set_max_listeners(self, n: int) -> dict:
         """Set max listeners (1–128) and persist to app settings."""
         n = self._validate_max_listeners(n)
-        actual = audio_broadcaster.set_max_listeners(n)
+        actual = self._broadcaster.set_max_listeners(n)
         await set_setting("sdr_max_listeners", str(actual))
         logger.info(
             f"Max listeners set to {actual} "
-            f"(current: {audio_broadcaster.listener_count})"
+            f"(current: {self._broadcaster.listener_count})"
         )
         return {
             "max_listeners": actual,
-            "current_listeners": audio_broadcaster.listener_count,
+            "current_listeners": self._broadcaster.listener_count,
         }
 
     async def set_mode(self, mode: str):
@@ -1122,9 +1149,9 @@ class SDRManager:
         before the event loop is running (called once from __init__).
         """
         try:
-            audio_broadcaster.ar_vad_silence_timeout = int(self._vad_silence_timeout)
-            audio_broadcaster.ar_max_duration = int(self._max_recording_duration)
-            audio_broadcaster.ar_min_duration = int(self._min_recording_duration)
+            self._broadcaster.ar_vad_silence_timeout = int(self._vad_silence_timeout)
+            self._broadcaster.ar_max_duration = int(self._max_recording_duration)
+            self._broadcaster.ar_min_duration = int(self._min_recording_duration)
         except Exception as e:
             logger.warning(f"Failed to sync auto-record policy: {e}")
 
@@ -1268,8 +1295,8 @@ class SDRManager:
                         # Pass the already-computed global `audio` so that
                         # listeners on the SAME channel (mode/bw/vfo) reuse
                         # it instead of demodulating again (~2x CPU saving).
-                        if audio_broadcaster.has_listeners:
-                            audio_broadcaster.feed_iq(
+                        if self._broadcaster.has_listeners:
+                            self._broadcaster.feed_iq(
                                 iq_data, self.client._sample_rate, self.audio_rate,
                                 global_audio=audio if len(audio) > 0 else None,
                                 g_mode=self.mode,
@@ -1320,7 +1347,7 @@ class SDRManager:
                     should_auto_record = (
                         self._auto_record
                         and self.is_streaming
-                        and (audio_broadcaster.has_listeners or not device_has_jobs)
+                        and (self._broadcaster.has_listeners or not device_has_jobs)
                     )
                     if not should_auto_record and self._auto_recording:
                         logger.info(

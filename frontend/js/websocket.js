@@ -12,9 +12,17 @@ const WS = {
     connect() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.url = `${protocol}//${window.location.host}/ws`;
-        // Append JWT token as query param for WebSocket auth
+        // Append JWT token + per-tab device_id as query params for WebSocket auth
+        const params = new URLSearchParams();
         const _token = Auth.getToken();
-        if (_token) this.url += `?token=${encodeURIComponent(_token)}`;
+        if (_token) params.set('token', _token);
+        // Per-tab device selection: route this WS to the right per-device runtime.
+        if (typeof SelectedDevice !== 'undefined') {
+            const devId = SelectedDevice.get();
+            if (devId) params.set('device_id', devId);
+        }
+        const qs = params.toString();
+        if (qs) this.url += `?${qs}`;
         this._doConnect();
     },
 
@@ -161,3 +169,13 @@ const WS = {
         }
     },
 };
+
+// Reconnect the WebSocket when the per-tab device changes so the new
+// connection carries the right ?device_id= for multi-device live listening.
+window.addEventListener('selected-device-changed', () => {
+    if (WS.ws) {
+        console.log('🔌 [websocket] Reconnecting due to device change');
+        WS.disconnect();
+        setTimeout(() => WS.connect(), 300);
+    }
+});

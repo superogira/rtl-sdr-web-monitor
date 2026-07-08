@@ -83,21 +83,33 @@ const API = {
 
     // SDR
     sdr: {
+        /** Build a URL with the per-tab device_id query param appended (if any)
+         *  so every SDR call routes to the correct per-device runtime. */
+        _url(path) {
+            const id = (typeof SelectedDevice !== 'undefined') ? SelectedDevice.get() : null;
+            const sep = path.includes('?') ? '&' : '?';
+            return id ? `${path}${sep}device_id=${encodeURIComponent(id)}` : path;
+        },
         async connect(host = null, port = null) {
             const body = (host) ? { host, port: parseInt(port) || 1234 } : null;
-            return API.request('POST', '/api/sdr/connect', body);
+            return API.request('POST', API.sdr._url('/api/sdr/connect'), body);
         },
         async setConnection(host, port) {
             return API.request('POST', '/api/sdr/connection', { host, port: parseInt(port) || 1234 });
         },
         async disconnect() {
-            return API.request('POST', '/api/sdr/disconnect');
+            return API.request('POST', API.sdr._url('/api/sdr/disconnect'));
         },
-        async status() {
-            return API.request('GET', '/api/sdr/status');
+        async status(deviceId = null) {
+            // Per-tab device selection: append ?device_id= so the backend
+            // resolves the correct per-device runtime for multi-device listening.
+            const id = deviceId
+                || (typeof SelectedDevice !== 'undefined' ? SelectedDevice.get() : null);
+            const url = id ? `/api/sdr/status?device_id=${encodeURIComponent(id)}` : '/api/sdr/status';
+            return API.request('GET', url);
         },
         async setFrequency(freq) {
-            return API.request('POST', '/api/sdr/frequency', { frequency: freq });
+            return API.request('POST', API.sdr._url('/api/sdr/frequency'), { frequency: freq });
         },
         /**
          * Set the VFO (listening) frequency by absolute Hz.
@@ -105,7 +117,7 @@ const API = {
          * within the passband without retuning the SDR (waterfall stays still).
          */
         async setVFO(freq) {
-            return API.request('POST', '/api/sdr/vfo', { frequency: freq });
+            return API.request('POST', API.sdr._url('/api/sdr/vfo'), { frequency: freq });
         },
         /**
          * Set the VFO passband margin ratio (admin only).
@@ -114,23 +126,23 @@ const API = {
          * higher = wider tunable range.
          */
         async setVFOMargin(ratio) {
-            return API.request('POST', '/api/sdr/vfo-margin', { ratio: parseFloat(ratio) });
+            return API.request('POST', API.sdr._url('/api/sdr/vfo-margin'), { ratio: parseFloat(ratio) });
         },
         async getCapabilities() {
-            return API.request('GET', '/api/sdr/capabilities');
+            return API.request('GET', API.sdr._url('/api/sdr/capabilities'));
         },
 
         async setSampleRate(rate) {
-            return API.request('POST', '/api/sdr/sample-rate', { sample_rate: rate });
+            return API.request('POST', API.sdr._url('/api/sdr/sample-rate'), { sample_rate: rate });
         },
         async setGain(gain) {
-            return API.request('POST', '/api/sdr/gain', { gain });
+            return API.request('POST', API.sdr._url('/api/sdr/gain'), { gain });
         },
         async setMode(mode) {
-            return API.request('POST', '/api/sdr/mode', { mode });
+            return API.request('POST', API.sdr._url('/api/sdr/mode'), { mode });
         },
         async setSquelch(level) {
-            return API.request('POST', '/api/sdr/squelch', { level });
+            return API.request('POST', API.sdr._url('/api/sdr/squelch'), { level });
         },
         async getRecordingConfig() {
             return API.request('GET', '/api/sdr/recording-config');
@@ -139,25 +151,25 @@ const API = {
             return API.request('POST', '/api/sdr/recording-config', data);
         },
         async setFFTSize(size) {
-            return API.request('POST', '/api/sdr/fft-size', { fft_size: size });
+            return API.request('POST', API.sdr._url('/api/sdr/fft-size'), { fft_size: size });
         },
         async setBandwidth(bwHz) {
-            return API.request('POST', '/api/sdr/bandwidth', { bandwidth: bwHz });
+            return API.request('POST', API.sdr._url('/api/sdr/bandwidth'), { bandwidth: bwHz });
         },
         async setFreqCorrection(ppm) {
-            return API.request('POST', '/api/sdr/freq-correction', { ppm });
+            return API.request('POST', API.sdr._url('/api/sdr/freq-correction'), { ppm });
         },
         async streamStart() {
-            return API.request('POST', '/api/sdr/stream/start');
+            return API.request('POST', API.sdr._url('/api/sdr/stream/start'));
         },
         async streamStop() {
-            return API.request('POST', '/api/sdr/stream/stop');
+            return API.request('POST', API.sdr._url('/api/sdr/stream/stop'));
         },
         async recordStart() {
-            return API.request('POST', '/api/sdr/record/start');
+            return API.request('POST', API.sdr._url('/api/sdr/record/start'));
         },
         async recordStop() {
-            return API.request('POST', '/api/sdr/record/stop');
+            return API.request('POST', API.sdr._url('/api/sdr/record/stop'));
         },
         /**
          * Get whether manual recording is enabled for regular (role=user) users.

@@ -11,6 +11,7 @@ import logging
 from backend.auth.dependencies import get_current_user, require_admin
 from backend.models.user import User
 from backend.sdr.manager import sdr_manager
+from backend.sdr.live_runtime import live_runtimes
 from backend.audio.demod import DemodMode
 from backend.database import get_db
 from backend.models.recording import Recording, RecordingStatus
@@ -23,6 +24,16 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_runtime(device_id: Optional[str] = None):
+    """Resolve the live runtime (SDRManager, AudioBroadcaster) for a device.
+
+    Falls back to the global singleton when device_id is None or matches the
+    active device on the global singleton (backward compatible).
+    """
+    return await live_runtimes.get(device_id)
+
 
 router = APIRouter(prefix="/api/sdr", tags=["SDR Control"])
 
@@ -83,9 +94,17 @@ class RecordingConfigRequest(BaseModel):
 # === Endpoints ===
 
 @router.get("/status")
-async def get_sdr_status(current_user: User = Depends(get_current_user)):
-    """Get current SDR status."""
-    return sdr_manager.status
+async def get_sdr_status(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Get current SDR status.
+
+    Optional ?device_id= selects a per-device live runtime so different browser
+    tabs can listen to different physical SDR devices independently.
+    """
+    mgr, _ = await _get_runtime(device_id)
+    return mgr.status
 
 
 @router.post("/connection")
@@ -101,44 +120,50 @@ async def set_connection(
 @router.post("/connect")
 async def connect_sdr(
     req: Optional[ConnectionRequest] = None,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Connect to RTL-TCP server.
 
     Optionally accepts {host, port} to update the target before connecting.
+    Pass ?device_id= to connect a per-device runtime (multi-device listening).
     """
+    mgr, _ = await _get_runtime(device_id)
     if req is not None and req.host:
         # If currently connected, disconnect first so new endpoint applies.
-        if sdr_manager.client.connected:
-            await sdr_manager.disconnect()
-        sdr_manager.set_connection(req.host, req.port)
-    result = await sdr_manager.connect()
+        if mgr.client.connected:
+            await mgr.disconnect()
+        mgr.set_connection(req.host, req.port)
+    result = await mgr.connect()
     if not result["success"]:
         raise HTTPException(status_code=503, detail="Failed to connect to RTL-TCP")
     return result
 
 
 @router.post("/disconnect")
-async def disconnect_sdr(current_user: User = Depends(get_current_user)):
+async def disconnect_sdr(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Disconnect from RTL-TCP."""
-    await sdr_manager.disconnect()
+    mgr, _ = await _get_runtime(device_id)
+    await mgr.disconnect()
     return {"success": True}
 
 
 @router.post("/frequency")
 async def set_frequency(
     req: FrequencyRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(require_admin),
 ):
     """Set center frequency (admin only).
-
-    Regular users cannot change the SDR center frequency because it moves the
-    whole waterfall for everyone. Instead, users use POST /api/sdr/vfo to move
-    the listening cursor within the current passband.
+    Pass ?device_id= for per-device live runtime.
     """
-    if not sdr_manager.client.connected:
+    mgr, _ = await _get_runtime(device_id)
+    if not mgr.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
-    await sdr_manager.set_frequency(req.frequency)
+    await mgr.set_frequency(req.frequency)
     return {"frequency": req.frequency}
 
 
@@ -149,19 +174,17 @@ class VFORequest(BaseModel):
 @router.post("/vfo")
 async def set_vfo(
     req: VFORequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Set the VFO (listening) frequency by absolute Hz.
-
-    Available to all users (admin + user). Computes offset from the current
-    SDR center frequency and shifts the IQ in software (OpenWebRX-style) so
-    the waterfall doesn't move. The offset must stay within
-    ±(vfo_margin_ratio)*sample_rate (default 0.4, configurable by admin).
+    Pass ?device_id= for per-device live runtime.
     """
-    if not sdr_manager.client.connected:
+    mgr, _ = await _get_runtime(device_id)
+    if not mgr.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
     try:
-        return sdr_manager.set_vfo_frequency(req.frequency)
+        return mgr.set_vfo_frequency(req.frequency)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -220,13 +243,15 @@ async def set_max_listeners(
 
 @router.get("/capabilities")
 async def get_capabilities(
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Get supported sample rates and gains for the connected device."""
-    if not sdr_manager.client or not sdr_manager.client.connected:
+    mgr, _ = await _get_runtime(device_id)
+    if not mgr.client or not mgr.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
     try:
-        caps = sdr_manager.client.get_capabilities()
+        caps = mgr.client.get_capabilities()
         return caps
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -235,35 +260,41 @@ async def get_capabilities(
 @router.post("/sample-rate")
 async def set_sample_rate(
     req: SampleRateRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(require_admin),
 ):
     """Set sample rate (admin only)."""
-    if not sdr_manager.client.connected:
+    mgr, _ = await _get_runtime(device_id)
+    if not mgr.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
-    await sdr_manager.set_sample_rate(req.sample_rate)
+    await mgr.set_sample_rate(req.sample_rate)
     return {"sample_rate": req.sample_rate}
 
 
 @router.post("/gain")
 async def set_gain(
     req: GainRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(require_admin),
 ):
     """Set gain (admin only)."""
-    if not sdr_manager.client.connected:
+    mgr, _ = await _get_runtime(device_id)
+    if not mgr.client.connected:
         raise HTTPException(status_code=400, detail="Not connected")
-    await sdr_manager.set_gain(req.gain)
+    await mgr.set_gain(req.gain)
     return {"gain": req.gain}
 
 
 @router.post("/mode")
 async def set_mode(
     req: ModeRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Set demodulation mode."""
+    mgr, _ = await _get_runtime(device_id)
     try:
-        await sdr_manager.set_mode(req.mode)
+        await mgr.set_mode(req.mode)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {req.mode}. Use FM, AM, USB, LSB")
     return {"mode": req.mode.upper()}
@@ -272,6 +303,7 @@ async def set_mode(
 @router.post("/squelch")
 async def set_squelch(
     req: SquelchRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(require_admin),
 ):
     """Set the GLOBAL squelch baseline (admin only).
@@ -282,18 +314,21 @@ async def set_squelch(
     which is fully independent — one user changing SQL no longer moves
     anyone else's slider.
     """
-    sdr_manager.set_squelch(req.level)
+    mgr, _ = await _get_runtime(device_id)
+    mgr.set_squelch(req.level)
     return {"squelch": req.level}
 
 
 @router.post("/fft-size")
 async def set_fft_size(
     req: FFTSizeRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Set FFT output bins (waterfall resolution)."""
+    mgr, _ = await _get_runtime(device_id)
     try:
-        sdr_manager.set_fft_bins(req.fft_size)
+        mgr.set_fft_bins(req.fft_size)
         return {"fft_size": req.fft_size}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -302,11 +337,13 @@ async def set_fft_size(
 @router.post("/bandwidth")
 async def set_bandwidth(
     req: BandwidthRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
 ):
     """Set channel bandwidth (Hz) for signal level computation."""
+    mgr, _ = await _get_runtime(device_id)
     try:
-        sdr_manager.set_channel_bw(req.bandwidth)
+        mgr.set_channel_bw(req.bandwidth)
         return {"bandwidth": req.bandwidth}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -315,10 +352,12 @@ async def set_bandwidth(
 @router.post("/freq-correction")
 async def set_freq_correction(
     req: FreqCorrectionRequest,
+    device_id: Optional[str] = None,
     current_user: User = Depends(require_admin),
 ):
     """Set frequency correction in PPM (admin only)."""
-    await sdr_manager.set_freq_correction(req.ppm)
+    mgr, _ = await _get_runtime(device_id)
+    await mgr.set_freq_correction(req.ppm)
     return {"ppm": req.ppm}
 
 
@@ -384,33 +423,49 @@ async def set_recording_enabled(
 
 
 @router.post("/stream/start")
-async def start_streaming(current_user: User = Depends(get_current_user)):
+async def start_streaming(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Start streaming IQ data."""
-    result = await sdr_manager.start_streaming()
+    mgr, _ = await _get_runtime(device_id)
+    result = await mgr.start_streaming()
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
 
 @router.post("/stream/stop")
-async def stop_streaming(current_user: User = Depends(get_current_user)):
+async def stop_streaming(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Stop streaming."""
-    return await sdr_manager.stop_streaming()
+    mgr, _ = await _get_runtime(device_id)
+    return await mgr.stop_streaming()
 
 
 @router.post("/record/start")
-async def start_recording(current_user: User = Depends(get_current_user)):
+async def start_recording(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Start recording manually."""
-    result = await sdr_manager.start_recording()
+    mgr, _ = await _get_runtime(device_id)
+    result = await mgr.start_recording()
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
 
 @router.post("/record/stop")
-async def stop_recording(current_user: User = Depends(get_current_user)):
+async def stop_recording(
+    device_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Stop recording."""
-    result = await sdr_manager.stop_recording()
+    mgr, _ = await _get_runtime(device_id)
+    result = await mgr.stop_recording()
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result

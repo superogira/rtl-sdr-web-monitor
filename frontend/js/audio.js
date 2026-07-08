@@ -471,7 +471,16 @@ const LiveAudio = {
         if (!v) return;
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const token = localStorage.getItem('access_token') || '';
-        const url = `${protocol}//${window.location.host}/ws/audio${token ? '?token=' + encodeURIComponent(token) : ''}`;
+        // Build query string with token + per-tab device_id (for multi-device
+        // live listening). Each tab can listen to a different physical device.
+        const params = new URLSearchParams();
+        if (token) params.set('token', token);
+        if (typeof SelectedDevice !== 'undefined') {
+            const devId = SelectedDevice.get();
+            if (devId) params.set('device_id', devId);
+        }
+        const qs = params.toString();
+        const url = `${protocol}//${window.location.host}/ws/audio${qs ? '?' + qs : ''}`;
         console.log(`🔊 [audio] VFO ${v.id} connecting WS:`, url);
 
         try {
@@ -762,4 +771,14 @@ const LiveAudio = {
 // Re-render the listen button label when language changes.
 document.addEventListener('languagechange', () => {
     if (typeof LiveAudio !== 'undefined') LiveAudio._updateUI();
+});
+
+// When the per-tab device changes, restart any live VFOs so they connect to
+// the new device's runtime (different WebSocket ?device_id=).
+window.addEventListener('selected-device-changed', () => {
+    if (typeof LiveAudio === 'undefined') return;
+    if (!LiveAudio.anyPlaying) return;
+    console.log('🔊 [audio] Restarting VFOs due to device change');
+    LiveAudio.stop();
+    setTimeout(() => LiveAudio.start().catch(e => console.warn('audio restart failed:', e)), 500);
 });

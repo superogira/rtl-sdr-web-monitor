@@ -226,6 +226,18 @@ async def websocket_endpoint(websocket: WebSocket):
         logger_ws.error(f"WebSocket accept failed: {e}")
         return
 
+    # Resolve the live runtime for this connection's device_id (if any).
+    # Per-device runtimes allow different browser tabs to listen to different
+    # physical SDR devices simultaneously. Falls back to the global singleton.
+    from backend.sdr.live_runtime import live_runtimes
+    ws_device_id = websocket.query_params.get("device_id")
+    try:
+        mgr, bcast = await live_runtimes.get(ws_device_id)
+    except Exception as e:
+        logger_ws.warning(f"WebSocket device {ws_device_id} not available: {e}")
+        await websocket.close(code=4404, reason=f"Device not available: {e}")
+        return
+
     # Register spectrum callback (per-connection; unregistered on disconnect
     # so a closed socket doesn't accumulate dead callbacks forever).
     spectrum_data = {"latest": None}
@@ -233,7 +245,7 @@ async def websocket_endpoint(websocket: WebSocket):
     def on_spectrum(data):
         spectrum_data["latest"] = data
 
-    sdr_manager.on_spectrum(on_spectrum)
+    mgr.on_spectrum(on_spectrum)
 
     # New-recording fan-out: each WS connection gets its OWN queue (unlike the
     # old get_new_recordings() poll, which cleared a single global list after
@@ -255,7 +267,7 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception:
                 pass
 
-    sdr_manager.on_new_recording(on_new_recording)
+    mgr.on_new_recording(on_new_recording)
 
     # Per-connection VFO cursor offset for non-live SIG. When a client is NOT
     # listening live it sends its cursor offset here; the status loop computes
@@ -315,9 +327,9 @@ async def websocket_endpoint(websocket: WebSocket):
             sig_cursor_counter += 1
             off = cursor_state["offset_hz"]
             if off is not None and sig_cursor_counter >= SIG_CURSOR_INTERVAL \
-                    and not audio_broadcaster.has_listeners:
+                    and not bcast.has_listeners:
                 sig_cursor_counter = 0
-                lvl = sdr_manager.cursor_signal_level(off)
+                lvl = mgr.cursor_signal_level(off)
                 if lvl is not None:
                     await websocket.send_text(json.dumps({
                         "type": "sig_cursor", "data": {"db": round(lvl, 1)},
@@ -327,15 +339,15 @@ async def websocket_endpoint(websocket: WebSocket):
             status_counter += 1
             if status_counter >= 30:
                 status_counter = 0
-                status = sdr_manager.status
+                status = mgr.status
                 # If this client has declared a VFO cursor AND is not listening
                 # live, override the global signal_level_db with the channel
                 # power at its cursor offset (so VFO A shows the freq under the
                 # cursor, not the center). Live listeners get per-listener 'sig'
                 # frames over /ws/audio instead, so this is only for non-live.
                 off = cursor_state["offset_hz"]
-                if off is not None and not audio_broadcaster.has_listeners:
-                    lvl = sdr_manager.cursor_signal_level(off)
+                if off is not None and not bcast.has_listeners:
+                    lvl = mgr.cursor_signal_level(off)
                     if lvl is not None:
                         status["signal_level_db"] = round(lvl, 1)
                 await websocket.send_text(json.dumps({"type": "status", "data": status}))
@@ -346,8 +358,8 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         recv_task.cancel()
         # Always unregister so callbacks don't leak across reconnects.
-        sdr_manager.off_spectrum(on_spectrum)
-        sdr_manager.off_new_recording(on_new_recording)
+        mgr.off_spectrum(on_spectrum)
+        mgr.off_new_recording(on_new_recording)
 
 
 # === Audio WebSocket endpoint (live audio streaming) ===
@@ -377,8 +389,6 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     import json
     import logging
     from fastapi import WebSocketDisconnect
-    from backend.audio.broadcaster import audio_broadcaster
-    from backend.sdr.manager import sdr_manager
     from backend.auth.jwt import decode_token
     from backend.services.app_settings import get_setting
 
@@ -408,6 +418,17 @@ async def audio_websocket_endpoint(websocket: WebSocket):
         logger_aud.error(f"🔊 Audio WS accept failed: {e}")
         return
 
+    # Resolve the live runtime for this connection's device_id (if any).
+    from backend.sdr.live_runtime import live_runtimes
+    ws_device_id = websocket.query_params.get("device_id")
+    try:
+        sdr_manager, audio_broadcaster = await live_runtimes.get(ws_device_id)
+    except Exception as e:
+        logger_aud.warning(f"Audio WS device {ws_device_id} not available: {e}")
+        await websocket.close(code=4404, reason=f"Device not available: {e}")
+        return
+    mgr = sdr_manager  # alias to match _handle_control closure below
+
     # Register a NEW per-listener demodulator. Initialize its VFO/mode/bw to
     # the SDR's current defaults so a freshly-connected user hears the same
     # channel as the global/default demodulator until they tune elsewhere.
@@ -432,7 +453,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
         return
 
     logger_aud.info(
-        f"🔊 Audio WS connected (listeners: {audio_broadcaster.listener_count}, "
+        f"🔊 Audio WS connected (device={ws_device_id}, listeners: {audio_broadcaster.listener_count}, "
         f"streaming: {sdr_manager.is_streaming}, rtl: {sdr_manager.client.connected})"
     )
 
@@ -447,6 +468,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             "center_frequency": sdr_manager.client._frequency,
             "mode": listener.mode.value,
             "channel_bw": listener.channel_bw,
+            "device_id": ws_device_id,
         }))
     except Exception:
         pass

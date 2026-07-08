@@ -63,7 +63,10 @@
                 ]);
                 this.jobs = Array.isArray(jobs) ? jobs : [];
                 this.serverTz = tzInfo.timezone || 'Asia/Bangkok';
-                this.activeDeviceId = status.device_id || this.activeDeviceId;
+                // Per-tab device selection: prefer this tab's selected device,
+                // fall back to the server's active device id.
+                this.activeDeviceId = (typeof SelectedDevice !== 'undefined' && SelectedDevice.get())
+                    || status.device_id || this.activeDeviceId;
                 this.runtime = runtime || { active_captures: [], active_job_ids: [] };
                 this._renderDeviceSelector();
                 this._renderJobsPanel();
@@ -107,7 +110,12 @@
                 }
                 try {
                     sel.disabled = true;
-                    await API.sdr.devices.activate(id);
+                    // Per-tab selection: store locally so this tab uses its own
+                    // device for live listening (WebSocket /ws + /ws/audio)
+                    // WITHOUT changing the device for other tabs/users.
+                    if (typeof SelectedDevice !== 'undefined') {
+                        SelectedDevice.set(id);
+                    }
                     await this.refresh();
                     if (typeof App !== 'undefined' && App.syncState) await App.syncState();
                 } catch (err) {
