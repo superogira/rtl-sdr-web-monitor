@@ -822,7 +822,11 @@
         // detailed status block inside the device detail view (if open).
         async refreshStatus() {
             try {
-                const status = await API.sdr.status();
+                // When viewing a specific device, fetch ITS status (not the
+                // global active device) so the detail panel shows the right
+                // connection/streaming/signal for the device being inspected.
+                const viewId = this._viewingDeviceId;
+                const status = await API.sdr.status(viewId || null);
                 this._lastStatus = status;  // cache for list-view badges
                 // Reuse this status for the system policy fields (VFO margin /
                 // max listeners) so we don't fire a second /api/sdr/status.
@@ -873,48 +877,49 @@
             }
         },
 
-        // Render the connect/disconnect/refresh (or "use this device") buttons
-        // inside the device status section.
+        // Render the connect/disconnect/refresh buttons for the device being
+        // viewed. With multi-device support, ANY device can be connected/
+        // streamed independently (per-device runtime), so we no longer restrict
+        // connect/disconnect to only the "active" device.
         _renderStatusActions() {
             const actionsEl = document.getElementById('sdr-status-actions');
             if (!actionsEl) return;
             const viewing = this._viewingDeviceId;
-            const isActive = viewing && viewing === this._lastActiveId;
             if (!viewing) {
                 actionsEl.innerHTML = '';
                 return;
             }
-            if (isActive) {
-                // This is the active device → show connect/disconnect/refresh.
-                actionsEl.innerHTML = `
-                    <button class="btn btn-sm" onclick="Settings.connectSDR()">${I18n.t('set.dev.connect')}</button>
-                    <button class="btn btn-sm" onclick="Settings.disconnectSDR()">${I18n.t('set.dev.disconnect')}</button>
-                    <button class="btn btn-sm" onclick="Settings.refreshStatus()">${I18n.t('set.dev.refresh')}</button>
-                `;
-            } else {
-                // Non-active device → offer to activate it.
-                actionsEl.innerHTML = `
-                    <p style="font-size:0.78rem; color:var(--text-secondary); margin:0; flex:1;">
-                        ${I18n.t('set.dev.notActiveHint')}
-                        <br>${I18n.t('set.dev.notActiveHint2')}
-                    </p>
-                    <button class="btn btn-sm btn-primary" title="${I18n.t('set.dev.activateTitle')}" onclick="Settings.activateDevice('${viewing}')">${I18n.t('set.dev.listenThis')}</button>
-                `;
-            }
+            // Connect/disconnect/refresh for this specific device.
+            actionsEl.innerHTML = `
+                <button class="btn btn-sm" onclick="Settings.connectSDR('${viewing}')">${I18n.t('set.dev.connect')}</button>
+                <button class="btn btn-sm" onclick="Settings.disconnectSDR('${viewing}')">${I18n.t('set.dev.disconnect')}</button>
+                <button class="btn btn-sm" onclick="Settings.refreshStatus()">${I18n.t('set.dev.refresh')}</button>
+            `;
         },
 
-        // Connect using the active device's config (host/port/freq etc. are
-        // stored on the backend as part of the active SDR device).
-        async connectSDR() {
+        // Connect a specific device's runtime. Pass its device_id so the
+        // backend resolves the right per-device SDRManager.
+        async connectSDR(deviceId) {
             try {
-                await API.sdr.connect();  // no args → backend uses active device config
+                // Temporarily set SelectedDevice so API.sdr.connect() sends
+                // the right ?device_id= (it auto-appends from SelectedDevice).
+                const prev = (typeof SelectedDevice !== 'undefined') ? SelectedDevice.get() : null;
+                if (deviceId && typeof SelectedDevice !== 'undefined') {
+                    SelectedDevice._id = deviceId;  // set without triggering event
+                }
+                await API.sdr.connect();
                 this.refreshStatus();
             } catch(e) { alert(I18n.t('set.connectFail') + (e.detail || e.message || e)); }
         },
 
-        async disconnectSDR() {
-            try { await API.sdr.disconnect(); this.refreshStatus(); }
-            catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
+        async disconnectSDR(deviceId) {
+            try {
+                if (deviceId && typeof SelectedDevice !== 'undefined') {
+                    SelectedDevice._id = deviceId;  // set without triggering event
+                }
+                await API.sdr.disconnect();
+                this.refreshStatus();
+            } catch(e) { alert(I18n.t('set.errorGeneral') + (e.detail || e)); }
         },
 
         // === System Policy (VFO Margin + Max Listeners) — Admin Only ===
