@@ -121,6 +121,7 @@ def _run_migrations(conn):
         ("device_id", "VARCHAR(36)"),
         ("recording_job_id", "VARCHAR(36)"),
         ("file_size", "BIGINT"),
+        ("channel_bw", "INTEGER"),
     ]
 
     for col_name, col_type in migrations:
@@ -281,6 +282,9 @@ def _seed_app_settings(conn):
         "stt_speechmatics_api_key": "XJ4zppb60QnkpznSfpy59udFfp9iK22O",
         "stt_language": "th",
         "stt_auto_transcribe": "false",
+        "stt_groq_api_key": "",
+        "stt_groq_model": "whisper-large-v3",
+        "stt_groq_audio_format": "off",
         "stt_operating_point": "standard",
         "stt_diarization": "none",
         "stt_enable_entities": "false",

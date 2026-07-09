@@ -348,6 +348,15 @@
             return `${s}s`;
         }
 
+        // === Utility: format channel bandwidth (Hz → human readable) ===
+        function formatBandwidthHz(hz) {
+            if (hz == null) return '';
+            const khz = Number(hz) / 1000;
+            if (khz >= 1000) return (Number(hz) / 1e6).toFixed(2) + ' MHz';
+            if (Number.isInteger(khz)) return khz + ' kHz';
+            return khz.toFixed(1) + ' kHz';
+        }
+
         // === Utility: format file size (bytes → human readable) ===
         function formatFileSize(bytes) {
             if (!bytes || bytes <= 0) return '0 B';
@@ -394,7 +403,9 @@
             const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
             const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
             const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
-            const metaHtml = `<span class="rec-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode} | ${dur} | ${sig}</span>`;
+            const bwStr = formatBandwidthHz(rec.channel_bw);
+            const bwPart = bwStr ? ` | BW ${bwStr}` : '';
+            const metaHtml = `<span class="rec-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-right:8px;">${freq} ${mode}${bwPart} | ${dur} | ${sig}</span>`;
             const btnHtml = sttBtnHTML(rec);
             const source = rec.source || 'auto';
             // Source badge: auto=🔵, manual=🟢, auto_job=🟣
@@ -458,6 +469,7 @@
         const PROVIDER_ICONS = {
             speechmatics: '🔊',
             azure: '☁️',
+            groq: '⚡',
             whisper: '🤫',
             whisper_local: '🤫',
         };
@@ -465,6 +477,7 @@
         const PROVIDER_LABELS = {
             speechmatics: 'Speechmatics',
             azure: 'Azure',
+            groq: 'Groq Whisper',
             whisper: 'Whisper',
             whisper_local: 'Whisper',
         };
@@ -474,7 +487,7 @@
             const icon = PROVIDER_ICONS[p] || '📝';
             const label = PROVIDER_LABELS[p] || (p.charAt(0).toUpperCase() + p.slice(1));
             // For Whisper, append the model name if available (e.g. "Whisper · Systran/faster-whisper-small")
-            const isWhisper = (p === 'whisper' || p === 'whisper_local');
+            const isWhisper = (p === 'whisper' || p === 'whisper_local' || p === 'groq');
             const model = isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
             const sttDur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
             return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}${model}${sttDur}</span>`;
@@ -561,8 +574,8 @@
                     oldBtn.outerHTML = sttBtnHTML(newRec);
                 }
             }
-            // signal/duration/meta
-            const metaChanged = ['signal_strength','signal_level','duration','frequency_mhz','frequency','mode']
+            // signal/duration/meta (including channel_bw)
+            const metaChanged = ['signal_strength','signal_level','duration','frequency_mhz','frequency','mode','channel_bw']
                 .some(f => (oldRec[f] ?? null) !== (newRec[f] ?? null));
             if (metaChanged) {
                 const metaEl = rowEl.querySelector('.rec-meta');
@@ -574,7 +587,9 @@
                     const dur = newRec.duration ? newRec.duration.toFixed(1) + 's' : '';
                     const sigVal = newRec.signal_strength != null ? newRec.signal_strength : newRec.signal_level;
                     const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
-                    metaEl.textContent = `${freq} ${mode} | ${dur} | ${sig}`;
+                    const bwStr = formatBandwidthHz(newRec.channel_bw);
+                    const bwPart = bwStr ? ` | BW ${bwStr}` : '';
+                    metaEl.textContent = `${freq} ${mode}${bwPart} | ${dur} | ${sig}`;
                 }
             }
             // quality rating — re-render the whole quality block if it changed.

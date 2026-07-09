@@ -1,6 +1,6 @@
 """
 Speech-to-Text service.
-Supports Speechmatics API and local Whisper.
+Supports Speechmatics API, Azure Speech, local Whisper, and Groq Whisper.
 
 The provider/API key/language and Speechmatics options are read from the
 global AppSetting table (set via the Settings UI) and fall back to
@@ -31,6 +31,14 @@ _SPEECHMATICS_LANG_MAP = {
 # Valid Speechmatics option values (used for validation)
 _VALID_OPERATING_POINTS = {"standard", "enhanced"}
 _VALID_DIARIZATION = {"none", "speaker", "channel"}
+
+# Groq-hosted Whisper model choices exposed in Settings UI.
+_VALID_GROQ_MODELS = {
+    "whisper-large-v3",
+    "whisper-large-v3-turbo",
+    "distil-whisper-large-v3-en",
+}
+_DEFAULT_GROQ_MODEL = "whisper-large-v3"
 
 
 def _validate_audio_format(value: str) -> str:
@@ -63,6 +71,9 @@ async def _get_stt_config() -> dict:
     # Azure-specific settings
     azure_key = _g("stt_azure_key", settings.AZURE_SPEECH_KEY or "")
     azure_region = _g("stt_azure_region", settings.AZURE_SPEECH_REGION or "southeastasia")
+    # Groq Whisper API settings
+    groq_api_key = _g("stt_groq_api_key", settings.GROQ_API_KEY or "")
+    groq_model = _g("stt_groq_model", settings.GROQ_STT_MODEL or _DEFAULT_GROQ_MODEL)
     # Whisper Local (faster-whisper-server / Gradio API) settings
     whisper_local_host = _g("stt_whisper_local_host", settings.WHISPER_LOCAL_HOST or "")
     whisper_local_port = _g("stt_whisper_local_port", str(settings.WHISPER_LOCAL_PORT or 8100))
@@ -73,6 +84,7 @@ async def _get_stt_config() -> dict:
     speechmatics_audio_format = _g("stt_speechmatics_audio_format", "off")
     whisper_local_audio_format = _g("stt_whisper_local_audio_format", "off")
     azure_audio_format = _g("stt_azure_audio_format", "off")
+    groq_audio_format = _g("stt_groq_audio_format", "off")
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",
@@ -83,6 +95,8 @@ async def _get_stt_config() -> dict:
         "enable_entities": (enable_entities_raw or "false").lower() == "true",
         "azure_key": azure_key or "",
         "azure_region": azure_region or "southeastasia",
+        "groq_api_key": groq_api_key or "",
+        "groq_model": groq_model if groq_model in _VALID_GROQ_MODELS else _DEFAULT_GROQ_MODEL,
         "whisper_local_host": whisper_local_host or "",
         "whisper_local_port": int(whisper_local_port) if str(whisper_local_port).isdigit() else 8100,
         "whisper_local_model": whisper_local_model or "Systran/faster-whisper-small",
@@ -91,6 +105,7 @@ async def _get_stt_config() -> dict:
         "speechmatics_audio_format": _validate_audio_format(speechmatics_audio_format),
         "whisper_local_audio_format": _validate_audio_format(whisper_local_audio_format),
         "azure_audio_format": _validate_audio_format(azure_audio_format),
+        "groq_audio_format": _validate_audio_format(groq_audio_format),
     }
 
 
@@ -377,6 +392,88 @@ async def transcribe_azure(
         cleanup_temp(upload_path, converted)
 
 
+async def transcribe_groq(
+    audio_path: str,
+    language: str = None,
+    api_key: str = None,
+    model: str = None,
+) -> dict:
+    """Transcribe audio using Groq's OpenAI-compatible Whisper API.
+
+    Groq supports Whisper transcription models via
+    ``/openai/v1/audio/transcriptions``. The API accepts common audio formats,
+    including WAV, FLAC, and MP3, so we reuse the existing per-provider audio
+    preprocessing option to save upload bandwidth.
+
+    Returns:
+        dict: {"text": str, "error": str|None, "model": str}
+    """
+    cfg = await _get_stt_config()
+    key = api_key or cfg.get("groq_api_key") or settings.GROQ_API_KEY
+    groq_model = model or cfg.get("groq_model") or _DEFAULT_GROQ_MODEL
+
+    if not key:
+        msg = "Groq API key not configured"
+        logger.error(msg)
+        return {"text": "", "error": msg, "model": groq_model}
+
+    if groq_model not in _VALID_GROQ_MODELS:
+        groq_model = _DEFAULT_GROQ_MODEL
+
+    lang = (language or cfg.get("language") or "auto").lower()
+    lang_for_api = lang if lang and lang != "auto" else None
+
+    audio_fmt = cfg.get("groq_audio_format", "off")
+    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
+    upload_mime = mime_type_for_format(upload_ext)
+    upload_filename = audio_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "." + upload_ext
+
+    form_fields = {
+        "model": groq_model,
+        "response_format": "json",
+    }
+    if lang_for_api:
+        form_fields["language"] = lang_for_api
+
+    logger.info(
+        f"Groq Whisper request: model={groq_model}, "
+        f"language={lang_for_api or 'auto'}, audio_format={audio_fmt}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            with open(upload_path, "rb") as f:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    data=form_fields,
+                    files={"file": (upload_filename, f, upload_mime)},
+                )
+
+        if resp.status_code != 200:
+            err = f"HTTP {resp.status_code}: {resp.text[:500]}"
+            logger.error(f"Groq Whisper API error: {err}")
+            return {"text": "", "error": err, "model": groq_model}
+
+        try:
+            data = resp.json()
+            text = (data.get("text") or "").strip()
+        except Exception:
+            text = resp.text.strip()
+
+        logger.info(
+            f"Groq Whisper transcript: {len(text)} chars "
+            f"(model={groq_model}, lang={lang_for_api or 'auto'})"
+        )
+        return {"text": text, "error": None, "model": groq_model}
+    except Exception as e:
+        logger.error(f"Groq Whisper transcription failed: {e}")
+        return {"text": "", "error": str(e), "model": groq_model}
+    finally:
+        cleanup_temp(upload_path, converted)
+
+
 async def transcribe_whisper_local(
     audio_path: str,
     language: str = None,
@@ -514,11 +611,20 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
         )
         text = result["text"]
         error = result.get("error")
+    elif provider == "groq":
+        result = await transcribe_groq(
+            audio_path,
+            language=lang,
+            api_key=cfg.get("groq_api_key"),
+            model=cfg.get("groq_model"),
+        )
+        text = result["text"]
+        error = result.get("error")
+        model = result.get("model")
     elif provider == "whisper_local":
         result = await transcribe_whisper_local(audio_path, language=lang)
         text = result["text"]
         error = result.get("error")
-        # Whisper is the only provider that exposes an explicit model name.
         model = result.get("model")
     else:
         error = f"Unknown STT provider: {provider}"

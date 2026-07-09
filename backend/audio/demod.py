@@ -430,14 +430,20 @@ def _expected_dev(wbfm: bool) -> float:
     return 75000.0 if wbfm else 5000.0
 
 
-def _channel_lpf_cutoff(wbfm: bool) -> float:
+def _channel_lpf_cutoff(channel_bw: int) -> float:
     """One-sided IF low-pass cutoff (Hz) applied on raw IQ to isolate the
     desired channel and reject adjacent stations BEFORE the discriminator.
 
-    - WBFM: 100 kHz (200 kHz channel, ±75 kHz deviation + guard)
-    - NBFM: 8 kHz   (12.5-25 kHz channel, ±5 kHz deviation + guard)
+    Scaled to the selected channel bandwidth so changing BW actually changes
+    the received bandwidth (previously every NBFM channel used a fixed 8 kHz
+    cutoff, so switching 6k/12k/25k/50k sounded identical):
+      - WBFM (>=100 kHz): 100 kHz (200 kHz channel, ±75 kHz dev + guard)
+      - NBFM: channel_bw/2 * 0.95 (e.g. 12k→5.7k, 25k→11.9k, 6k→2.85k)
     """
-    return 100_000.0 if wbfm else 8_000.0
+    if channel_bw and channel_bw >= _WBFM_BW_THRESHOLD:
+        return 100_000.0
+    half = (channel_bw or 12000) / 2.0
+    return max(1000.0, half * 0.95)
 
 
 def _design_channel_lpf(sample_rate: float, cutoff: float, order: int = 8):
@@ -539,6 +545,9 @@ class StreamingDemodulator:
         self._sample_rate: Optional[float] = None
         self._audio_rate: Optional[float] = None
         self._wbfm: Optional[bool] = None
+        # Remember the last channel_bw so we can rebuild the channel selectivity
+        # filter when it changes (this is what makes the BW buttons audible).
+        self._channel_bw: Optional[int] = None
         # Restore VFO config (preserved across reset — see method docstring).
         self._vfo_offset_hz = vfo_off
         self._vfo_phase = vfo_phase
@@ -601,12 +610,17 @@ class StreamingDemodulator:
         g = gcd(up, down)
         return resample_poly(audio, up // g, down // g).astype(np.float32)
 
-    def _ensure_fm_state(self, sample_rate: float, audio_rate: float, wbfm: bool):
+    def _ensure_fm_state(self, sample_rate: float, audio_rate: float, wbfm: bool,
+                         channel_bw: int = 0):
+        # Rebuild whenever the core config OR the selected channel bandwidth
+        # changes — the channel LPF cutoff is derived from channel_bw, so a BW
+        # change must rebuild it or the new bandwidth is never audible.
         first = (
             self._deemph_b is None
             or self._sample_rate != sample_rate
             or self._audio_rate != audio_rate
             or self._wbfm != wbfm
+            or self._channel_bw != channel_bw
         )
         if first:
             alpha = _deemphasis_alpha(sample_rate, wbfm)
@@ -616,14 +630,16 @@ class StreamingDemodulator:
             self._sample_rate = sample_rate
             self._audio_rate = audio_rate
             self._wbfm = wbfm
+            self._channel_bw = channel_bw
             # (re)build voice filters for this (audio_rate, wbfm)
             self._hp_sos, self._bp_sos = _get_voice_filters(audio_rate, wbfm=wbfm)
             self._hp_zi = sosfilt_zi(self._hp_sos).astype(np.float32)
             self._bp_zi = sosfilt_zi(self._bp_sos).astype(np.float32)
             # Channel selectivity LPF on raw IQ (reject adjacent stations
             # before the discriminator). Real-coeff SOS applied separately
-            # to real/imag == filtering complex IQ.
-            self._chan_sos = _design_channel_lpf(sample_rate, _channel_lpf_cutoff(wbfm))
+            # to real/imag == filtering complex IQ. Cutoff now tracks the
+            # selected channel_bw so BW changes are audible.
+            self._chan_sos = _design_channel_lpf(sample_rate, _channel_lpf_cutoff(channel_bw))
             self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
             self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
             # Anti-alias decimation LPF (applied on demod audio before
@@ -633,9 +649,12 @@ class StreamingDemodulator:
             self._last_phase = None
 
     def _ensure_lpf_state(self, sample_rate: float, audio_rate: float,
-                          rebuild: bool, mode: Optional[DemodMode] = None):
+                          rebuild: bool, mode: Optional[DemodMode] = None,
+                          channel_bw: int = 0):
+        # Also rebuild when channel_bw changes so AM BW changes are audible.
         if rebuild or self._lpf_b is None or self._sample_rate != sample_rate \
-                or self._audio_rate != audio_rate:
+                or self._audio_rate != audio_rate \
+                or self._channel_bw != channel_bw:
             alpha = 0.05
             self._lpf_b = [alpha]
             self._lpf_a = [1.0, -(1.0 - alpha)]
@@ -651,8 +670,15 @@ class StreamingDemodulator:
             # Channel selectivity LPF. For AM this is an IF filter on raw IQ
             # (~5 kHz). For SSB it is applied POST-mixer as the sideband
             # isolator (~2.5 kHz, one-sided audio bandwidth).
+            self._channel_bw = channel_bw
             is_ssb = mode in (DemodMode.USB, DemodMode.LSB)
-            chan_cutoff = 2_500.0 if is_ssb else 5_000.0
+            if is_ssb:
+                chan_cutoff = 2_500.0
+            else:
+                # AM: scale the IF filter to the selected channel bandwidth so
+                # changing BW actually narrows/widens the received audio.
+                half = (channel_bw or 10000) / 2.0
+                chan_cutoff = max(2000.0, min(half * 0.95, 8000.0))
             self._chan_sos = _design_channel_lpf(sample_rate, chan_cutoff)
             self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
             self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
@@ -736,11 +762,11 @@ class StreamingDemodulator:
             if mode == DemodMode.FM:
                 return self._process_fm(iq, sample_rate, audio_rate, channel_bw)
             elif mode == DemodMode.AM:
-                return self._process_am(iq, sample_rate, audio_rate)
+                return self._process_am(iq, sample_rate, audio_rate, channel_bw)
             elif mode == DemodMode.USB:
-                return self._process_ssb(iq, sample_rate, audio_rate, "usb")
+                return self._process_ssb(iq, sample_rate, audio_rate, "usb", channel_bw)
             elif mode == DemodMode.LSB:
-                return self._process_ssb(iq, sample_rate, audio_rate, "lsb")
+                return self._process_ssb(iq, sample_rate, audio_rate, "lsb", channel_bw)
             else:
                 return self._process_fm(iq, sample_rate, audio_rate, channel_bw)
         except ValueError:
@@ -754,7 +780,7 @@ class StreamingDemodulator:
     def _process_fm(self, iq: np.ndarray, sample_rate: float,
                     audio_rate: float, channel_bw: int) -> np.ndarray:
         wbfm = bool(channel_bw) and channel_bw >= _WBFM_BW_THRESHOLD
-        self._ensure_fm_state(sample_rate, audio_rate, wbfm)
+        self._ensure_fm_state(sample_rate, audio_rate, wbfm, channel_bw)
 
         # Channel selectivity LPF on raw IQ — rejects adjacent stations
         # (e.g. 92.5 / 94.0 MHz when tuned to 93.0) BEFORE the discriminator.
@@ -805,9 +831,10 @@ class StreamingDemodulator:
     # AM
     # ------------------------------------------------------------------
     def _process_am(self, iq: np.ndarray, sample_rate: float,
-                    audio_rate: float) -> np.ndarray:
+                    audio_rate: float, channel_bw: int = 0) -> np.ndarray:
         rebuild = self._mode != DemodMode.AM
-        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=DemodMode.AM)
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=DemodMode.AM,
+                               channel_bw=channel_bw)
         self._mode = DemodMode.AM
 
         # Channel selectivity LPF on raw IQ — rejects adjacent stations
@@ -841,10 +868,11 @@ class StreamingDemodulator:
     # SSB (USB / LSB)
     # ------------------------------------------------------------------
     def _process_ssb(self, iq: np.ndarray, sample_rate: float,
-                     audio_rate: float, sideband: str) -> np.ndarray:
+                     audio_rate: float, sideband: str, channel_bw: int = 0) -> np.ndarray:
         wanted_mode = DemodMode.USB if sideband == "usb" else DemodMode.LSB
         rebuild = self._mode != wanted_mode
-        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=wanted_mode)
+        self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=wanted_mode,
+                               channel_bw=channel_bw)
         self._mode = wanted_mode
 
         n = len(iq)

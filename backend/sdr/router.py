@@ -631,7 +631,7 @@ async def stt_usage_stats(
     Returns two breakdowns (minutes, summed from audio `duration` seconds):
       - by_provider: total transcribed audio length per STT provider
       - by_whisper_model: total transcribed audio length per Whisper model name
-        (provider=whisper_local), plus the wait/audio ratio (RTF)
+        (provider=whisper_local/groq), plus the wait/audio ratio (RTF)
 
     Query params:
       - start: ISO 8601 datetime (inclusive). Defaults to 30 days ago.
@@ -687,7 +687,7 @@ async def stt_usage_stats(
     ]
     by_provider.sort(key=lambda x: x["total_minutes"], reverse=True)
 
-    # --- by whisper model (only provider = whisper_local) ---
+    # --- by whisper model (Whisper Local + Groq-hosted Whisper) ---
     # Also include audio duration sum for the wait/length ratio (RTF).
     q_model = (
         select(
@@ -696,7 +696,7 @@ async def stt_usage_stats(
             func.coalesce(func.sum(Recording.duration), 0.0).label("total_audio_seconds"),
             func.count(Recording.id).label("count"),
         )
-        .where(*base_filter, Recording.stt_provider == "whisper_local")
+        .where(*base_filter, Recording.stt_provider.in_(["whisper_local", "groq"]))
         .group_by(Recording.stt_model)
     )
     mrows = (await db.execute(q_model)).all()
@@ -998,7 +998,7 @@ async def transcribe_recording(
 
 
 class STTSettingsRequest(BaseModel):
-    provider: Optional[str] = None  # "speechmatics" | "azure" | "whisper_local"
+    provider: Optional[str] = None  # "speechmatics" | "azure" | "whisper_local" | "groq"
     api_key: Optional[str] = None  # Speechmatics API key
     language: Optional[str] = None  # "th" | "en" | "auto"
     auto_transcribe: Optional[bool] = None
@@ -1009,6 +1009,9 @@ class STTSettingsRequest(BaseModel):
     # Azure-specific options
     azure_key: Optional[str] = None  # Azure Speech resource key
     azure_region: Optional[str] = None  # e.g. "southeastasia"
+    # Groq Whisper API options
+    groq_api_key: Optional[str] = None
+    groq_model: Optional[str] = None  # e.g. "whisper-large-v3"
     # Whisper Local (faster-whisper-server / Gradio API) options
     whisper_local_host: Optional[str] = None  # e.g. "192.168.1.201"
     whisper_local_port: Optional[int] = None  # e.g. 8100
@@ -1021,6 +1024,7 @@ class STTSettingsRequest(BaseModel):
     speechmatics_audio_format: Optional[str] = None
     whisper_local_audio_format: Optional[str] = None
     azure_audio_format: Optional[str] = None
+    groq_audio_format: Optional[str] = None
 
 
 @settings_router.get("/stt")
@@ -1039,6 +1043,9 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
         "azure_key_set": bool(cfg.get("azure_key")),
         "azure_region": cfg.get("azure_region", "southeastasia"),
+        "groq_api_key": mask_value(cfg.get("groq_api_key", "")) if cfg.get("groq_api_key") else "",
+        "groq_api_key_set": bool(cfg.get("groq_api_key")),
+        "groq_model": cfg.get("groq_model", "whisper-large-v3"),
         "whisper_local_host": cfg.get("whisper_local_host", ""),
         "whisper_local_port": cfg.get("whisper_local_port", 8100),
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
@@ -1047,6 +1054,7 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "speechmatics_audio_format": cfg.get("speechmatics_audio_format", "off"),
         "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
         "azure_audio_format": cfg.get("azure_audio_format", "off"),
+        "groq_audio_format": cfg.get("groq_audio_format", "off"),
     }
 
 
@@ -1068,8 +1076,8 @@ async def update_stt_settings(
     updates: dict[str, str] = {}
 
     if req.provider is not None:
-        if req.provider not in ("speechmatics", "azure", "whisper_local"):
-            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', or 'whisper_local'")
+        if req.provider not in ("speechmatics", "azure", "whisper_local", "groq"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', 'whisper_local', or 'groq'")
         updates["stt_provider"] = req.provider
 
     # Only update API key if a real (non-empty, non-masked) value is provided.
@@ -1108,6 +1116,16 @@ async def update_stt_settings(
     if req.azure_region is not None and req.azure_region.strip():
         updates["stt_azure_region"] = req.azure_region.strip()
 
+    # Groq-specific options
+    if req.groq_api_key is not None and req.groq_api_key.strip() and not is_masked_value(req.groq_api_key):
+        updates["stt_groq_api_key"] = req.groq_api_key.strip()
+    if req.groq_model is not None and req.groq_model.strip():
+        model = req.groq_model.strip()
+        _VALID_GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo", "distil-whisper-large-v3-en")
+        if model not in _VALID_GROQ_MODELS:
+            raise HTTPException(status_code=400, detail=f"groq_model must be one of {_VALID_GROQ_MODELS}")
+        updates["stt_groq_model"] = model
+
     # Whisper Local-specific options
     if req.whisper_local_host is not None:
         updates["stt_whisper_local_host"] = req.whisper_local_host.strip()
@@ -1145,6 +1163,11 @@ async def update_stt_settings(
         if v not in _VALID_AUDIO_FMT:
             raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
         updates["stt_azure_audio_format"] = v
+    if req.groq_audio_format is not None:
+        v = req.groq_audio_format.lower()
+        if v not in _VALID_AUDIO_FMT:
+            raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
+        updates["stt_groq_audio_format"] = v
 
     # Write all accepted values in ONE transaction (single commit).
     await set_settings_batch(updates)
@@ -1164,6 +1187,9 @@ async def update_stt_settings(
         "azure_key": mask_value(cfg.get("azure_key", "")) if cfg.get("azure_key") else "",
         "azure_key_set": bool(cfg.get("azure_key")),
         "azure_region": cfg.get("azure_region", "southeastasia"),
+        "groq_api_key": mask_value(cfg.get("groq_api_key", "")) if cfg.get("groq_api_key") else "",
+        "groq_api_key_set": bool(cfg.get("groq_api_key")),
+        "groq_model": cfg.get("groq_model", "whisper-large-v3"),
         "whisper_local_host": cfg.get("whisper_local_host", ""),
         "whisper_local_port": cfg.get("whisper_local_port", 8100),
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
@@ -1172,6 +1198,7 @@ async def update_stt_settings(
         "speechmatics_audio_format": cfg.get("speechmatics_audio_format", "off"),
         "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
         "azure_audio_format": cfg.get("azure_audio_format", "off"),
+        "groq_audio_format": cfg.get("groq_audio_format", "off"),
     }
 
 

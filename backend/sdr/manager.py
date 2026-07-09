@@ -1542,6 +1542,7 @@ class SDRManager:
                     status=RecordingStatus.COMPLETED,
                     source=source,
                     is_unread=1,
+                    channel_bw=self._channel_bw,
                     device_id=device_id or self._active_device_id,
                     recorded_by_user_id=user_id if source == "manual" else None,
                     recorded_at=now,
@@ -1571,6 +1572,7 @@ class SDRManager:
             "source": source,
             "status": "completed",
             "is_unread": 1,
+            "channel_bw": self._channel_bw,
         }
 
         self._last_recording_path = str(filepath)
@@ -1578,7 +1580,7 @@ class SDRManager:
 
         logger.info(
             f"✅ Recording saved [{source}]: {filename} ({duration:.1f}s, "
-            f"{self.mode.value}, {freq_mhz:.3f} MHz)"
+            f"{self.mode.value}, {freq_mhz:.3f} MHz, bw={self._channel_bw} Hz)"
         )
 
         # Reset auto state if this was an auto recording
@@ -1719,6 +1721,13 @@ class SDRManager:
         # gated by the listener's own squelch/signal). Defaults to "manual" for
         # backward compatibility with stop_listener_recording()'s dict.
         source = rec_data.get("source") or "manual"
+        # channel_bw: the listener's channel bandwidth at record time, so the
+        # recording row carries what the user was actually listening to.
+        rec_channel_bw = rec_data.get("channel_bw")
+        try:
+            rec_channel_bw = int(rec_channel_bw) if rec_channel_bw is not None else None
+        except (TypeError, ValueError):
+            rec_channel_bw = None
 
         # Insert into DB and fetch recorder display name for WS payload
         recorder_username = None
@@ -1738,6 +1747,7 @@ class SDRManager:
                     source=source,
                     recorded_by_user_id=user_id,
                     is_unread=1,
+                    channel_bw=rec_channel_bw,
                     device_id=self._active_device_id,
                     recorded_at=now,
                     created_at=now,
@@ -1775,6 +1785,7 @@ class SDRManager:
             "source": source,
             "status": "completed",
             "is_unread": 1,
+            "channel_bw": rec_channel_bw,
             "recorded_by_user_id": user_id,
             "recorded_by_username": recorder_username,
             "recorded_by_display_name": recorder_display_name,

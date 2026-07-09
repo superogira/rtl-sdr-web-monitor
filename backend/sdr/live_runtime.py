@@ -103,9 +103,11 @@ class LiveRuntimeManager:
         # Apply the device's config (host/port/type/usb params + tuner defaults).
         mgr._apply_device_config_by_dict(device_dict)
 
-        # Wire auto-record + listener-count callbacks to the new manager.
-        bcast.on_listener_count_change(mgr._on_listener_count_changed)
-        bcast.on_auto_recording(mgr._on_listener_auto_recording)
+        # NOTE: auto-record + listener-count callbacks are already wired inside
+        # SDRManager.__init__ (which binds to self._broadcaster == bcast).
+        # Do NOT register them again here — that would double-register the same
+        # callback and cause every auto-record segment to be saved TWICE
+        # (duplicate rows in the recordings list).
         mgr._sync_auto_record_policy()
 
         logger.info(

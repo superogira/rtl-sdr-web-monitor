@@ -80,6 +80,9 @@ class Recording(Base):
     # === Source device + job tracking ===
     device_id = Column(String(36), ForeignKey("sdr_devices.id"), nullable=True, comment="SDR device used for this recording")
     recording_job_id = Column(String(36), ForeignKey("recording_jobs.id"), nullable=True, comment="Recording job that produced this (auto_job source only)")
+    # Channel bandwidth (Hz) used to demodulate this recording. Null on rows
+    # recorded before this field was tracked. Lets the UI show "12 kHz" etc.
+    channel_bw = Column(Integer, nullable=True, comment="Channel bandwidth in Hz used for demodulation")
 
     # Relationship to keyword alerts
     alerts = relationship("TelegramAlert", back_populates="recording", lazy="selectin")
@@ -138,6 +141,7 @@ class Recording(Base):
             "recorded_by_username": (self.recorded_by.username if self.recorded_by else None),
             "recorded_by_display_name": (self.recorded_by.display_name if self.recorded_by else None),
             "is_unread": self.is_unread,
+            "channel_bw": self.channel_bw,
             "recorded_at": self.recorded_at.isoformat() if self.recorded_at and self.recorded_at.tzinfo else (self.recorded_at.replace(tzinfo=timezone.utc).isoformat() if self.recorded_at else None),
             "created_at": self.created_at.isoformat() if self.created_at and self.created_at.tzinfo else (self.created_at.replace(tzinfo=timezone.utc).isoformat() if self.created_at else None),
             "quality_rating": self.quality_rating,

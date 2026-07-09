@@ -165,7 +165,8 @@ const RecordingJobsUI = {
             const days = (j.mode === 'scheduled' && w.days && w.days.length)
                 ? w.days.map(d => dayLabels[d]).join(',')
                 : I18n.t('rje.everyDay');
-            const freqs = (w.frequencies || []).map(f =>
+            const _sortedFreqs = (w.frequencies || []).slice().sort((a, b) => (a.frequency_hz || 0) - (b.frequency_hz || 0));
+            const freqs = _sortedFreqs.map(f =>
                 `${this._hzToMhz(f.frequency_hz)} MHz (${f.demod_mode}, BW ${(f.bandwidth_hz/1000)}kHz, ${f.auto_squelch ? 'SQ AUTO' : 'SQ ' + f.squelch_db + 'dB'})`
             ).join('; ');
             return `<div style="font-size:0.74rem; color:var(--text-secondary); margin-top:4px;">
@@ -510,6 +511,13 @@ const RecordingJobsUI = {
     _renderWindows() {
         // Sync current values before re-rendering (preserves user input)
         this._syncFromDOM();
+        // Sort each window's frequencies ascending by frequency_hz so the
+        // editor always shows them low→high (matches the list summary below).
+        this._editorWindows.forEach(w => {
+            if (Array.isArray(w.frequencies) && w.frequencies.length > 1) {
+                w.frequencies.sort((a, b) => (a.frequency_hz || 0) - (b.frequency_hz || 0));
+            }
+        });
         const container = document.getElementById('rj-windows');
         if (!container) return;
         const mode = this._editorMode;

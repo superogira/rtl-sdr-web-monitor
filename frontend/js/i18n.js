@@ -601,6 +601,15 @@ const I18n = {
             'set.stt.azureKeySet': '✅ Key ถูกตั้งไว้แล้ว',
             'set.stt.azureKeyNotSet': '⚠️ ยังไม่มี Key ใส่เพื่อบันทึก',
             'set.stt.azureKeyNoAzure': '⚠️ ยังไม่มี Azure Key',
+            /* Groq */
+            'set.stt.groqHint': 'ใช้ Groq OpenAI-compatible Whisper API สำหรับถอดเสียงบน Cloud',
+            'set.stt.groqKeyPh': 'ใส่ Groq API Key (gsk_...)',
+            'set.stt.groqKeyHint': 'ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้',
+            'set.stt.groqKeySet': '✅ Groq API Key ถูกตั้งไว้แล้ว',
+            'set.stt.groqKeyNotSet': '⚠️ ยังไม่มี Groq API Key ใส่เพื่อบันทึก',
+            'set.stt.groqKeyNoGroq': '⚠️ ยังไม่มี Groq API Key',
+            'set.stt.groqModelHint': 'เลือกโมเดล Whisper ที่ Groq ให้บริการ เช่น whisper-large-v3',
+            'set.stt.groqCompressHint': 'Groq รองรับ WAV/FLAC/MP3 — MP3 ประหยัด bandwidth ที่สุด',
 
             /* Telegram section */
             'set.tg.title': '📨 ช่องทางแจ้งเตือน',
@@ -1617,6 +1626,15 @@ const I18n = {
             'set.stt.azureKeySet': '✅ Key is set',
             'set.stt.azureKeyNotSet': '⚠️ No Key yet — enter to save',
             'set.stt.azureKeyNoAzure': '⚠️ No Azure Key',
+            /* Groq */
+            'set.stt.groqHint': 'Use Groq’s OpenAI-compatible Whisper API for cloud transcription',
+            'set.stt.groqKeyPh': 'Enter Groq API Key (gsk_...)',
+            'set.stt.groqKeyHint': 'Leave blank if you don\'t want to change the saved value',
+            'set.stt.groqKeySet': '✅ Groq API Key is set',
+            'set.stt.groqKeyNotSet': '⚠️ No Groq API Key yet — enter to save',
+            'set.stt.groqKeyNoGroq': '⚠️ No Groq API Key',
+            'set.stt.groqModelHint': 'Choose a Groq-hosted Whisper model, such as whisper-large-v3',
+            'set.stt.groqCompressHint': 'Groq supports WAV/FLAC/MP3 — MP3 saves the most bandwidth',
 
             /* Telegram section */
             'set.tg.title': '📨 Notification Channels',

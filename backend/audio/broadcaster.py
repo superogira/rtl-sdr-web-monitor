@@ -338,8 +338,14 @@ class AudioBroadcaster:
         Used by SDRManager to promote its pool consumer to PRIORITY_LIVE when
         a listener connects, and demote it to PRIORITY_IDLE (yielding the
         tuner to background jobs) when the last listener leaves.
+
+        Idempotent: registering the SAME callback object twice is a no-op.
+        This guards against double-registration (e.g. SDRManager.__init__
+        already registers, and a caller wiring it again) which would fire the
+        callback multiple times per event and cause duplicate side effects.
         """
-        self._listener_count_callbacks.append(callback)
+        if callback not in self._listener_count_callbacks:
+            self._listener_count_callbacks.append(callback)
 
     def on_auto_recording(self, callback: Callable) -> None:
         """Register a callback fired when a listener's auto-record finishes.
@@ -349,8 +355,13 @@ class AudioBroadcaster:
         (audio_data, duration, sample_rate, mode, vfo_offset_hz, user_id,
         user_role, source="auto"). SDRManager registers one to persist the
         recording. Best-effort: exceptions are logged, never raised.
+
+        Idempotent: registering the SAME callback object twice is a no-op.
+        Double-registration here previously caused every auto-record segment
+        to be saved twice → duplicate rows in the recordings list.
         """
-        self._auto_recording_callbacks.append(callback)
+        if callback not in self._auto_recording_callbacks:
+            self._auto_recording_callbacks.append(callback)
 
     def _fire_auto_recording(self, listener, rec_data: dict) -> None:
         """Fire all registered auto-recording callbacks (best-effort, async)."""
@@ -977,6 +988,7 @@ class AudioBroadcaster:
             "vfo_offset_hz": ln.vfo_offset_hz,
             "user_id": ln.user_id,
             "user_role": ln.user_role,
+            "channel_bw": int(ln.channel_bw),
             "source": "auto",
         }
         logger.info(
@@ -1092,6 +1104,7 @@ class AudioBroadcaster:
             "vfo_offset_hz": listener.vfo_offset_hz,
             "user_id": listener.user_id,
             "user_role": listener.user_role,
+            "channel_bw": int(listener.channel_bw),
         }
 
         # Reset state

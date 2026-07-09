@@ -3463,6 +3463,8 @@ const App = {
         const dur = rec.duration ? rec.duration.toFixed(1) + 's' : '';
         const sigVal = rec.signal_strength != null ? rec.signal_strength : rec.signal_level;
         const sig = sigVal != null ? sigVal.toFixed(0) + ' dB' : '';
+        const _bwKhz = rec.channel_bw != null ? Math.round(Number(rec.channel_bw) / 1000) : null;
+        const _bwPart = (_bwKhz != null) ? ` | BW ${_bwKhz}kHz` : '';
         const transcript = rec.transcript || rec.transcription || `<span class="text-muted">${I18n.t('dash.transcribing')}</span>`;
         const audioUrl = rec.url || (rec.audio_file_name ? `/recordings/${rec.audio_file_name}` : '');
         const source = rec.source || 'auto';
@@ -3475,13 +3477,13 @@ const App = {
         const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
         const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
         // Provider badge (มีไอคอน) — แสดงว่าถอดด้วย STT provider อะไร
-        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', whisper: '🤫', whisper_local: '🤫' };
-        const _PROVIDER_LABELS = { speechmatics: 'Speechmatics', azure: 'Azure', whisper: 'Whisper', whisper_local: 'Whisper' };
+        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', groq: '⚡', whisper: '🤫', whisper_local: '🤫' };
+        const _PROVIDER_LABELS = { speechmatics: 'Speechmatics', azure: 'Azure', groq: 'Groq Whisper', whisper: 'Whisper', whisper_local: 'Whisper' };
         let _providerBadge = '';
         if (rec.stt_provider) {
             const _icon = _PROVIDER_ICONS[rec.stt_provider] || '📝';
             const _label = _PROVIDER_LABELS[rec.stt_provider] || (rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1));
-            const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local');
+            const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local' || rec.stt_provider === 'groq');
             const _model = _isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
             const _dur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
             _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}${_dur}</span>`;
@@ -3501,7 +3503,7 @@ const App = {
                     <div style="display:flex; gap:6px; align-items:center;">
                         <span class="source-badge ${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>
                         ${recorderLabel ? `<span style="font-size:0.65rem; color:var(--text-muted); white-space:nowrap;">${recorderLabel}</span>` : ''}
-                        <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode} | ${dur} | ${sig}</span>
+                        <span style="font-size:0.7rem; color:var(--text-secondary);">${freq} ${mode}${_bwPart} | ${dur} | ${sig}</span>
                         ${_delBtn}
                     </div>
                 </div>

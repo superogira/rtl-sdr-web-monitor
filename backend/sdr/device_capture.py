@@ -1038,6 +1038,7 @@ class DeviceCapture:
                     status=RecordingStatus.COMPLETED,
                     source="auto_job",
                     is_unread=1,
+                    channel_bw=ch.bandwidth_hz,
                     device_id=self.device_id,
                     recording_job_id=self.job_id,
                     recorded_at=now,
