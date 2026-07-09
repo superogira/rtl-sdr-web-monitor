@@ -331,9 +331,15 @@ class DeviceCapture:
             thread_name_prefix=f"job-dsp-{job.id[:8]}",
         )
 
-        # Resolve device host/port from the SdrDevice row
+        # Resolve device connection params from the SdrDevice DB row.
+        # Defaults are set here so acquire() in start() never hits a missing
+        # attribute (which previously raised AttributeError and silently broke
+        # ALL background recording jobs).
         self._host: Optional[str] = None
         self._port: Optional[int] = None
+        self._device_type: str = "rtl_tcp"
+        self._device_index: Optional[int] = None
+        self._serial: Optional[str] = None
         self.client = None  # SharedConnectionConsumer (from pool)
         self._consumer_id: str = f"job:{self.job_id}"
         self._task: Optional[asyncio.Task] = None
@@ -341,15 +347,34 @@ class DeviceCapture:
         self._state: str = STATE_IDLE
 
     async def _resolve_device_addr(self) -> None:
-        """Load host/port from the SdrDevice DB row."""
+        """Load connection params (host/port or device_index/serial) + type
+        from the SdrDevice DB row.
+        """
         from backend.models.sdr_device import SdrDevice
         async with async_session() as session:
             dev = await session.get(SdrDevice, self.device_id)
             if dev is None:
                 raise RuntimeError(f"Device {self.device_id} not found")
             cfg = dev.get_config()
-            self._host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
-            self._port = int(cfg.get("port") or settings.RTL_TCP_PORT)
+            # Device type determines which connection params are relevant.
+            self._device_type = (getattr(dev, 'type', None) or 'rtl_tcp').lower()
+            if self._device_type == "usb":
+                # USB RTL-SDR: identify by serial (preferred) or device_index.
+                serial = str(cfg.get("serial") or "").strip()
+                self._serial = serial or None
+                try:
+                    self._device_index = int(cfg.get("device_index", 0))
+                except (TypeError, ValueError):
+                    self._device_index = 0
+                # host/port are irrelevant for USB but keep sane defaults so
+                # the pool constructor (which accepts them for rtl_tcp) does
+                # not receive None.
+                self._host = "usb"
+                self._port = 0
+            else:
+                # rtl_tcp (default): identify by host:port.
+                self._host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
+                self._port = int(cfg.get("port") or settings.RTL_TCP_PORT)
 
     @property
     def _shared_client(self) -> Optional[RtlTcpClient]:
@@ -685,6 +710,7 @@ class DeviceCapture:
                     "label": ch.label,
                     "is_recording": ch.is_recording,
                     "signal_level_db": round(ch.signal_level, 1),
+                    "in_passband": ch.in_passband,
                 }
                 for ch in self.channels
             ],
