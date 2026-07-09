@@ -52,6 +52,11 @@ class SharedConnectionConsumer:
         self._id = consumer_id
         self._priority = priority
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=16)
+        # IQ drop counter — incremented every time feed() has to discard an
+        # older chunk because the consumer's queue is full. A non-zero value
+        # means the consumer is processing IQ slower than real-time, which
+        # causes audio gaps that sound like sped-up/chipmunk speech.
+        self.iq_drops: int = 0
         # Tuner mirrors — kept in sync with the shared connection so legacy
         # code that reads client._frequency / _sample_rate / _gain / _ppm
         # continues to work.
@@ -68,6 +73,7 @@ class SharedConnectionConsumer:
         try:
             self._queue.put_nowait(iq)
         except asyncio.QueueFull:
+            self.iq_drops += 1
             try:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:

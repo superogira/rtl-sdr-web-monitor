@@ -326,8 +326,10 @@ class DeviceCapture:
         # list, live audio underruns). Offloading to worker threads frees the
         # loop; numpy/scipy release the GIL during the FFT/linalg work. One
         # worker per channel lets all channels process in parallel.
+        # 2 workers per channel so both signal-level and demod can run
+        # simultaneously for every channel in a single batch gather.
         self._dsp_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(2, len(self.channels)),
+            max_workers=max(4, 2 * len(self.channels)),
             thread_name_prefix=f"job-dsp-{job.id[:8]}",
         )
 
@@ -690,6 +692,10 @@ class DeviceCapture:
         return self._state
 
     def runtime_status(self) -> dict:
+        # IQ drops indicate the job's DSP can't keep up with real-time —
+        # the consumer queue overflowed and chunks were discarded, which
+        # produces sped-up/chipmunk audio in saved recordings.
+        iq_drops = getattr(self.client, "iq_drops", 0) if self.client else 0
         return {
             "job_id": self.job_id,
             "device_id": self.device_id,
@@ -697,6 +703,7 @@ class DeviceCapture:
             "sample_rate": self.sample_rate,
             "connected": bool(self.client and self.client.connected),
             "state": self._state,
+            "iq_drops": iq_drops,
             "frequencies": [
                 {
                     "frequency_hz": ch.frequency_hz,
@@ -808,15 +815,28 @@ class DeviceCapture:
         # recompute per-channel offsets; if a channel is unreachable we skip
         # it. This prevents recording audio at the wrong frequency.
 
+        # === IQ drop monitoring ===
+        # If the consumer queue overflowed, log a warning every ~5s so the
+        # operator knows the job's DSP can't keep up with real-time (the
+        # root cause of "เสียงเร็ว" / sped-up recordings).
+        _cur_drops = getattr(self.client, "iq_drops", 0) if self.client else 0
+        if _cur_drops > 0:
+            if not hasattr(self, "_last_drop_warn") or now - self._last_drop_warn > 5.0:
+                self._last_drop_warn = now
+                logger.warning(
+                    f"⚠️ [job={self.job_id}] IQ queue overflow: "
+                    f"{_cur_drops} chunks dropped (DSP too slow for "
+                    f"{len(self.channels)} channels @ {actual_sr/1e6:.1f} MSPS). "
+                    f"Recordings will have sped-up/garbled audio. "
+                    f"Reduce channel count or sample rate."
+                )
+
+        # === Phase 1: update offsets + collect reachable channels ===
+        reachable_channels: List[_FrequencyChannel] = []
         for ch in self.channels:
             try:
-                # Check if this channel is still reachable given the actual
-                # center frequency. If the device was retuned significantly,
-                # our target may now be outside the passband.
                 reachable = ch.update_offset(actual_center, actual_sr)
                 if not reachable:
-                    # Finish any recording that's in progress (the audio
-                    # from the new center would be at the wrong frequency).
                     if ch.is_recording and ch.buffer:
                         logger.info(
                             f"📼 [job={self.job_id}] Finish {ch.frequency_hz/1e6:.4f} MHz "
@@ -825,43 +845,73 @@ class DeviceCapture:
                         await self._finish_recording(ch)
                     ch.signal_level = -120.0
                     continue
-
-                # Snapshot the per-channel DSP params here on the event-loop
-                # thread before offloading, so the worker reads a consistent
-                # set of scalars even if config changes mid-chunk.
-                dsp_mode = ch.demod_mode
-                dsp_bw = ch.bandwidth_hz
-                dsp_vfo = ch.offset_hz
-                loop = asyncio.get_running_loop()
-                # Run the two CPU-heavy DSP steps (signal-level ~21 ms +
-                # demod ~15 ms at 2.4 MSPS) in PARALLEL off the event loop.
-                # Previously both ran inline and, across N channels, consumed
-                # N × ~36 ms per 50 ms chunk — pegging the process at 100% CPU
-                # and starving every HTTP/WebSocket coroutine.
-                level, audio = await asyncio.gather(
-                    loop.run_in_executor(
-                        self._dsp_executor,
-                        compute_signal_level,
-                        iq_data, actual_sr, dsp_mode, dsp_bw, dsp_vfo,
-                    ),
-                    loop.run_in_executor(
-                        self._dsp_executor,
-                        ch.demod.process,
-                        iq_data, dsp_mode, actual_sr, self.audio_rate, dsp_bw,
-                    ),
+                reachable_channels.append(ch)
+            except Exception as e:
+                logger.warning(
+                    f"DeviceCapture offset error freq={ch.frequency_hz}: {e}"
                 )
+
+        # === Phase 2: batch-parallel DSP for ALL reachable channels ===
+        # Previously the loop awaited each channel's gather() sequentially,
+        # so N channels × ~36 ms = N×36 ms per 50 ms chunk. With 12 channels
+        # that's ~432 ms — 8.6× slower than real-time, causing massive IQ
+        # queue overflow and sped-up audio. Now we submit ALL channels'
+        # signal-level + demod tasks as a SINGLE asyncio.gather(), so they
+        # run in parallel across the thread pool (wall time ≈ max single
+        # channel, not sum).
+        loop = asyncio.get_running_loop()
+        dsp_tasks = []
+        for ch in reachable_channels:
+            dsp_mode = ch.demod_mode
+            dsp_bw = ch.bandwidth_hz
+            dsp_vfo = ch.offset_hz
+            dsp_tasks.append(
+                loop.run_in_executor(
+                    self._dsp_executor,
+                    compute_signal_level,
+                    iq_data, actual_sr, dsp_mode, dsp_bw, dsp_vfo,
+                )
+            )
+            dsp_tasks.append(
+                loop.run_in_executor(
+                    self._dsp_executor,
+                    ch.demod.process,
+                    iq_data, dsp_mode, actual_sr, self.audio_rate, dsp_bw,
+                )
+            )
+
+        # Wait for ALL DSP tasks to complete in parallel
+        if dsp_tasks:
+            dsp_results = await asyncio.gather(*dsp_tasks, return_exceptions=True)
+        else:
+            dsp_results = []
+
+        # === Phase 3: process results (squlech gating, buffering) ===
+        # Results are interleaved: [lvl0, audio0, lvl1, audio1, ...]
+        for idx, ch in enumerate(reachable_channels):
+            try:
+                level = dsp_results[idx * 2]
+                audio = dsp_results[idx * 2 + 1]
+                # Handle exceptions from the executor
+                if isinstance(level, Exception):
+                    logger.warning(
+                        f"DeviceCapture signal-level error freq={ch.frequency_hz}: {level}"
+                    )
+                    level = -120.0
+                if isinstance(audio, Exception):
+                    logger.warning(
+                        f"DeviceCapture demod error freq={ch.frequency_hz}: {audio}"
+                    )
+                    audio = np.array([], dtype=np.float32)
+
                 ch.signal_level = level
                 # Adaptive squelch: feed the new level to the per-channel
                 # estimator (frozen while a recording is active so a long
                 # transmission can't pull the threshold up and clip itself).
                 if ch.auto_estimator is not None:
                     ch.auto_estimator.update(level, frozen=ch.is_recording, now=now)
-                # === DIAGNOSTIC (SDR_JOB_DEBUG): per-channel level vs squelch,
-                # including a center-probe (offset=0) to isolate "no signal at
-                # target" from a broken demod/signal-level function.
-                # Also logs the AUTO-SQUELCH state (noise floor, effective
-                # threshold, frozen) so we can see how the adaptive threshold
-                # behaves under dense adjacent-channel traffic. ===
+
+                # === DIAGNOSTIC (SDR_JOB_DEBUG): per-channel level vs squelch ===
                 if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:
                     try:
                         level_center = compute_signal_level(
@@ -873,8 +923,6 @@ class DeviceCapture:
                         )
                     except Exception:
                         level_center = -999.0
-                    # Spectrum sweep around the target offset to visualize
-                    # adjacent-channel leakage (offsets relative to TARGET).
                     target_off = ch.offset_hz
                     sweep_parts = []
                     for rel_khz in (-25, -12.5, 0, 12.5, 25):
@@ -891,7 +939,6 @@ class DeviceCapture:
                         except Exception:
                             pass
                     sweep_str = " ".join(sweep_parts)
-                    # Auto-squelch state (if enabled)
                     is_auto = ch.auto_estimator is not None
                     if is_auto:
                         nf = ch.auto_estimator.noise_floor_db
@@ -909,15 +956,8 @@ class DeviceCapture:
                         f"| SWEEP(rel) {sweep_str}",
                         flush=True,
                     )
-
-                # `audio` came from the offloaded demod.process in the gather
-                # above. The rest of this loop body (squlech gating, buffering,
-                # recording start/finish) runs on the event loop and is cheap.
-
-                # === DIAG: audio RMS to confirm demod output quality ===
-                if _debug and hasattr(self, "_diag_last") and abs(now - self._diag_last) < 0.2:
-                    import numpy as _np
                     if len(audio) > 0:
+                        import numpy as _np
                         audio_rms = float(_np.sqrt(_np.mean(audio.astype(_np.float64) ** 2)))
                         audio_max = float(_np.max(_np.abs(audio)))
                     else:
