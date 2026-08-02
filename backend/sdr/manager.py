@@ -1218,6 +1218,28 @@ class SDRManager:
                         f"🔌 RTL-TCP disconnected mid-stream; reconnecting "
                         f"({reconnect_attempts}/{max_reconnect_attempts})..."
                     )
+                    # CRITICAL: gracefully disconnect the dead connection BEFORE
+                    # reconnecting. rtl_tcp (single-client Windows build) is
+                    # slow to release its slot; if we reconnect immediately the
+                    # new connection gets TCP-accepted but receives no IQ data
+                    # (or gets an immediate RST). We disconnect (graceful FIN,
+                    # non-blocking close in RtlTcpClient.disconnect) and then
+                    # WAIT several seconds to give rtl_tcp time to notice the
+                    # closed socket and free its single-client slot. The wait
+                    # scales with the attempt number so repeated failures back
+                    # off progressively.
+                    try:
+                        await self._release_pool_consumer()
+                    except Exception as e:
+                        logger.warning(f"Release during reconnect: {e}")
+                    # Wait grows with attempt number: 3s, 6s, 9s, 12s, 15s.
+                    # rtl_tcp on Windows needs this time to release the slot.
+                    wait_before_reconnect = min(3.0 * reconnect_attempts, 15.0)
+                    logger.info(
+                        f"🔌 Waiting {wait_before_reconnect:.0f}s for rtl_tcp "
+                        f"to release the client slot..."
+                    )
+                    await asyncio.sleep(wait_before_reconnect)
                     try:
                         rc = await self.connect(stop_if_streaming=False)
                     except Exception as e:

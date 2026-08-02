@@ -3,6 +3,7 @@ RTL-TCP Client for connecting to rtl_tcp server.
 Handles connection, command sending, and IQ data receiving.
 """
 import asyncio
+import socket
 import struct
 import logging
 from typing import Optional, Callable
@@ -96,13 +97,36 @@ class RtlTcpClient:
             return False
 
     async def disconnect(self):
-        """Disconnect from rtl_tcp server."""
+        """Disconnect from rtl_tcp server.
+
+        IMPORTANT: rtl_tcp (especially the single-client Windows build) is
+        slow to release its single client slot after a disconnect. If we use
+        a normal graceful close (FIN) and block on wait_closed(), we hang
+        forever in FIN-WAIT-2 because rtl_tcp never sends its FIN back. If we
+        force an RST (SO_LINGER 1,0), the Windows rtl_tcp gets confused and
+        starts resetting ALL new connections for a while.
+
+        The best approach for this flaky single-client server is:
+          1. Send a graceful FIN (writer.close()) so rtl_tcp sees a clean exit.
+          2. Do NOT block on wait_closed() — return immediately. The kernel
+             will time out our FIN-WAIT-2 socket after tcp_fin_timeout (60s)
+             and rtl_tcp will eventually notice the closed socket.
+          3. Callers MUST wait a few seconds after disconnect() before
+             reconnecting, to give rtl_tcp time to release the slot.
+        """
         self._running = False
         self.connected = False
         if self.writer:
             try:
+                # Try to flush any pending writes (e.g. tuner commands) so the
+                # FIN goes out cleanly.
+                try:
+                    await asyncio.wait_for(self.writer.drain(), timeout=1.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
                 self.writer.close()
-                await self.writer.wait_closed()
+                # Do NOT await wait_closed() — it blocks forever because rtl_tcp
+                # never sends FIN back. Just close and let the kernel handle it.
             except Exception:
                 pass
             self.writer = None
