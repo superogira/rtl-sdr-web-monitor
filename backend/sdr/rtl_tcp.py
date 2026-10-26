@@ -40,10 +40,25 @@ class RtlTcpClient:
         self.writer: Optional[asyncio.StreamWriter] = None
         self.connected = False
         self._running = False
+        # "Poisoned" flag (ported from the Go reference client): set when the
+        # connection is KNOWN to be dead or unusable (send failure, read
+        # exception, protocol breakage). A poisoned connection must be torn
+        # down and re-established — never reused — so the reconnect logic can
+        # act immediately instead of waiting for read timeouts.
+        self._poisoned = False
+        # TCP keepalive probe interval in seconds (Go reference: 15s). Without
+        # keepalive, a session silently dropped by NAT/CGNAT gear or a powered
+        # off remote host stays "established" until the first read timeout.
+        self.tcp_keepalive_s = 15
         self._frequency = settings.RTL_TCP_CENTER_FREQ
         self._sample_rate = settings.RTL_TCP_SAMPLE_RATE
         self._gain = settings.RTL_TCP_GAIN
         self._ppm = settings.RTL_TCP_FREQ_CORRECTION_PPM
+
+    @property
+    def poisoned(self) -> bool:
+        """True when the connection is known-dead and must be reconnected."""
+        return self._poisoned
 
     def set_connection(self, host: str, port: int):
         """Update target host/port. Takes effect on next connect().
@@ -53,12 +68,68 @@ class RtlTcpClient:
         self.host = host
         self.port = int(port)
 
+    def _apply_tcp_keepalive(self, sock: socket.socket) -> None:
+        """Enable TCP keepalive probes (Go reference: every 15s).
+
+        Detects silently-dropped sessions (CGNAT idle timeout, Wi-Fi roam,
+        host power-off) within seconds instead of hanging for minutes. The
+        Go client's comment explains why this matters: a dead socket that
+        nobody notices keeps the single-client rtl_tcp server locked.
+        """
+        idle = int(self.tcp_keepalive_s)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):  # Linux
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
+            elif hasattr(socket, "TCP_KEEPALIVE"):  # macOS
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, idle)
+            if hasattr(socket, "TCP_KEEPINTVL"):  # Linux/macOS
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, idle)
+            if hasattr(socket, "TCP_KEEPCNT"):  # Linux/macOS
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows
+                sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, idle * 1000, idle * 1000))
+        except Exception as e:
+            # Non-fatal: keepalive is a robustness aid, not a requirement.
+            logger.warning(f"Could not enable TCP keepalive: {e}")
+
+    async def _close_failed_socket(self) -> None:
+        """Close the transport after a failed connect/handshake.
+
+        Nothing is streaming yet, so no drain ritual is needed — but the
+        socket MUST be closed or the half-open connection leaks (and the
+        single-client server may even count it as a connected client).
+        """
+        if self.writer:
+            try:
+                self.writer.close()
+                try:
+                    await asyncio.wait_for(self.writer.wait_closed(), timeout=0.5)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+        self.connected = False
+
     async def connect(self) -> bool:
         """Connect to rtl_tcp server."""
+        # Tear down any stale transport from a previous connection (e.g. a
+        # watchdog killed the read loop but the TCP socket is still open).
+        # Uses the full graceful disconnect so a live stale socket is closed
+        # with FIN + drain instead of an RST that wedges the server.
+        if self.writer is not None:
+            await self.disconnect()
         try:
             self.reader, self.writer = await asyncio.open_connection(
                 self.host, self.port
             )
+            # TCP keepalive probes (Go reference: 15s) so silently-dropped
+            # NAT/CGNAT sessions are detected instead of hanging forever.
+            sock = self.writer.get_extra_info("socket")
+            if sock is not None:
+                self._apply_tcp_keepalive(sock)
 
             # Read dongle info - read available data (header is 12 bytes but some implementations vary)
             info_data = b''
@@ -74,6 +145,7 @@ class RtlTcpClient:
 
             if magic == 0x52544C30:  # "RTL0"
                 self.connected = True
+                self._poisoned = False  # fresh connection — clear any stale poison
                 logger.info(
                     f"Connected to RTL-TCP at {self.host}:{self.port} "
                     f"(tuner: {tuner_type}, gain steps: {tuner_gain_count})"
@@ -85,63 +157,148 @@ class RtlTcpClient:
                 return True
             else:
                 logger.error(f"Invalid RTL-TCP magic: {hex(magic)}")
-                await self.disconnect()
+                await self._close_failed_socket()
                 return False
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout connecting to RTL-TCP at {self.host}:{self.port}")
+            # Close the half-open socket so it does not leak (and does not
+            # occupy the single-client slot on the server side).
+            await self._close_failed_socket()
             return False
         except Exception as e:
             logger.error(f"Failed to connect to RTL-TCP: {e}")
             self.connected = False
+            self._poisoned = False  # never established — reconnect is allowed
+            await self._close_failed_socket()
             return False
 
     async def disconnect(self):
-        """Disconnect from rtl_tcp server.
+        """Disconnect from rtl_tcp server — port of the Go client's
+        CloseGraceful().
 
-        IMPORTANT: rtl_tcp (especially the single-client Windows build) is
-        slow to release its single client slot after a disconnect. If we use
-        a normal graceful close (FIN) and block on wait_closed(), we hang
-        forever in FIN-WAIT-2 because rtl_tcp never sends its FIN back. If we
-        force an RST (SO_LINGER 1,0), the Windows rtl_tcp gets confused and
-        starts resetting ALL new connections for a while.
+        Why the drain matters (learned the hard way in the Go client):
+        rtl_tcp streams IQ continuously, so at close time our kernel receive
+        buffer almost always still holds un-read IQ bytes. Closing a TCP
+        socket with un-read data in its receive queue makes the OS send an
+        RST instead of a graceful FIN sequence. The single-client Windows
+        rtl_tcp reacts badly: it can wedge inside send() to the dead peer
+        and then refuse every new connection until restarted.
 
-        The best approach for this flaky single-client server is:
-          1. Send a graceful FIN (writer.close()) so rtl_tcp sees a clean exit.
-          2. Do NOT block on wait_closed() — return immediately. The kernel
-             will time out our FIN-WAIT-2 socket after tcp_fin_timeout (60s)
-             and rtl_tcp will eventually notice the closed socket.
-          3. Callers MUST wait a few seconds after disconnect() before
-             reconnecting, to give rtl_tcp time to release the slot.
+        Sequence (mirrors CloseGraceful in the Go client):
+          1. Flush pending tuner commands, then half-close with write_eof()
+             — the FIN goes out while the read side stays open (equivalent
+             of Go's tcpConn.CloseWrite()).
+          2. Drain the incoming IQ stream for up to ~1.2s (discarding it)
+             so the kernel receive queue is empty when the socket closes.
+             This prevents the RST that wedges the server.
+          3. Close for real. Never block forever on wait_closed(): this
+             server often never sends its own FIN back, so bound the wait.
         """
         self._running = False
         self.connected = False
+        self._poisoned = False
         if self.writer:
             try:
-                # Try to flush any pending writes (e.g. tuner commands) so the
-                # FIN goes out cleanly.
+                # 1. Flush any pending writes (e.g. tuner commands) so the
+                # FIN follows them cleanly.
                 try:
                     await asyncio.wait_for(self.writer.drain(), timeout=1.0)
                 except (asyncio.TimeoutError, Exception):
                     pass
+                # Half-close: send FIN, keep the read side open.
+                try:
+                    self.writer.write_eof()
+                except (NotImplementedError, Exception):
+                    # Some transports (SSL/mock) don't support EOF — proceed.
+                    pass
+                # 2. Drain incoming IQ for up to ~1.2s (Go: CloseGraceful's
+                # drain window) so the receive queue empties and the final
+                # close produces a clean FIN instead of an RST.
+                reader = self.reader
+                if reader is not None:
+                    loop = asyncio.get_running_loop()
+                    deadline = loop.time() + 1.2
+                    while True:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            break
+                        try:
+                            chunk = await asyncio.wait_for(
+                                reader.read(65536), timeout=remaining
+                            )
+                        except (asyncio.TimeoutError, Exception):
+                            break
+                        if not chunk:
+                            # Server saw our FIN and closed its side — the
+                            # cleanest possible shutdown.
+                            break
+                # 3. Real close, with a bounded wait. After the drain the
+                # peer's FIN usually arrives promptly, but never trust this
+                # server enough to block forever on wait_closed().
                 self.writer.close()
-                # Do NOT await wait_closed() — it blocks forever because rtl_tcp
-                # never sends FIN back. Just close and let the kernel handle it.
+                try:
+                    await asyncio.wait_for(self.writer.wait_closed(), timeout=1.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
             except Exception:
                 pass
             self.writer = None
             self.reader = None
-        logger.info("Disconnected from RTL-TCP")
+        logger.info("Disconnected from RTL-TCP (graceful FIN + IQ drain)")
+
+    def _poison(self, reason: str) -> None:
+        """Mark the connection dead (Go reference: "poisoned" flag).
+
+        Called on send failures, read exceptions, and protocol breakage.
+        The reconnect logic checks `poisoned` to tear the connection down
+        immediately instead of waiting for read timeouts.
+        """
+        if not self._poisoned:
+            self._poisoned = True
+            self.connected = False
+            logger.warning(f"RTL-TCP connection poisoned: {reason}")
+
+    async def _flush_commands(self, deadline_s: float = 5.0) -> bool:
+        """Flush queued tuner commands with a bounded deadline (Go reference:
+        5s write deadline per command).
+
+        Returns False (and poisons the connection) when the transport could
+        not accept the data in time — a half-delivered command permanently
+        shifts the server's 5-byte command framing, so the connection must
+        not be reused.
+        """
+        if not self.writer:
+            return False
+        try:
+            await asyncio.wait_for(self.writer.drain(), timeout=deadline_s)
+            return True
+        except asyncio.TimeoutError:
+            self._poison(f"command flush timed out after {deadline_s:.1f}s")
+            return False
+        except Exception as e:
+            self._poison(f"command flush failed: {e}")
+            return False
 
     def _send_command(self, cmd: int, param: int):
-        """Send a command to rtl_tcp (non-blocking)."""
+        """Send a command to rtl_tcp (non-blocking).
+
+        A failed write poisons the connection: the server parses commands in
+        fixed 5-byte frames, so a dropped/partial command corrupts the
+        stream framing forever (Go reference marks the conn "poisoned" on
+        any send error).
+        """
         if not self.writer:
             return
         try:
             data = struct.pack(">BI", cmd, param)
+            if self.writer.is_closing():
+                self._poison(f"write on closing transport (cmd {cmd})")
+                return
             self.writer.write(data)
         except Exception as e:
             logger.error(f"Failed to send command {cmd}: {e}")
+            self._poison(f"send command {cmd} failed: {e}")
 
     async def set_frequency(self, freq_hz: int):
         """Set center frequency in Hz.
@@ -157,6 +314,7 @@ class RtlTcpClient:
         else:
             actual_freq = freq_hz
         self._send_command(CMD_SET_FREQUENCY, actual_freq)
+        await self._flush_commands()
         logger.info(
             f"Frequency set to {freq_hz} Hz ({freq_hz/1e6:.3f} MHz) "
             f"[PPM correction: {self._ppm:+d} ppm → actual {actual_freq} Hz]"
@@ -166,6 +324,7 @@ class RtlTcpClient:
         """Set sample rate in Hz."""
         self._sample_rate = rate
         self._send_command(CMD_SET_SAMPLE_RATE, rate)
+        await self._flush_commands()
         logger.info(f"Sample rate set to {rate} Hz ({rate/1e6:.3f} MHz)")
 
     async def set_gain(self, gain_db: int):
@@ -174,6 +333,7 @@ class RtlTcpClient:
         # Set manual gain mode first
         self._send_command(CMD_SET_GAIN_MODE, GAIN_MANUAL)
         self._send_command(CMD_SET_GAIN, gain_db * 10)  # rtl_tcp uses tenths of dB
+        await self._flush_commands()
         logger.info(f"Gain set to {gain_db} dB")
 
     async def set_freq_correction(self, ppm: int):
@@ -192,10 +352,12 @@ class RtlTcpClient:
     async def set_gain_by_index(self, index: int):
         """Set gain by index."""
         self._send_command(CMD_SET_TUNER_GAIN_BY_INDEX, index)
+        await self._flush_commands()
 
     async def set_auto_gain(self):
         """Enable automatic gain."""
         self._send_command(CMD_SET_GAIN_MODE, GAIN_AUTO)
+        await self._flush_commands()
 
     async def read_samples(self, num_bytes: int = 65536) -> Optional[bytes]:
         """Read raw IQ samples from rtl_tcp.
@@ -217,16 +379,22 @@ class RtlTcpClient:
             )
             return data
         except asyncio.IncompleteReadError as e:
-            # Connection closed mid-read — return partial data if we have any
+            # Connection closed mid-read — the link is dead (Go reference:
+            # short read → poisoned). Return partial data if we have any.
             logger.warning(
                 f"Incomplete read: got {len(e.partial)}/{num_bytes} bytes"
             )
+            self._poison("incomplete read (server closed mid-stream)")
             return e.partial if len(e.partial) > 0 else None
         except asyncio.TimeoutError:
+            # Read deadline (Go reference: 6s) — no data in 5s. Do NOT poison
+            # here: the caller's stall watchdog decides after repeated
+            # timeouts, since transient stalls (retune, USB buffer flush)
+            # can legitimately produce one empty read.
             return None
         except Exception as e:
             logger.error(f"Error reading samples: {e}")
-            self.connected = False
+            self._poison(f"read error: {e}")
             return None
 
     def get_capabilities(self) -> dict:

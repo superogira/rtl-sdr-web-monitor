@@ -101,6 +101,12 @@ class SharedConnectionConsumer:
     def connected(self) -> bool:
         return self._conn.client.connected
 
+    @property
+    def poisoned(self) -> bool:
+        """True when the underlying connection is known-dead (Go reference's
+        "poisoned" flag). SDRManager checks this to trigger reconnects."""
+        return bool(getattr(self._conn.client, "poisoned", False))
+
     async def connect(self) -> bool:
         """Claim this consumer on the shared connection (must already be
         connected or connect now). Returns True on success."""
@@ -195,6 +201,27 @@ class SharedDeviceConnection:
         self._refcount = 0
         self._pending_host: Optional[str] = None
         self._pending_port: Optional[int] = None
+        # --- stall watchdogs (ported from the Go reference client) ---
+        # Max seconds with NO IQ bytes at all before the connection is
+        # declared dead (Go uses a 6s read deadline; we allow a bit more
+        # to cover retune/USB buffer-flush gaps).
+        self.stall_timeout = 12.0
+        # Seconds of identical-byte IQ (constant filler from a wedged
+        # dongle/server) before declaring the stream dead (Go: flat-data
+        # detector, flatLimit ≈ 3s).
+        self.flat_stall_seconds = 3.0
+        # Rate watchdog: poison the connection when the sustained IQ byte
+        # rate falls below min_rate_fraction × expected for a full
+        # rate_window_s window (measured only after rate_warmup_s of grace).
+        # Detects the single-client server streaming at a stale/wrong sample
+        # rate (it remembers the last-set rate across connections). The
+        # default is deliberately low (10%): live measurement against the
+        # e25wop server shows it can legitimately stream well below the
+        # configured rate (~35-40%) without being broken. Set
+        # min_rate_fraction to 0 to disable.
+        self.rate_window_s = 10.0
+        self.rate_warmup_s = 10.0
+        self.min_rate_fraction = 0.10
         # Preemption callbacks: called when the controller changes.
         # Signature: on_preempt(new_controller_id, new_priority,
         #                       old_controller_id, old_priority)
@@ -220,7 +247,15 @@ class SharedDeviceConnection:
     async def _ensure_connected(self) -> bool:
         """Connect the underlying client if not already connected."""
         if self.client.connected:
-            return True
+            if getattr(self.client, "poisoned", False):
+                # Known-dead connection (Go: poisoned): close it first so the
+                # connect() below rebuilds a fresh one instead of reusing it.
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
+            else:
+                return True
         # apply pending host/port if any (only relevant for rtl_tcp)
         if self._pending_host and hasattr(self.client, 'set_connection'):
             self.client.host = self._pending_host
@@ -427,16 +462,44 @@ class SharedDeviceConnection:
         max_errors = 50
         empty_read_count = 0
         max_empty_reads = 200  # tolerate transient empty reads (USB short reads)
+        # --- stall watchdogs (ported from the Go reference client) ---
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        last_data_time = started
+        flat_streak = 0
+        flat_limit = max(20, int(self.flat_stall_seconds / 0.05))
+        rate_window_start: Optional[float] = None
+        rate_window_bytes = 0
+        # Set when a watchdog/error decides to stop the loop (used by the
+        # finally block to poison the connection). Normal teardown
+        # cancellation leaves this None so a healthy connection is never
+        # falsely flagged.
+        stop_reason: Optional[str] = None
         try:
             while self.client.connected and self._refcount > 0:
                 try:
                     chunk = max(1024, int(self.client._sample_rate * 0.05))
                     iq = await self.client.read_samples(chunk * 2)
+                    now = loop.time()
                     if not iq:
                         # Empty read (b"" or None) — this is NORMAL for USB
                         # devices (short reads, buffer flushing during retune).
                         # Do NOT count as an error; just back off slightly.
                         empty_read_count += 1
+                        # STALL WATCHDOG: for rtl_tcp a dead link produces one
+                        # ~5s read timeout per call, so the USB-tuned
+                        # max_empty_reads counter would take ~16 minutes to
+                        # fire. The Go client uses a 6s read deadline and then
+                        # reconnects — we allow stall_timeout seconds with no
+                        # IQ at all before declaring the connection dead.
+                        if now - last_data_time > self.stall_timeout:
+                            logger.warning(
+                                f"SharedConnection {self.device_id}: no IQ "
+                                f"data for {now - last_data_time:.1f}s — "
+                                f"treating connection as dead (stall watchdog)"
+                            )
+                            stop_reason = "stall watchdog"
+                            break
                         if empty_read_count > max_empty_reads:
                             # Too many consecutive empty reads — something
                             # is genuinely wrong (device stuck)
@@ -452,6 +515,57 @@ class SharedDeviceConnection:
                     # Got data — reset both counters
                     empty_read_count = 0
                     consecutive_errors = 0
+                    last_data_time = now
+
+                    # FLAT-DATA WATCHDOG: a wedged dongle/server can keep the
+                    # TCP flow alive but stream constant filler bytes (often
+                    # all-zero). Real RF noise/signal never looks like that.
+                    # Go's flat-data detector reconnects after ~3s of flat IQ.
+                    if len(set(iq[:512])) <= 1:
+                        flat_streak += 1
+                        if flat_streak >= flat_limit:
+                            logger.warning(
+                                f"SharedConnection {self.device_id}: "
+                                f"{flat_streak} flat (constant-byte) IQ "
+                                f"chunks — device wedged, reconnecting"
+                            )
+                            stop_reason = "flat-data watchdog"
+                            break
+                    else:
+                        flat_streak = 0
+
+                    # RATE WATCHDOG: the single-client rtl_tcp remembers its
+                    # last-set rate across connections, so a fresh session can
+                    # stream at a different rate than the DSP assumes (audio
+                    # plays fast/slow with underruns). Measure the sustained
+                    # byte rate and kill the connection when it collapses to
+                    # near-nothing so the manager reconnects with a fresh
+                    # handshake that re-sends the correct rate. The threshold
+                    # is conservative (default 10%): real servers may
+                    # legitimately stream below the configured rate.
+                    expected_rate = getattr(self.client, "_sample_rate", 0) * 2
+                    if self.min_rate_fraction > 0 and expected_rate > 0:
+                        if rate_window_start is None:
+                            rate_window_start = now
+                            rate_window_bytes = 0
+                        rate_window_bytes += len(iq)
+                        elapsed = now - rate_window_start
+                        if elapsed >= self.rate_window_s:
+                            if now - started > self.rate_warmup_s:
+                                actual = rate_window_bytes / elapsed
+                                if actual < self.min_rate_fraction * expected_rate:
+                                    logger.warning(
+                                        f"SharedConnection {self.device_id}: "
+                                        f"IQ rate {actual/1e6:.2f} MB/s far "
+                                        f"below expected "
+                                        f"{expected_rate/1e6:.2f} MB/s — "
+                                        f"stalled stream or wrong sample "
+                                        f"rate, reconnecting (rate watchdog)"
+                                    )
+                                    stop_reason = "rate watchdog"
+                                    break
+                            rate_window_start = None  # restart window
+
                     # fan-out to every consumer
                     for c in list(self._consumers.values()):
                         try:
@@ -467,12 +581,31 @@ class SharedDeviceConnection:
                         f"({consecutive_errors}/{max_errors}): {inner}"
                     )
                     if consecutive_errors >= max_errors:
+                        stop_reason = "too many read errors"
                         break
                     await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"SharedConnection read loop crashed: {e}", exc_info=True)
+            stop_reason = f"crashed: {e}"
+        finally:
+            # Clear our own task handle if the loop exited on its own (stall/
+            # flat/rate watchdog, too many errors). Otherwise a stale
+            # completed task stays registered and _ensure_connected() would
+            # never restart the loop — consumers would never get IQ again.
+            try:
+                current = asyncio.current_task()
+                if current is not None and self._read_task is current:
+                    self._read_task = None
+            except Exception:
+                pass
+            # Poison ONLY on watchdog/error stops — a normal teardown
+            # cancellation must leave the healthy connection un-flagged.
+            if stop_reason and self.client.connected:
+                self.client.connected = False
+                if hasattr(self.client, "_poison"):
+                    self.client._poison(f"read loop exited ({stop_reason})")
         logger.info(f"🔌 SharedConnection {self.device_id}: read loop exited")
 
 

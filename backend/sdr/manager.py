@@ -1206,7 +1206,11 @@ class SDRManager:
                 # If the RTL-TCP connection dropped, try to reconnect instead
                 # of exiting immediately (the old `and self.client.connected`
                 # condition exited on the first drop and caused the flip-flop).
-                if not self.client.connected:
+                # Also honor the Go-style "poisoned" flag: a connection that a
+                # watchdog or send-failure marked dead must be reconnected
+                # even if `connected` has not been cleared yet.
+                client_poisoned = bool(getattr(self.client, "poisoned", False))
+                if not self.client.connected or client_poisoned:
                     if reconnect_attempts >= max_reconnect_attempts:
                         logger.error(
                             f"RTL-TCP reconnect failed {reconnect_attempts}x; "
