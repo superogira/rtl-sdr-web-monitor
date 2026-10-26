@@ -85,6 +85,8 @@ Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
 ### 🤖 Speech-to-Text (STT)
 - **Speechmatics** — Cloud-based high-quality transcription
 - **Azure Cognitive Services** — Microsoft cloud STT
+- **Groq Whisper** — OpenAI-compatible cloud transcription
+- **MaxPlus AI** — OpenAI-compatible cloud transcription ([api.maxplus-ai.cc](https://maxplus-ai.cc/docs/api)); live model catalog (`whisper-large-v3`, `grok-stt`, …) fetched via `GET /v1/models`
 - **Whisper Local** — Self-hosted faster-whisper-server
 - **Auto-Transcribe** — Automatically transcribe new recordings
 - **Audio Preprocessing** — Optionally downsample/compress audio before STT to save bandwidth
@@ -273,12 +275,16 @@ All settings are controlled via environment variables (see `.env.example`). The 
 
 | Variable | Description |
 |----------|-------------|
-| `STT_PROVIDER` | STT provider: speechmatics / azure / whisper_local |
+| `STT_PROVIDER` | STT provider: speechmatics / azure / whisper_local / groq / maxplus |
 | `WHISPER_LOCAL_HOST` | Host of a local Whisper STT service (if used) |
 | `WHISPER_LOCAL_PORT` | Port of a local Whisper STT service |
 | `WHISPER_LOCAL_MODEL` | Whisper model size (e.g. `base`, `small`, `medium`, `large-v3`) |
 | `AZURE_SPEECH_KEY` | Azure Speech resource key (if using Azure) |
 | `SPEECHMATICS_API_KEY` | Speechmatics API key (if using Speechmatics) |
+| `GROQ_API_KEY` | Groq API key (if using Groq Whisper) |
+| `GROQ_STT_MODEL` | Groq transcription model (e.g. `whisper-large-v3`) |
+| `MAXPLUS_API_KEY` | MaxPlus AI API key, format `ccsk-…` (if using MaxPlus AI) |
+| `MAXPLUS_STT_MODEL` | MaxPlus AI transcription model (e.g. `whisper-large-v3`, `grok-stt`) |
 
 ### Telegram Notifications
 
@@ -715,12 +721,16 @@ docker compose up -d
 
 | ตัวแปร | คำอธิบาย |
 | --- | --- |
-| `STT_PROVIDER` | ผู้ให้บริการ STT: speechmatics / azure / whisper_local |
+| `STT_PROVIDER` | ผู้ให้บริการ STT: speechmatics / azure / whisper_local / groq / maxplus |
 | `WHISPER_LOCAL_HOST` | โฮสต์ของบริการ Whisper STT ภายใน (หากใช้งาน) |
 | `WHISPER_LOCAL_PORT` | พอร์ตของบริการ Whisper STT ภายใน |
 | `WHISPER_LOCAL_MODEL` | ขนาดโมเดลของ Whisper (เช่น `base`, `small`, `medium`, `large-v3`) |
 | `AZURE_SPEECH_KEY` | คีย์ทรัพยากร Azure Speech (หากใช้ Azure) |
 | `SPEECHMATICS_API_KEY` | คีย์ API ของ Speechmatics (หากใช้ Speechmatics) |
+| `GROQ_API_KEY` | คีย์ API ของ Groq (หากใช้ Groq Whisper) |
+| `GROQ_STT_MODEL` | โมเดลถอดเสียงของ Groq (เช่น `whisper-large-v3`) |
+| `MAXPLUS_API_KEY` | คีย์ API ของ MaxPlus AI รูปแบบ `ccsk-…` (หากใช้ MaxPlus AI) |
+| `MAXPLUS_STT_MODEL` | โมเดลถอดเสียงของ MaxPlus AI (เช่น `whisper-large-v3`, `grok-stt`) |
 
 ### การแจ้งเตือนผ่าน Telegram
 

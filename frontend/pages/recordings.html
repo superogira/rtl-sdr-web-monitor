@@ -470,6 +470,7 @@
             speechmatics: '🔊',
             azure: '☁️',
             groq: '⚡',
+            maxplus: '🛰️',
             whisper: '🤫',
             whisper_local: '🤫',
         };
@@ -478,6 +479,7 @@
             speechmatics: 'Speechmatics',
             azure: 'Azure',
             groq: 'Groq Whisper',
+            maxplus: 'MaxPlus AI',
             whisper: 'Whisper',
             whisper_local: 'Whisper',
         };
@@ -487,7 +489,7 @@
             const icon = PROVIDER_ICONS[p] || '📝';
             const label = PROVIDER_LABELS[p] || (p.charAt(0).toUpperCase() + p.slice(1));
             // For Whisper, append the model name if available (e.g. "Whisper · Systran/faster-whisper-small")
-            const isWhisper = (p === 'whisper' || p === 'whisper_local' || p === 'groq');
+            const isWhisper = (p === 'whisper' || p === 'whisper_local' || p === 'groq' || p === 'maxplus');
             const model = isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
             const sttDur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
             return `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${icon} ${label}${model}${sttDur}</span>`;

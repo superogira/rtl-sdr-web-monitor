@@ -3477,13 +3477,13 @@ const App = {
         const recorderName = rec.recorded_by_display_name || rec.recorded_by_username;
         const recorderLabel = (source === 'manual' && recorderName) ? `👤 ${recorderName}` : '';
         // Provider badge (มีไอคอน) — แสดงว่าถอดด้วย STT provider อะไร
-        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', groq: '⚡', whisper: '🤫', whisper_local: '🤫' };
-        const _PROVIDER_LABELS = { speechmatics: 'Speechmatics', azure: 'Azure', groq: 'Groq Whisper', whisper: 'Whisper', whisper_local: 'Whisper' };
+        const _PROVIDER_ICONS = { speechmatics: '🔊', azure: '☁️', groq: '⚡', maxplus: '🛰️', whisper: '🤫', whisper_local: '🤫' };
+        const _PROVIDER_LABELS = { speechmatics: 'Speechmatics', azure: 'Azure', groq: 'Groq Whisper', maxplus: 'MaxPlus AI', whisper: 'Whisper', whisper_local: 'Whisper' };
         let _providerBadge = '';
         if (rec.stt_provider) {
             const _icon = _PROVIDER_ICONS[rec.stt_provider] || '📝';
             const _label = _PROVIDER_LABELS[rec.stt_provider] || (rec.stt_provider.charAt(0).toUpperCase() + rec.stt_provider.slice(1));
-            const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local' || rec.stt_provider === 'groq');
+            const _isWhisper = (rec.stt_provider === 'whisper' || rec.stt_provider === 'whisper_local' || rec.stt_provider === 'groq' || rec.stt_provider === 'maxplus');
             const _model = _isWhisper && rec.stt_model ? ` · ${rec.stt_model}` : '';
             const _dur = (rec.stt_duration != null) ? ` · ⏱ ${Number(rec.stt_duration).toFixed(1)}s` : '';
             _providerBadge = `<span style="font-size:0.65rem; color:var(--text-muted); margin-left:6px; white-space:nowrap;">${_icon} ${_label}${_model}${_dur}</span>`;

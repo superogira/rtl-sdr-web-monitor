@@ -461,7 +461,7 @@ rm -rf data/recordings/*
 
 ## 8. ระบบถอดเสียง (Speech-to-Text / STT)
 
-ระบบถอดเสียงแปลงเสียงวิทยุเป็นข้อความ รองรับ 2 provider:
+ระบบถอดเสียงแปลงเสียงวิทยุเป็นข้อความ รองรับหลาย provider:
 
 ### 8.1 Provider ที่รองรับ
 
@@ -470,19 +470,25 @@ rm -rf data/recordings/*
 | **Speechmatics** (Cloud) | API แม่นยำ รองรับไทย ต้องมี API Key และอินเทอร์เน็ต | ไม่ (มี `httpx` ใน `requirements.txt`) |
 | **Whisper Local** (API) | faster-whisper-server บนเครือข่ายท้องถิ่น ฟรี รองรับ GPU/CPU | ต้องติดตั้ง server แยก (ดู `docs/WHISPER_LOCAL_STT.md`) |
 | **Azure** Cognitive Services Speech | บริการ Cloud ของ Microsoft รองรับไทย | ไม่ (มี SDK ใน `requirements.txt`) |
+| **Groq Whisper** (Cloud) | OpenAI-compatible API เร็วมาก รองรับไทย | ไม่ (มี `httpx` ใน `requirements.txt`) |
+| **MaxPlus AI** (Cloud) | OpenAI-compatible API ([api.maxplus-ai.cc](https://maxplus-ai.cc/docs/api)) เลือกโมเดลได้จาก `GET /v1/models` เช่น `whisper-large-v3`, `grok-stt` (คีย์รูปแบบ `ccsk-…`) | ไม่ (มี `httpx` ใน `requirements.txt`) |
 
 ### 8.2 การตั้งค่า STT (ผ่านหน้าเว็บ)
 
 1. ไปที่ **⚙️ ตั้งค่า → 📝 ถอดเสียง**
-2. เลือก Provider (Speechmatics / Whisper Local / Azure)
+2. เลือก Provider (Speechmatics / Whisper Local / Azure / Groq / MaxPlus AI)
 3. สำหรับ Speechmatics:
    - ใส่ API Key (สมัครได้ที่ https://speechmatics.com)
    - เลือก Language: ไทย / English / Auto
    - **Operating Point**: `standard` (เร็ว ประหยัดเครดิต) หรือ `enhanced` (แม่นยำ ช้า)
    - **Diarization**: `none` (ไม่แยก) / `speaker` (แยกผู้พูด) / `channel` (แยกช่องสัญญาณ — เหมาะกับวิทยุสื่อสาร)
    - **Enable Entities**: ดึง named entities (ชื่อคน/สถานที่/องค์กร)
-4. **ถอดเสียงอัตโนมัติ**: เปิดเพื่อถอดทุกครั้งที่อัดเสร็จ หรือปิดเพื่อกดถอดเองในหน้า Recordings
-5. กด **💾 บันทึก**
+4. สำหรับ **MaxPlus AI**:
+   - ใส่ API Key (สร้างได้จาก dashboard ของ MaxPlus AI — รูปแบบ `ccsk-…`)
+   - เลือก **Model** จากรายการที่ดึงมาแบบสดผ่าน `GET /v1/models` (กดปุ่ม **🔄 โหลดโมเดลจาก API** เพื่อรีเฟรช) เช่น `whisper-large-v3` หรือ `grok-stt`
+   - ไฟล์เสียงต้องไม่เกิน 25 MB — แนะนำเปิดตัวเลือกบีบอัด MP3 สำหรับไฟล์ยาว
+5. **ถอดเสียงอัตโนมัติ**: เปิดเพื่อถอดทุกครั้งที่อัดเสร็จ หรือปิดเพื่อกดถอดเองในหน้า Recordings
+6. กด **💾 บันทึก**
 
 > 💡 ค่าทั้งหมดเก็บในฐานข้อมูล (ตาราง `app_settings`) ใช้ร่วมกันสำหรับผู้ใช้ทุกคน
 

@@ -20,4 +20,7 @@ data/
 Thumbs.db
 
 # Node
-node_modules/AI_CONTEXT.md
+node_modules/
+
+# AI context (local credentials/notes — never commit)
+AI_CONTEXT.md

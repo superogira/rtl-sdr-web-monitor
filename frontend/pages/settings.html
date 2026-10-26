@@ -329,6 +329,7 @@
                     <select id="stt-provider">
                         <option value="whisper_local">Whisper Local (API)</option>
                         <option value="groq">Groq Whisper API (Cloud)</option>
+                        <option value="maxplus">MaxPlus AI (Cloud)</option>
                         <option value="speechmatics">Speechmatics API (Cloud)</option>
                         <option value="azure">Azure Cognitive Services Speech</option>
                     </select>
@@ -439,6 +440,47 @@
                         </select>
                         <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.groqCompressHint">
                             Groq รองรับไฟล์เสียงหลายรูปแบบ เช่น WAV/FLAC/MP3 — MP3 ประหยัด bandwidth ที่สุด
+                        </p>
+                    </div>
+                </div>
+
+                <!-- MaxPlus-specific fields (shown only when provider=maxplus) -->
+                <div id="stt-maxplus-section" style="display:none; margin-top:16px; padding-top:12px; border-top:1px dashed var(--border);">
+                    <h3 style="font-size:0.9rem; color:var(--accent-cyan); margin-bottom:8px;">MaxPlus AI Settings</h3>
+                    <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:8px;" data-i18n="set.stt.maxplusHint">
+                        ใช้ MaxPlus AI API (api.maxplus-ai.cc) OpenAI-compatible สำหรับถอดเสียงบน Cloud
+                    </p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>MaxPlus API Key</label>
+                            <input type="password" id="stt-maxplus-api-key" placeholder="ccsk-..." autocomplete="off" data-i18n-ph="set.stt.maxplusKeyPh">
+                            <p id="stt-maxplus-api-key-hint" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.maxplusKeyHint">
+                                ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Model</label>
+                            <select id="stt-maxplus-model">
+                                <option value="whisper-large-v3">whisper-large-v3</option>
+                                <option value="grok-stt">grok-stt</option>
+                            </select>
+                            <button type="button" id="stt-maxplus-models-refresh" class="btn btn-sm" style="margin-top:6px;" data-i18n="set.stt.maxplusLoadModels">🔄 โหลดโมเดลจาก API</button>
+                            <p id="stt-maxplus-models-status" style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;"></p>
+                            <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.maxplusModelHint">
+                                เลือกโมเดลถอดเสียงที่ API key ของคุณใช้ได้ (ดึงจาก GET /v1/models)
+                            </p>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="set.stt.compressLabel">รูปแบบไฟล์เสียงที่ส่ง (ประหยัดเน็ต)</label>
+                        <select id="stt-maxplus-audio-format">
+                            <option value="off" data-i18n="set.stt.compressOff">ปิด (ส่ง WAV 32kHz เดิม)</option>
+                            <option value="wav" data-i18n="set.stt.compressWav">WAV 16kHz mono (เล็กลงครึ่งหนึ่ง)</option>
+                            <option value="flac" data-i18n="set.stt.compressFlac">FLAC 16kHz (เล็กลง ~50%, lossless)</option>
+                            <option value="mp3" data-i18n="set.stt.compressMp3">MP3 16kHz (เล็กลง ~85%, lossy)</option>
+                        </select>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.stt.maxplusCompressHint">
+                            MaxPlus AI รองรับไฟล์เสียงหลายรูปแบบ (ไม่เกิน 25 MB) — MP3 ประหยัด bandwidth ที่สุด
                         </p>
                     </div>
                 </div>
@@ -1129,6 +1171,28 @@
                 }
                 if (elGroqModel && cfg.groq_model) elGroqModel.value = cfg.groq_model;
 
+                // MaxPlus-specific
+                const elMpKey = document.getElementById('stt-maxplus-api-key');
+                const elMpKeyHint = document.getElementById('stt-maxplus-api-key-hint');
+                const elMpModel = document.getElementById('stt-maxplus-model');
+                if (elMpKey) elMpKey.value = '';
+                if (elMpKeyHint) {
+                    elMpKeyHint.textContent = cfg.maxplus_api_key_set
+                        ? I18n.t('set.stt.maxplusKeySet') + ` (${cfg.maxplus_api_key})`
+                        : I18n.t('set.stt.maxplusKeyNotSet');
+                }
+                if (elMpModel && cfg.maxplus_model) {
+                    // Ensure the saved model exists as an option (the catalog
+                    // is dynamic — it may contain models fetched from the API).
+                    if (!elMpModel.querySelector(`option[value="${cfg.maxplus_model}"]`)) {
+                        const opt = document.createElement('option');
+                        opt.value = cfg.maxplus_model;
+                        opt.textContent = cfg.maxplus_model;
+                        elMpModel.appendChild(opt);
+                    }
+                    elMpModel.value = cfg.maxplus_model;
+                }
+
                 // Whisper Local-specific
                 const elWlHost = document.getElementById('stt-whisper-local-host');
                 const elWlPort = document.getElementById('stt-whisper-local-port');
@@ -1146,15 +1210,23 @@
                 const elWlFmt = document.getElementById('stt-whisper-local-audio-format');
                 const elAzFmt = document.getElementById('stt-azure-audio-format');
                 const elGroqFmt = document.getElementById('stt-groq-audio-format');
+                const elMpFmt = document.getElementById('stt-maxplus-audio-format');
                 if (elSmFmt && cfg.speechmatics_audio_format) elSmFmt.value = cfg.speechmatics_audio_format;
                 if (elWlFmt && cfg.whisper_local_audio_format) elWlFmt.value = cfg.whisper_local_audio_format;
                 if (elAzFmt && cfg.azure_audio_format) elAzFmt.value = cfg.azure_audio_format;
                 if (elGroqFmt && cfg.groq_audio_format) elGroqFmt.value = cfg.groq_audio_format;
+                if (elMpFmt && cfg.maxplus_audio_format) elMpFmt.value = cfg.maxplus_audio_format;
 
                 this.toggleProviderSections();
                 if (elProvider && !elProvider._providerListener) {
                     elProvider._providerListener = true;
                     elProvider.addEventListener('change', () => this.toggleProviderSections());
+                }
+                // MaxPlus: manual refresh button for the live model catalog.
+                const mpRefresh = document.getElementById('stt-maxplus-models-refresh');
+                if (mpRefresh && !mpRefresh._mpListener) {
+                    mpRefresh._mpListener = true;
+                    mpRefresh.addEventListener('click', () => this.loadMaxplusModels(true));
                 }
             } catch (e) {
                 console.warn('Could not load STT settings:', e);
@@ -1169,10 +1241,58 @@
             const wlSec = document.getElementById('stt-whisper-local-section');
             const smSec = document.getElementById('stt-speechmatics-section');
             const groqSec = document.getElementById('stt-groq-section');
+            const mpSec = document.getElementById('stt-maxplus-section');
             if (azureSec) azureSec.style.display = (val === 'azure') ? '' : 'none';
             if (wlSec) wlSec.style.display = (val === 'whisper_local') ? '' : 'none';
             if (smSec) smSec.style.display = (val === 'speechmatics') ? '' : 'none';
             if (groqSec) groqSec.style.display = (val === 'groq') ? '' : 'none';
+            if (mpSec) mpSec.style.display = (val === 'maxplus') ? '' : 'none';
+            // Load the live model catalog the first time the MaxPlus section
+            // becomes visible (models come from GET /v1/models via the API).
+            if (val === 'maxplus') this.loadMaxplusModels();
+        },
+
+        // === MaxPlus AI live model catalog ===
+        _maxplusModelsLoaded: false,
+        async loadMaxplusModels(force = false) {
+            const elModel = document.getElementById('stt-maxplus-model');
+            const elStatus = document.getElementById('stt-maxplus-models-status');
+            if (!elModel) return;
+            if (this._maxplusModelsLoaded && !force) return;
+            this._maxplusModelsLoaded = true;
+
+            // Use a freshly-typed (non-masked) key if present so users can
+            // preview models before saving; otherwise the saved key is used.
+            const keyInput = document.getElementById('stt-maxplus-api-key');
+            let typedKey = null;
+            if (keyInput) {
+                const v = keyInput.value.trim();
+                if (v && v !== '***' && !v.includes('...')) typedKey = v;
+            }
+
+            if (elStatus) elStatus.textContent = I18n.t('set.stt.maxplusModelsLoading');
+            try {
+                const result = await API.settings.getMaxplusModels(typedKey);
+                if (result && result.success && result.models && result.models.length) {
+                    const current = elModel.value;
+                    elModel.innerHTML = '';
+                    result.models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.textContent = m;
+                        elModel.appendChild(opt);
+                    });
+                    // Restore the previously selected model if it still exists.
+                    if (current && elModel.querySelector(`option[value="${current}"]`)) {
+                        elModel.value = current;
+                    }
+                    if (elStatus) elStatus.textContent = I18n.t('set.stt.maxplusModelsLoaded', { n: result.models.length });
+                } else if (elStatus) {
+                    elStatus.textContent = I18n.t('set.stt.maxplusModelsFail') + (result && result.error ? ` (${result.error})` : '');
+                }
+            } catch (e) {
+                if (elStatus) elStatus.textContent = I18n.t('set.stt.maxplusModelsFail') + (e.detail || e.message || '');
+            }
         },
 
         // === STT Usage Stats / Charts ===
@@ -1289,6 +1409,7 @@
             const map = {
                 whisper_local: 'rgba(34,197,94,0.7)',   // green
                 groq:          'rgba(249,115,22,0.7)',  // orange
+                maxplus:       'rgba(236,72,153,0.7)',  // pink
                 speechmatics:  'rgba(14,165,233,0.7)',  // cyan/blue
                 azure:         'rgba(168,85,247,0.7)',  // purple
                 unknown:       'rgba(148,163,184,0.7)', // slate
@@ -1518,6 +1639,14 @@
             }
             if (groqModelInput && groqModelInput.value) payload.groq_model = groqModelInput.value;
 
+            // MaxPlus-specific
+            const mpKeyInput = document.getElementById('stt-maxplus-api-key');
+            const mpModelInput = document.getElementById('stt-maxplus-model');
+            if (provider === 'maxplus' && mpKeyInput && mpKeyInput.value.trim() && !isMasked(mpKeyInput.value)) {
+                payload.maxplus_api_key = mpKeyInput.value.trim();
+            }
+            if (mpModelInput && mpModelInput.value) payload.maxplus_model = mpModelInput.value;
+
             // Whisper Local-specific
             const wlHostInput = document.getElementById('stt-whisper-local-host');
             const wlPortInput = document.getElementById('stt-whisper-local-port');
@@ -1535,10 +1664,12 @@
             const wlFmtInput = document.getElementById('stt-whisper-local-audio-format');
             const azFmtInput = document.getElementById('stt-azure-audio-format');
             const groqFmtInput = document.getElementById('stt-groq-audio-format');
+            const mpFmtInput = document.getElementById('stt-maxplus-audio-format');
             if (smFmtInput) payload.speechmatics_audio_format = smFmtInput.value;
             if (wlFmtInput) payload.whisper_local_audio_format = wlFmtInput.value;
             if (azFmtInput) payload.azure_audio_format = azFmtInput.value;
             if (groqFmtInput) payload.groq_audio_format = groqFmtInput.value;
+            if (mpFmtInput) payload.maxplus_audio_format = mpFmtInput.value;
 
             try {
                 const result = await API.settings.updateSTT(payload);
@@ -1561,6 +1692,10 @@
                     keyLine = result.groq_api_key_set
                         ? `Groq API Key: ${result.groq_api_key}\nModel: ${result.groq_model || '-'}`
                         : I18n.t('set.stt.groqKeyNoGroq');
+                } else if (result.provider === 'maxplus') {
+                    keyLine = result.maxplus_api_key_set
+                        ? `MaxPlus API Key: ${result.maxplus_api_key}\nModel: ${result.maxplus_model || '-'}`
+                        : I18n.t('set.stt.maxplusKeyNoMaxplus');
                 }
                 const msg = I18n.t('set.stt.saveSuccess') + `\nProvider: ${result.provider}\nLanguage: ${result.language}\nAuto: ${result.auto_transcribe ? I18n.t('common.on') : I18n.t('common.off')}\n${keyLine}`;
                 alert(msg);

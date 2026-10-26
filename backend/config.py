@@ -53,12 +53,15 @@ class Settings(BaseSettings):
     VAD_SILENCE_TIMEOUT: int = 3
 
     # Speech-to-Text
-    STT_PROVIDER: str = "speechmatics"  # speechmatics | azure | whisper_local | groq
+    STT_PROVIDER: str = "speechmatics"  # speechmatics | azure | whisper_local | groq | maxplus
     SPEECHMATICS_API_KEY: str = ""
     SPEECHMATICS_LANGUAGE: str = "th"
     # Groq Whisper API (OpenAI-compatible audio transcription API)
     GROQ_API_KEY: str = ""
     GROQ_STT_MODEL: str = "whisper-large-v3"
+    # MaxPlus AI (OpenAI-compatible audio transcription API — api.maxplus-ai.cc)
+    MAXPLUS_API_KEY: str = ""  # key format: ccsk-<64 hex chars>
+    MAXPLUS_STT_MODEL: str = "whisper-large-v3"
     # Whisper Local (faster-whisper-server / Gradio API)
     WHISPER_LOCAL_HOST: str = ""  # Set via .env (e.g. 192.168.x.x)
     WHISPER_LOCAL_PORT: int = 8100

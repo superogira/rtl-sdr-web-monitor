@@ -610,6 +610,19 @@ const I18n = {
             'set.stt.groqKeyNoGroq': '⚠️ ยังไม่มี Groq API Key',
             'set.stt.groqModelHint': 'เลือกโมเดล Whisper ที่ Groq ให้บริการ เช่น whisper-large-v3',
             'set.stt.groqCompressHint': 'Groq รองรับ WAV/FLAC/MP3 — MP3 ประหยัด bandwidth ที่สุด',
+            /* MaxPlus AI */
+            'set.stt.maxplusHint': 'ใช้ MaxPlus AI API (api.maxplus-ai.cc) OpenAI-compatible สำหรับถอดเสียงบน Cloud',
+            'set.stt.maxplusKeyPh': 'ใส่ MaxPlus AI API Key (ccsk-...)',
+            'set.stt.maxplusKeyHint': 'ปล่อยว่างถ้าไม่ต้องการเปลี่ยนค่าที่ตั้งไว้',
+            'set.stt.maxplusKeySet': '✅ MaxPlus AI API Key ถูกตั้งไว้แล้ว',
+            'set.stt.maxplusKeyNotSet': '⚠️ ยังไม่มี MaxPlus AI API Key ใส่เพื่อบันทึก',
+            'set.stt.maxplusKeyNoMaxplus': '⚠️ ยังไม่มี MaxPlus AI API Key',
+            'set.stt.maxplusModelHint': 'เลือกโมเดลถอดเสียงที่ API key ของคุณใช้ได้ (ดึงจาก GET /v1/models)',
+            'set.stt.maxplusLoadModels': '🔄 โหลดโมเดลจาก API',
+            'set.stt.maxplusModelsLoading': 'กำลังโหลดรายชื่อโมเดล…',
+            'set.stt.maxplusModelsLoaded': (p) => `✅ พบโมเดล ${p.n} รายการจาก API`,
+            'set.stt.maxplusModelsFail': '⚠️ โหลดรายชื่อโมเดลไม่สำเร็จ — ใช้รายการเริ่มต้น',
+            'set.stt.maxplusCompressHint': 'MaxPlus AI รองรับไฟล์เสียงหลายรูปแบบ (ไม่เกิน 25 MB) — MP3 ประหยัด bandwidth ที่สุด',
 
             /* Telegram section */
             'set.tg.title': '📨 ช่องทางแจ้งเตือน',
@@ -1635,6 +1648,19 @@ const I18n = {
             'set.stt.groqKeyNoGroq': '⚠️ No Groq API Key',
             'set.stt.groqModelHint': 'Choose a Groq-hosted Whisper model, such as whisper-large-v3',
             'set.stt.groqCompressHint': 'Groq supports WAV/FLAC/MP3 — MP3 saves the most bandwidth',
+            /* MaxPlus AI */
+            'set.stt.maxplusHint': 'Use the MaxPlus AI API (api.maxplus-ai.cc), OpenAI-compatible, for cloud transcription',
+            'set.stt.maxplusKeyPh': 'Enter MaxPlus AI API Key (ccsk-...)',
+            'set.stt.maxplusKeyHint': 'Leave blank if you don\'t want to change the saved value',
+            'set.stt.maxplusKeySet': '✅ MaxPlus AI API Key is set',
+            'set.stt.maxplusKeyNotSet': '⚠️ No MaxPlus AI API Key yet — enter to save',
+            'set.stt.maxplusKeyNoMaxplus': '⚠️ No MaxPlus AI API Key',
+            'set.stt.maxplusModelHint': 'Choose a transcription model available to your API key (from GET /v1/models)',
+            'set.stt.maxplusLoadModels': '🔄 Load models from API',
+            'set.stt.maxplusModelsLoading': 'Loading model catalog…',
+            'set.stt.maxplusModelsLoaded': (p) => `✅ ${p.n} models loaded from API`,
+            'set.stt.maxplusModelsFail': '⚠️ Could not load the model catalog — using defaults',
+            'set.stt.maxplusCompressHint': 'MaxPlus AI supports common audio formats (max 25 MB) — MP3 saves the most bandwidth',
 
             /* Telegram section */
             'set.tg.title': '📨 Notification Channels',

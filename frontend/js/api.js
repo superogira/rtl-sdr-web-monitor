@@ -298,6 +298,12 @@ const API = {
         async updateSTT(data) {
             return API.request('PUT', '/api/settings/stt', data);
         },
+        // MaxPlus AI: live transcription-model catalog (GET /v1/models proxy).
+        // `key` (optional) = a not-yet-saved API key typed into the form.
+        async getMaxplusModels(key) {
+            const q = key ? `?key=${encodeURIComponent(key)}` : '';
+            return API.request('GET', `/api/settings/stt/maxplus/models${q}`);
+        },
     },
 
     // Recording Jobs (scheduled/always-on background recording)

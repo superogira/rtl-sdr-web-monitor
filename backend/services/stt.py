@@ -1,6 +1,7 @@
 """
 Speech-to-Text service.
-Supports Speechmatics API, Azure Speech, local Whisper, and Groq Whisper.
+Supports Speechmatics API, Azure Speech, local Whisper, Groq Whisper, and
+MaxPlus AI (OpenAI-compatible transcription API on api.maxplus-ai.cc).
 
 The provider/API key/language and Speechmatics options are read from the
 global AppSetting table (set via the Settings UI) and fall back to
@@ -9,6 +10,7 @@ environment variables.
 import asyncio
 import json
 import logging
+import os
 import time
 
 import httpx
@@ -39,6 +41,17 @@ _VALID_GROQ_MODELS = {
     "distil-whisper-large-v3-en",
 }
 _DEFAULT_GROQ_MODEL = "whisper-large-v3"
+
+# MaxPlus AI (api.maxplus-ai.cc) — OpenAI-compatible audio transcription API.
+# The model catalog is served live by GET /v1/models (per-API-key), so we do
+# NOT hard-validate against a static allowlist. These are just the models
+# known to exist today (verified against a real key bound to the "stt-models"
+# channel) and are used as the default fallback + UI seed options.
+MAXPLUS_API_BASE = "https://api.maxplus-ai.cc"
+_MAXPLUS_MODELS = {"grok-stt", "whisper-large-v3"}
+_DEFAULT_MAXPLUS_MODEL = "whisper-large-v3"
+# Multipart uploads larger than this are rejected upstream with 413.
+_MAXPLUS_MAX_FILE_BYTES = 25 * 1024 * 1024
 
 
 def _validate_audio_format(value: str) -> str:
@@ -74,6 +87,9 @@ async def _get_stt_config() -> dict:
     # Groq Whisper API settings
     groq_api_key = _g("stt_groq_api_key", settings.GROQ_API_KEY or "")
     groq_model = _g("stt_groq_model", settings.GROQ_STT_MODEL or _DEFAULT_GROQ_MODEL)
+    # MaxPlus AI (api.maxplus-ai.cc) settings
+    maxplus_api_key = _g("stt_maxplus_api_key", settings.MAXPLUS_API_KEY or "")
+    maxplus_model = _g("stt_maxplus_model", settings.MAXPLUS_STT_MODEL or _DEFAULT_MAXPLUS_MODEL)
     # Whisper Local (faster-whisper-server / Gradio API) settings
     whisper_local_host = _g("stt_whisper_local_host", settings.WHISPER_LOCAL_HOST or "")
     whisper_local_port = _g("stt_whisper_local_port", str(settings.WHISPER_LOCAL_PORT or 8100))
@@ -85,6 +101,7 @@ async def _get_stt_config() -> dict:
     whisper_local_audio_format = _g("stt_whisper_local_audio_format", "off")
     azure_audio_format = _g("stt_azure_audio_format", "off")
     groq_audio_format = _g("stt_groq_audio_format", "off")
+    maxplus_audio_format = _g("stt_maxplus_audio_format", "off")
     return {
         "provider": (provider or "speechmatics").lower(),
         "api_key": api_key or "",
@@ -97,6 +114,10 @@ async def _get_stt_config() -> dict:
         "azure_region": azure_region or "southeastasia",
         "groq_api_key": groq_api_key or "",
         "groq_model": groq_model if groq_model in _VALID_GROQ_MODELS else _DEFAULT_GROQ_MODEL,
+        # MaxPlus: model catalog is dynamic (GET /v1/models) — accept any
+        # non-empty value instead of clamping to a static allowlist.
+        "maxplus_api_key": maxplus_api_key or "",
+        "maxplus_model": (maxplus_model or "").strip() or _DEFAULT_MAXPLUS_MODEL,
         "whisper_local_host": whisper_local_host or "",
         "whisper_local_port": int(whisper_local_port) if str(whisper_local_port).isdigit() else 8100,
         "whisper_local_model": whisper_local_model or "Systran/faster-whisper-small",
@@ -106,6 +127,7 @@ async def _get_stt_config() -> dict:
         "whisper_local_audio_format": _validate_audio_format(whisper_local_audio_format),
         "azure_audio_format": _validate_audio_format(azure_audio_format),
         "groq_audio_format": _validate_audio_format(groq_audio_format),
+        "maxplus_audio_format": _validate_audio_format(maxplus_audio_format),
     }
 
 
@@ -474,6 +496,151 @@ async def transcribe_groq(
         cleanup_temp(upload_path, converted)
 
 
+async def list_maxplus_models(api_key: str = None) -> dict:
+    """List transcription models available to the MaxPlus AI API key.
+
+    Calls the OpenAI-compatible ``GET /v1/models`` endpoint. The response is
+    Anthropic-shaped::
+
+        {"data": [{"type": "model", "id": "grok-stt", "display_name": ...}, ...],
+         "has_more": false, "first_id": ..., "last_id": ...}
+
+    Returns:
+        dict: {"models": [str, ...], "error": str|None}
+        On failure "models" is empty and "error" carries the reason, so the
+        Settings UI can degrade gracefully to the static seed options.
+    """
+    key = (api_key or "").strip()
+    if not key:
+        return {"models": [], "error": "MaxPlus AI API key not configured"}
+    if not key.startswith("ccsk-"):
+        # Key shape is fixed ^ccsk-[a-f0-9]{64}$ per docs; upstream rejects
+        # malformed keys outright, so fail fast with a helpful message.
+        return {"models": [], "error": "Invalid MaxPlus AI API key (must start with 'ccsk-')"}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{MAXPLUS_API_BASE}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+        if resp.status_code != 200:
+            err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+            logger.error(f"MaxPlus AI models error: {err}")
+            return {"models": [], "error": err}
+
+        data = resp.json()
+        models = sorted({
+            (m.get("id") or "").strip()
+            for m in (data.get("data") or [])
+            if (m.get("id") or "").strip()
+        })
+        logger.info(f"MaxPlus AI models: {len(models)} available ({', '.join(models) or 'none'})")
+        return {"models": models, "error": None}
+    except Exception as e:
+        logger.error(f"MaxPlus AI models request failed: {e}")
+        return {"models": [], "error": str(e)}
+
+
+async def transcribe_maxplus(
+    audio_path: str,
+    language: str = None,
+    api_key: str = None,
+    model: str = None,
+) -> dict:
+    """Transcribe audio using MaxPlus AI (api.maxplus-ai.cc).
+
+    OpenAI-compatible ``POST /v1/audio/transcriptions`` multipart endpoint.
+    Fields: file (<=25 MB), model (required), language, prompt,
+    response_format, temperature, timestamp_granularities[]. Unknown fields
+    are rejected with 400 and streaming is not supported. Response:
+    ``{"text": "..."}``. Charged per request based on the channel model
+    price, independent of file length.
+
+    Returns:
+        dict: {"text": str, "error": str|None, "model": str}
+    """
+    cfg = await _get_stt_config()
+    key = api_key or cfg.get("maxplus_api_key") or settings.MAXPLUS_API_KEY
+    mp_model = (model or cfg.get("maxplus_model") or _DEFAULT_MAXPLUS_MODEL).strip()
+
+    if not key:
+        msg = "MaxPlus AI API key not configured"
+        logger.error(msg)
+        return {"text": "", "error": msg, "model": mp_model}
+    if not key.startswith("ccsk-"):
+        msg = "Invalid MaxPlus AI API key (must start with 'ccsk-')"
+        logger.error(msg)
+        return {"text": "", "error": msg, "model": mp_model}
+
+    lang = (language or cfg.get("language") or "auto").lower()
+    lang_for_api = lang if lang and lang != "auto" else None
+
+    audio_fmt = cfg.get("maxplus_audio_format", "off")
+    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
+    upload_mime = mime_type_for_format(upload_ext)
+    upload_filename = audio_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "." + upload_ext
+
+    # Fail fast on the upstream 25 MB upload cap instead of burning a
+    # request: suggest enabling the MP3 preprocessing option.
+    try:
+        size = os.path.getsize(upload_path)
+        if size > _MAXPLUS_MAX_FILE_BYTES:
+            msg = (
+                f"Audio file too large for MaxPlus AI ({size / (1024 * 1024):.1f} MB > 25 MB). "
+                "Enable the MP3 audio-format option in STT settings to compress uploads."
+            )
+            logger.error(msg)
+            return {"text": "", "error": msg, "model": mp_model}
+    except OSError:
+        pass  # stat failed — let the request itself surface the problem
+
+    form_fields = {
+        "model": mp_model,
+        "response_format": "json",
+    }
+    if lang_for_api:
+        form_fields["language"] = lang_for_api
+
+    logger.info(
+        f"MaxPlus AI request: model={mp_model}, "
+        f"language={lang_for_api or 'auto'}, audio_format={audio_fmt}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            with open(upload_path, "rb") as f:
+                resp = await client.post(
+                    f"{MAXPLUS_API_BASE}/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    data=form_fields,
+                    files={"file": (upload_filename, f, upload_mime)},
+                )
+
+        if resp.status_code != 200:
+            err = f"HTTP {resp.status_code}: {resp.text[:500]}"
+            logger.error(f"MaxPlus AI API error: {err}")
+            return {"text": "", "error": err, "model": mp_model}
+
+        try:
+            data = resp.json()
+            text = (data.get("text") or "").strip()
+        except Exception:
+            text = resp.text.strip()
+
+        logger.info(
+            f"MaxPlus AI transcript: {len(text)} chars "
+            f"(model={mp_model}, lang={lang_for_api or 'auto'})"
+        )
+        return {"text": text, "error": None, "model": mp_model}
+    except Exception as e:
+        logger.error(f"MaxPlus AI transcription failed: {e}")
+        return {"text": "", "error": str(e), "model": mp_model}
+    finally:
+        cleanup_temp(upload_path, converted)
+
+
 async def transcribe_whisper_local(
     audio_path: str,
     language: str = None,
@@ -617,6 +784,16 @@ async def transcribe(audio_path: str, language: str = None, api_key: str = None)
             language=lang,
             api_key=cfg.get("groq_api_key"),
             model=cfg.get("groq_model"),
+        )
+        text = result["text"]
+        error = result.get("error")
+        model = result.get("model")
+    elif provider == "maxplus":
+        result = await transcribe_maxplus(
+            audio_path,
+            language=lang,
+            api_key=cfg.get("maxplus_api_key"),
+            model=cfg.get("maxplus_model"),
         )
         text = result["text"]
         error = result.get("error")

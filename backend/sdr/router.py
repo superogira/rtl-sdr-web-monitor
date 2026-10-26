@@ -16,7 +16,7 @@ from backend.audio.demod import DemodMode
 from backend.database import get_db
 from backend.models.recording import Recording, RecordingStatus
 from backend.config import settings
-from backend.services.stt import transcribe, _get_stt_config
+from backend.services.stt import transcribe, _get_stt_config, list_maxplus_models
 from backend.services.app_settings import get_setting, set_setting, set_settings_batch
 from backend.models.app_setting import mask_value, is_masked_value
 from backend.models.sdr_device import SdrDevice, DEVICE_TYPES, default_config_for_type
@@ -631,7 +631,7 @@ async def stt_usage_stats(
     Returns two breakdowns (minutes, summed from audio `duration` seconds):
       - by_provider: total transcribed audio length per STT provider
       - by_whisper_model: total transcribed audio length per Whisper model name
-        (provider=whisper_local/groq), plus the wait/audio ratio (RTF)
+        (provider=whisper_local/groq/maxplus), plus the wait/audio ratio (RTF)
 
     Query params:
       - start: ISO 8601 datetime (inclusive). Defaults to 30 days ago.
@@ -687,7 +687,7 @@ async def stt_usage_stats(
     ]
     by_provider.sort(key=lambda x: x["total_minutes"], reverse=True)
 
-    # --- by whisper model (Whisper Local + Groq-hosted Whisper) ---
+    # --- by whisper model (Whisper Local + Groq/MaxPlus hosted Whisper) ---
     # Also include audio duration sum for the wait/length ratio (RTF).
     q_model = (
         select(
@@ -696,7 +696,7 @@ async def stt_usage_stats(
             func.coalesce(func.sum(Recording.duration), 0.0).label("total_audio_seconds"),
             func.count(Recording.id).label("count"),
         )
-        .where(*base_filter, Recording.stt_provider.in_(["whisper_local", "groq"]))
+        .where(*base_filter, Recording.stt_provider.in_(["whisper_local", "groq", "maxplus"]))
         .group_by(Recording.stt_model)
     )
     mrows = (await db.execute(q_model)).all()
@@ -1012,6 +1012,9 @@ class STTSettingsRequest(BaseModel):
     # Groq Whisper API options
     groq_api_key: Optional[str] = None
     groq_model: Optional[str] = None  # e.g. "whisper-large-v3"
+    # MaxPlus AI (api.maxplus-ai.cc) options
+    maxplus_api_key: Optional[str] = None  # key format: ccsk-...
+    maxplus_model: Optional[str] = None  # e.g. "whisper-large-v3" | "grok-stt"
     # Whisper Local (faster-whisper-server / Gradio API) options
     whisper_local_host: Optional[str] = None  # e.g. "192.168.1.201"
     whisper_local_port: Optional[int] = None  # e.g. 8100
@@ -1025,12 +1028,16 @@ class STTSettingsRequest(BaseModel):
     whisper_local_audio_format: Optional[str] = None
     azure_audio_format: Optional[str] = None
     groq_audio_format: Optional[str] = None
+    maxplus_audio_format: Optional[str] = None
 
 
 @settings_router.get("/stt")
 async def get_stt_settings(current_user: User = Depends(require_admin)):
     """Get global STT settings (admin only; config affects all users)."""
     cfg = await _get_stt_config()
+    # Effective MaxPlus key = DB value or env fallback (the transcription
+    # service uses the same chain), so the UI hint reflects what will be used.
+    mp_key = cfg.get("maxplus_api_key") or settings.MAXPLUS_API_KEY
     return {
         "provider": cfg["provider"],
         "api_key": mask_value(cfg["api_key"]) if cfg["api_key"] else "",
@@ -1046,6 +1053,9 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "groq_api_key": mask_value(cfg.get("groq_api_key", "")) if cfg.get("groq_api_key") else "",
         "groq_api_key_set": bool(cfg.get("groq_api_key")),
         "groq_model": cfg.get("groq_model", "whisper-large-v3"),
+        "maxplus_api_key": mask_value(mp_key) if mp_key else "",
+        "maxplus_api_key_set": bool(mp_key),
+        "maxplus_model": cfg.get("maxplus_model", "whisper-large-v3"),
         "whisper_local_host": cfg.get("whisper_local_host", ""),
         "whisper_local_port": cfg.get("whisper_local_port", 8100),
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
@@ -1055,6 +1065,7 @@ async def get_stt_settings(current_user: User = Depends(require_admin)):
         "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
         "azure_audio_format": cfg.get("azure_audio_format", "off"),
         "groq_audio_format": cfg.get("groq_audio_format", "off"),
+        "maxplus_audio_format": cfg.get("maxplus_audio_format", "off"),
     }
 
 
@@ -1076,8 +1087,8 @@ async def update_stt_settings(
     updates: dict[str, str] = {}
 
     if req.provider is not None:
-        if req.provider not in ("speechmatics", "azure", "whisper_local", "groq"):
-            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', 'whisper_local', or 'groq'")
+        if req.provider not in ("speechmatics", "azure", "whisper_local", "groq", "maxplus"):
+            raise HTTPException(status_code=400, detail="Provider must be 'speechmatics', 'azure', 'whisper_local', 'groq', or 'maxplus'")
         updates["stt_provider"] = req.provider
 
     # Only update API key if a real (non-empty, non-masked) value is provided.
@@ -1126,6 +1137,20 @@ async def update_stt_settings(
             raise HTTPException(status_code=400, detail=f"groq_model must be one of {_VALID_GROQ_MODELS}")
         updates["stt_groq_model"] = model
 
+    # MaxPlus-specific options. The model catalog is served live by the
+    # provider's GET /v1/models endpoint, so we validate shape/length only —
+    # a hard allowlist would reject legitimately new models.
+    if req.maxplus_api_key is not None and req.maxplus_api_key.strip() and not is_masked_value(req.maxplus_api_key):
+        mp_key = req.maxplus_api_key.strip()
+        if not mp_key.startswith("ccsk-"):
+            raise HTTPException(status_code=400, detail="maxplus_api_key must start with 'ccsk-'")
+        updates["stt_maxplus_api_key"] = mp_key
+    if req.maxplus_model is not None and req.maxplus_model.strip():
+        mp_model = req.maxplus_model.strip()
+        if len(mp_model) > 100:
+            raise HTTPException(status_code=400, detail="maxplus_model too long")
+        updates["stt_maxplus_model"] = mp_model
+
     # Whisper Local-specific options
     if req.whisper_local_host is not None:
         updates["stt_whisper_local_host"] = req.whisper_local_host.strip()
@@ -1168,12 +1193,20 @@ async def update_stt_settings(
         if v not in _VALID_AUDIO_FMT:
             raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
         updates["stt_groq_audio_format"] = v
+    if req.maxplus_audio_format is not None:
+        v = req.maxplus_audio_format.lower()
+        if v not in _VALID_AUDIO_FMT:
+            raise HTTPException(status_code=400, detail=f"audio_format must be one of {_VALID_AUDIO_FMT}")
+        updates["stt_maxplus_audio_format"] = v
 
     # Write all accepted values in ONE transaction (single commit).
     await set_settings_batch(updates)
 
     # Return updated config
     cfg = await _get_stt_config()
+    # Effective MaxPlus key = DB value or env fallback (same chain the
+    # transcription service uses) so the UI summary reflects reality.
+    mp_key = cfg.get("maxplus_api_key") or settings.MAXPLUS_API_KEY
     return {
         "success": True,
         "provider": cfg["provider"],
@@ -1190,6 +1223,9 @@ async def update_stt_settings(
         "groq_api_key": mask_value(cfg.get("groq_api_key", "")) if cfg.get("groq_api_key") else "",
         "groq_api_key_set": bool(cfg.get("groq_api_key")),
         "groq_model": cfg.get("groq_model", "whisper-large-v3"),
+        "maxplus_api_key": mask_value(mp_key) if mp_key else "",
+        "maxplus_api_key_set": bool(mp_key),
+        "maxplus_model": cfg.get("maxplus_model", "whisper-large-v3"),
         "whisper_local_host": cfg.get("whisper_local_host", ""),
         "whisper_local_port": cfg.get("whisper_local_port", 8100),
         "whisper_local_model": cfg.get("whisper_local_model", "Systran/faster-whisper-small"),
@@ -1199,6 +1235,39 @@ async def update_stt_settings(
         "whisper_local_audio_format": cfg.get("whisper_local_audio_format", "off"),
         "azure_audio_format": cfg.get("azure_audio_format", "off"),
         "groq_audio_format": cfg.get("groq_audio_format", "off"),
+        "maxplus_audio_format": cfg.get("maxplus_audio_format", "off"),
+    }
+
+
+@settings_router.get("/stt/maxplus/models")
+async def get_maxplus_models(
+    key: Optional[str] = None,
+    current_user: User = Depends(require_admin),
+):
+    """List MaxPlus AI transcription models available to the configured key.
+
+    Proxies the provider's OpenAI-compatible ``GET /v1/models`` endpoint so
+    the Settings UI can populate the model dropdown with the live catalog.
+    ``key`` (optional) lets the UI preview models for a not-yet-saved API
+    key; otherwise the saved DB value / env fallback is used.
+
+    Returns 200 with {"success": false, "error": ...} on upstream failure so
+    the UI can degrade gracefully to its static seed options.
+    """
+    # Prefer an explicitly provided (non-masked) key, e.g. typed into the
+    # form but not saved yet; otherwise use the stored configuration.
+    api_key = None
+    if key and key.strip() and not is_masked_value(key):
+        api_key = key.strip()
+    else:
+        cfg = await _get_stt_config()
+        api_key = cfg.get("maxplus_api_key") or settings.MAXPLUS_API_KEY
+
+    result = await list_maxplus_models(api_key)
+    return {
+        "success": result["error"] is None,
+        "models": result["models"],
+        "error": result["error"],
     }
 
 
