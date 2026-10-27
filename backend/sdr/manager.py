@@ -23,7 +23,7 @@ from backend.audio.demod import (
     DemodMode, demodulate, compute_signal_level, StreamingDemodulator,
 )
 from backend.audio.broadcaster import audio_broadcaster
-from backend.database import async_session
+from backend.database import async_session, commit_with_retry
 from backend.models.recording import Recording, RecordingStatus
 from backend.models.telegram_alert import TelegramAlert
 from backend.services.app_settings import get_setting, set_setting
@@ -1555,7 +1555,13 @@ class SDRManager:
             filepath = recordings_dir / filename
             suffix += 1
 
-        sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
+        # Write the WAV OFF the event loop. soundfile writes synchronously and
+        # a 100 s recording takes ~1 s, which used to stall every HTTP/WebSocket
+        # coroutine (audio, status, SIG meter) while recording finished.
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: sf.write(str(filepath), audio_data, self.audio_rate,
+                                   subtype="PCM_16")
+        )
 
         # Capture file size on disk for storage usage aggregation.
         try:
@@ -1591,7 +1597,7 @@ class SDRManager:
                     created_at=now,
                 )
                 session.add(rec)
-                await session.commit()
+                await commit_with_retry(session)
                 logger.info(f"💾 Recording saved to DB: {rec_id}")
         except Exception as db_err:
             logger.error(f"DB insert failed (file still saved): {db_err}")
@@ -1763,9 +1769,14 @@ class SDRManager:
             filepath = recordings_dir / filename
             suffix += 1
 
-        # Normalize float32 [-1,1] → int16 PCM and write WAV
+        # Normalize float32 [-1,1] → int16 PCM and write WAV.
+        # The write runs in a thread: soundfile is synchronous and a long
+        # recording would otherwise freeze the event loop (audio/status stalls).
         audio_f32 = np.asarray(audio_data, dtype=np.float32)
-        sf.write(str(filepath), audio_f32, int(sample_rate), subtype="PCM_16")
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: sf.write(str(filepath), audio_f32, int(sample_rate),
+                                   subtype="PCM_16")
+        )
 
         # Capture file size on disk for storage usage aggregation.
         try:
@@ -1822,7 +1833,7 @@ class SDRManager:
                     if user_obj:
                         recorder_username = user_obj.username
                         recorder_display_name = user_obj.display_name
-                await session.commit()
+                await commit_with_retry(session)
                 logger.info(f"💾 Listener recording saved to DB: {rec_id} (user={user_id})")
         except Exception as db_err:
             logger.error(f"DB insert failed for listener recording (file still saved): {db_err}")

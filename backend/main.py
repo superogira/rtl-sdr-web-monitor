@@ -100,6 +100,30 @@ async def lifespan(app: FastAPI):
         # Run autostart in background task
         asyncio.create_task(_autostart_loop())
 
+        # === Event-loop stall watchdog ===
+        # A synchronous call on the event loop (file write, big DB read, CPU
+        # work) freezes EVERYTHING: live audio stops, the per-listener SIG meter
+        # freezes and recordings stall. That is exactly what the RTL-TCP stall
+        # watchdog + "database is locked" burst looked like on 2026-10-27, but
+        # the log had no hint about WHICH task blocked. This watchdog measures
+        # the real timer drift and logs a warning when a tick is late, so a
+        # future occurrence points at the problem instead of being a mystery.
+        async def _loop_lag_watchdog():
+            import time as _time
+            interval = 0.5
+            warn_above = 1.0     # seconds of drift before warning
+            while True:
+                expected = _time.monotonic() + interval
+                await asyncio.sleep(interval)
+                drift = _time.monotonic() - expected
+                if drift > warn_above:
+                    logging.getLogger("loop_lag").warning(
+                        "⚠️ Event loop blocked for ~%.1fs — synchronous work on "
+                        "the loop starves audio/WebSocket handling", drift
+                    )
+
+        asyncio.create_task(_loop_lag_watchdog())
+
     yield
 
     # Shutdown

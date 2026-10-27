@@ -60,6 +60,20 @@ def _validate_audio_format(value: str) -> str:
     return value if value in VALID_FORMATS else "off"
 
 
+async def _prepare_for_stt_async(audio_path: str, fmt: str):
+    """Run prepare_for_stt() in a thread.
+
+    prepare_for_stt() resamples/encodes synchronously (measured: ~170 ms for a
+    10 s clip, ~1 s for 100 s). Running it inline blocked the event loop — and
+    with auto-transcribe enabled the recordings arrive back-to-back, so the
+    whole server (live audio, SIG meter, status) stuttered while a file was
+    being converted.
+    """
+    return await asyncio.get_running_loop().run_in_executor(
+        None, prepare_for_stt, audio_path, fmt
+    )
+
+
 def is_stt_ready(cfg: dict) -> bool:
     """True when the configured STT provider has the credentials it needs.
 
@@ -193,7 +207,7 @@ async def transcribe_speechmatics(
 
     # Preprocess audio (resample/transcode) to save bandwidth.
     audio_fmt = cfg.get("speechmatics_audio_format", "off")
-    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_path, converted = await _prepare_for_stt_async(audio_path, audio_fmt)
 
     url = "https://asr.api.speechmatics.com/v2/jobs/"
 
@@ -375,7 +389,7 @@ async def transcribe_azure(
             "'%s' → 'wav'", azure_fmt,
         )
         azure_fmt = "wav"
-    upload_path, converted = prepare_for_stt(audio_path, azure_fmt)
+    upload_path, converted = await _prepare_for_stt_async(audio_path, azure_fmt)
 
     try:
         import azure.cognitiveservices.speech as speechsdk
@@ -471,7 +485,7 @@ async def transcribe_groq(
     lang_for_api = lang if lang and lang != "auto" else None
 
     audio_fmt = cfg.get("groq_audio_format", "off")
-    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_path, converted = await _prepare_for_stt_async(audio_path, audio_fmt)
     upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
     upload_mime = mime_type_for_format(upload_ext)
     upload_filename = audio_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "." + upload_ext
@@ -602,7 +616,7 @@ async def transcribe_maxplus(
     lang_for_api = lang if lang and lang != "auto" else None
 
     audio_fmt = cfg.get("maxplus_audio_format", "off")
-    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_path, converted = await _prepare_for_stt_async(audio_path, audio_fmt)
     upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
     upload_mime = mime_type_for_format(upload_ext)
     upload_filename = audio_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "." + upload_ext
@@ -719,7 +733,7 @@ async def transcribe_whisper_local(
 
     # Preprocess audio (resample/transcode) to save bandwidth.
     audio_fmt = cfg.get("whisper_local_audio_format", "off")
-    upload_path, converted = prepare_for_stt(audio_path, audio_fmt)
+    upload_path, converted = await _prepare_for_stt_async(audio_path, audio_fmt)
     # Determine the actual upload format (may have fallen back to wav) for MIME.
     upload_ext = "wav" if not converted else upload_path.rsplit(".", 1)[-1].lower()
     upload_mime = mime_type_for_format(upload_ext)

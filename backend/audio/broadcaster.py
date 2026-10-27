@@ -621,24 +621,41 @@ class AudioBroadcaster:
                         break
 
                 # Separate "reuse global" packets from "own demod" packets.
-                # Reuse packets are cheap (no executor); own-demod packets are
-                # merged into a single executor call.
-                reuse_pkts = []
-                demod_pkts = []
+                # CRITICAL: the decision is taken ONCE per packet and cached.
+                # The `await` below (demod runs in an executor) lets other
+                # coroutines run — and one of them may change this listener's
+                # VFO/mode/bandwidth (e.g. the admin retunes the center
+                # frequency → reset_all_vfo() zeroes every listener's offset).
+                # Previously BOTH passes called _matches_global(), so after such
+                # a change they disagreed and `reuse_pkts[ri]` raised
+                # IndexError, which killed this listener's worker permanently
+                # (silent audio, frozen SIG meter, no recording until the user
+                # reconnected).
+                plan = []          # ("reuse", audio, gsig) | ("demod", iq_bytes)
+                demod_pkts = []    # only the packets we must demodulate
                 last_sample_rate = None
                 last_audio_rate = None
                 for p in batch:
-                    (iq_bytes, sample_rate, audio_rate,
-                     global_audio, g_mode, g_channel_bw, g_vfo,
-                     g_signal_level) = p
+                    try:
+                        (iq_bytes, sample_rate, audio_rate,
+                         global_audio, g_mode, g_channel_bw, g_vfo,
+                         g_signal_level) = p
+                    except (TypeError, ValueError) as e:
+                        # Malformed packet (should never happen) — skip it
+                        # instead of letting it kill the whole listener.
+                        logger.warning(
+                            "🔊 Listener %s bad packet skipped: %s", ln.id[:8], e
+                        )
+                        continue
                     last_sample_rate = sample_rate
                     last_audio_rate = audio_rate
                     if self._matches_global(
                         ln, sample_rate, audio_rate,
                         global_audio, g_mode, g_channel_bw, g_vfo,
                     ):
-                        reuse_pkts.append((global_audio, g_signal_level))
+                        plan.append(("reuse", global_audio, g_signal_level))
                     else:
+                        plan.append(("demod", iq_bytes))
                         demod_pkts.append(iq_bytes)
 
                 # Demod ALL own-demod packets in ONE executor call (merged).
@@ -662,88 +679,75 @@ class AudioBroadcaster:
                         # On demod failure, skip these chunks but keep flowing.
                         demod_audios = [None] * len(demod_pkts)
 
-                # Now process each original packet in order, attaching its
-                # audio (reused global, or the per-chunk slice of merged demod).
+                # Now walk the cached plan in order and process each packet.
                 di = 0  # index into demod_audios
-                ri = 0  # index into reuse_pkts
-                for p in batch:
-                    (iq_bytes, sample_rate, audio_rate,
-                     global_audio, g_mode, g_channel_bw, g_vfo,
-                     g_signal_level) = p
-                    if self._matches_global(
-                        ln, sample_rate, audio_rate,
-                        global_audio, g_mode, g_channel_bw, g_vfo,
-                    ):
-                        audio, gsig = reuse_pkts[ri]
-                        ri += 1
-                        # Update the squelch signal level from the global value.
-                        if gsig is not None:
-                            ln.last_signal_db = float(gsig)
-                            ln._sig_smoothed = (
-                                _SQUELCH_EMA * float(gsig)
-                                + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
-                            )
-                    else:
-                        audio = demod_audios[di]
-                        di += 1
+                for step in plan:
+                    try:
+                        if step[0] == "reuse":
+                            _, audio, gsig = step
+                            # Update the squelch signal level from the global value.
+                            if gsig is not None:
+                                ln.last_signal_db = float(gsig)
+                                ln._sig_smoothed = (
+                                    _SQUELCH_EMA * float(gsig)
+                                    + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
+                                )
+                        else:
+                            audio = demod_audios[di] if di < len(demod_audios) else None
+                            di += 1
 
-                    if audio is None or len(audio) == 0:
-                        continue
+                        if audio is None or len(audio) == 0:
+                            continue
 
-                    # === Per-listener AUTO-RECORD (multi-user) ===
-                    # NOTE: uses PRE-squelch audio (the real content) so a user
-                    # with live squelch OFF still records complete audio.
-                    # Also process when _ar_recording is True even if auto_record
-                    # was just disabled — so the sentinel (-1.0) triggers finish.
-                    if ln.auto_record or ln._ar_recording:
-                        self._process_auto_record(ln, audio, audio_rate)
+                        # === Per-listener AUTO-RECORD (multi-user) ===
+                        # NOTE: uses PRE-squelch audio (the real content) so a
+                        # user with live squelch OFF still records complete
+                        # audio. Also processed when _ar_recording is True even
+                        # if auto_record was just disabled — so the sentinel
+                        # (-1.0) triggers finish.
+                        if ln.auto_record or ln._ar_recording:
+                            self._process_auto_record(ln, audio, audio_rate)
 
-                    # Apply per-listener squelch + batch into an AUD2 frame.
-                    # Done BEFORE the SIG frame so the squelch gate state
-                    # (_sq_open) reflects THIS chunk — the frontend uses it to
-                    # flash the VFO row green when audio is passing.
-                    audio = self._apply_squelch(ln, audio)
+                        # Apply per-listener squelch + batch into an AUD2 frame.
+                        # Done BEFORE the SIG frame so the squelch gate state
+                        # (_sq_open) reflects THIS chunk — the frontend uses it
+                        # to flash the VFO row green when audio is passing.
+                        audio = self._apply_squelch(ln, audio)
 
-                    # === Per-listener SIG meter (live listening) ===
-                    # Throttled to ~10 FPS. Carries the smoothed signal level
-                    # AND the current squelch-gate state so the client can show
-                    # a "RX active" indicator (flashing green) on the VFO row.
-                    now = time.monotonic()
-                    if now - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
-                        ln._last_sig_send = now
-                        self._enqueue_frame(ln, ("sig", {
-                            "db": round(ln._sig_smoothed, 1),
-                            "sq_open": bool(ln._sq_open),
-                        }))
+                        # === Per-listener SIG meter (live listening) ===
+                        # Throttled to ~10 FPS. Carries the smoothed signal
+                        # level AND the current squelch-gate state so the client
+                        # can show a "RX active" indicator (flashing green) on
+                        # the VFO row when audio is passing.
+                        now_sig = time.monotonic()
+                        if now_sig - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
+                            ln._last_sig_send = now_sig
+                            self._enqueue_frame(ln, ("sig", {
+                                "db": round(ln._sig_smoothed, 1),
+                                "sq_open": bool(ln._sq_open),
+                            }))
 
-                    frame = self._batch_listener(ln, audio, audio_rate)
-                    if frame:
-                        self._enqueue_frame(ln, frame)
+                        frame = self._batch_listener(ln, audio, audio_rate)
+                        if frame:
+                            self._enqueue_frame(ln, frame)
 
                     # Manual recording hit the max-duration cap → finish it and
-                    # hand the audio to the persistence callback (the worker is
-                    # the right place: it can await the DB write via the queue).
-                    if getattr(ln, "_mr_timeout_pending", False):
-                        try:
+                        # hand the audio to the persistence callback (the worker
+                        # is the right place: it can await the DB write).
+                        if getattr(ln, "_mr_timeout_pending", False):
                             rec_data = self.check_manual_record_timeout(ln)
                             if rec_data is not None:
                                 rec_data["source"] = "manual"
                                 self._fire_auto_recording(ln, rec_data)
-                        except Exception as e:
-                            logger.warning(
-                                "🎙️ Listener %s manual timeout finish failed: %s",
-                                ln.id[:8], e,
-                            )
 
-                    # Manual recording spans a channel change (tuner retune,
-                    # VFO move, mode change) → save what was captured at the old
-                    # channel under its original frequency and keep recording
-                    # the new channel in a fresh segment. Invisible to the user.
-                    if ln.is_recording:
-                        split = self._recording_split_reason(
-                            ln, ln.record_freq_hz, ln.record_mode)
-                        if split:
-                            try:
+                        # Manual recording spans a channel change (tuner retune,
+                        # VFO move, mode change) → save what was captured at the
+                        # old channel under its original frequency and keep
+                        # recording the new channel in a fresh segment.
+                        if ln.is_recording:
+                            split = self._recording_split_reason(
+                                ln, ln.record_freq_hz, ln.record_mode)
+                            if split:
                                 seg = self.split_listener_recording(ln)
                                 if seg is not None:
                                     logger.info(
@@ -754,11 +758,16 @@ class AudioBroadcaster:
                                         self.current_vfo_freq(ln) / 1e6,
                                     )
                                     self._fire_auto_recording(ln, seg)
-                            except Exception as e:
-                                logger.warning(
-                                    "🎙️ Listener %s manual split failed: %s",
-                                    ln.id[:8], e,
-                                )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        # ONE bad packet must never kill the listener: a dead
+                        # worker means silent audio, a frozen SIG meter and no
+                        # recording at all until the client reconnects.
+                        logger.warning(
+                            "🔊 Listener %s packet skipped after error: %s",
+                            ln.id[:8], e,
+                        )
         except asyncio.CancelledError:
             # Normal teardown on unsubscribe / disconnect.
             return

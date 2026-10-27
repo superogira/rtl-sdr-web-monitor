@@ -81,6 +81,30 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
+async def commit_with_retry(session, attempts: int = 4, base_delay: float = 0.2) -> None:
+    """Commit, retrying on SQLite "database is locked".
+
+    Under I/O bursts (several recordings finishing together, auto-transcribe
+    writing errors, alert worker, retention) SQLite can exceed the 5 s
+    busy_timeout and raise OperationalError. Previously the caller logged the
+    failure and moved on, which is how a finished WAV ended up with NO row in
+    the recordings table (an "orphan" file the UI never shows). Rolling back and
+    retrying a few times with a short backoff makes that far less likely.
+    """
+    from sqlalchemy.exc import OperationalError as _OpErr
+    import asyncio as _asyncio
+
+    for attempt in range(1, attempts + 1):
+        try:
+            await session.commit()
+            return
+        except _OpErr as e:
+            if "database is locked" not in str(e).lower() or attempt == attempts:
+                raise
+            await session.rollback()
+            await _asyncio.sleep(base_delay * attempt)
+
+
 def _run_migrations(conn):
     """Run manual migrations (add columns to existing tables).
 
