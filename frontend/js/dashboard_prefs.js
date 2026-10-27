@@ -154,16 +154,14 @@
             }
 
             // --- Waterfall settings (dB range + FFT size) ---
-            // These also live in their own localStorage keys for the settings
-            // page; we mirror them here so the dashboard restores consistently.
-            if (p.waterfallDbMin !== undefined) {
-                try { localStorage.setItem('waterfall_db_min', String(p.waterfallDbMin)); } catch {}
-                if (app._dbMin !== undefined) app._dbMin = p.waterfallDbMin;
-            }
-            if (p.waterfallDbMax !== undefined) {
-                try { localStorage.setItem('waterfall_db_max', String(p.waterfallDbMax)); } catch {}
-                if (app._dbMax !== undefined) app._dbMax = p.waterfallDbMax;
-            }
+            // FFT size is mirrored here because the settings page writes the
+            // same localStorage key.
+            //
+            // NOTE: the dB min/max range is deliberately NOT restored from the
+            // prefs blob. Nothing writes `waterfallDbMin/Max` into it any more,
+            // so it could only ever restore STALE values on top of the ones the
+            // user saved in Settings → Display (or the ones ONCE computed),
+            // which made the Display tab look like it ignored every change.
             if (p.fftSize !== undefined) {
                 try { localStorage.setItem('fft_size', String(p.fftSize)); } catch {}
             }

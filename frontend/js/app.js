@@ -752,24 +752,40 @@ const App = {
 
             const endHold = () => {
                 if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-                if (!didHold) {
-                    // Quick click → ONCE
-                    // Show ONCE label, compute on next spectrum frame,
-                    // then keep showing computed values for ~0.6s before
-                    // reverting to OFF so user can read the result.
-                    this._autoMode = 'once';
-                    this._onceComputed = false;
-                    this._onceStartTs = null;
-                    this._onceFrames = [];
+                if (didHold) return;
+                if (this._autoMode === 'cont') {
+                    // A short click while continuous mode is running turns it
+                    // OFF (this is what users expect from "ปิด AUTO"). Starting
+                    // ONCE here instead used to cancel the good range the user
+                    // was looking at and revert to the old manual values.
+                    this._autoMode = 'off';
+                    this._saveAutoRange();
                     this._updateAutoBtn(wfAutoBtn);
-                    console.log('🎚️ Waterfall AUTO = ONCE (averaging ~1.5 s of frames)');
-                    if (this._onceTimer) clearTimeout(this._onceTimer);
-                    this._onceTimer = setTimeout(() => {
-                        this._autoMode = 'off';
-                        this._updateAutoBtn(wfAutoBtn);
-                        this._onceTimer = null;
-                    }, 600);
+                    console.log('🎚️ Waterfall AUTO = OFF (kept last auto range)');
+                    return;
                 }
+                // Quick click → ONCE. The range is applied once ~1.5 s of
+                // frames have been averaged; _runAutoOnce() then shows the
+                // computed values briefly and reverts to OFF. NOTE: no fixed
+                // timer here — an earlier version reverted after 600 ms, which
+                // cancelled the averaging and made the button look dead.
+                this._autoMode = 'once';
+                this._onceComputed = false;
+                this._onceStartTs = null;
+                this._onceFrames = [];
+                this._updateAutoBtn(wfAutoBtn);
+                console.log('🎚️ Waterfall AUTO = ONCE (averaging ~1.5 s of frames)');
+                // Safety net: if no spectrum arrives (not streaming / no audio
+                // device), do not leave the button stuck on ONCE.
+                if (this._onceTimer) clearTimeout(this._onceTimer);
+                this._onceTimer = setTimeout(() => {
+                    this._onceTimer = null;
+                    if (this._autoMode !== 'once') return;
+                    this._autoMode = 'off';
+                    this._updateAutoBtn(wfAutoBtn);
+                    wfAutoBtn.textContent = I18n.t('dash.wfNoSpectrum');
+                    console.warn('🎚️ ONCE aborted: no spectrum frames');
+                }, 5000);
             };
 
             // Mouse events
@@ -2759,12 +2775,25 @@ const App = {
         this._onceFrames = [];
         this._onceStartTs = null;
         this._onceComputed = true;
+        // Range computed → cancel the "no spectrum" safety net.
+        if (this._onceTimer) { clearTimeout(this._onceTimer); this._onceTimer = null; }
         if (avg !== null) {
             this._applyAutoRange(this._autoRangeFromFloor(avg));
             this._saveAutoRange();
             const btn = document.getElementById('wf-auto-btn');
             if (btn) btn.textContent = `${this._dbMin}/${this._dbMax} dB`;
             console.log(`🎚️ ONCE done (${n} frames): dB range set to [${this._dbMin}, ${this._dbMax}]`);
+            // Let the user read the computed values, then hand control back to
+            // manual mode. The range was persisted above, so the waterfall
+            // KEEPS the new (blue) scale after the switch back to 'off'.
+            if (this._onceRevertTimer) clearTimeout(this._onceRevertTimer);
+            this._onceRevertTimer = setTimeout(() => {
+                this._onceRevertTimer = null;
+                if (this._autoMode !== 'once') return;
+                this._autoMode = 'off';
+                // Restore the normal AUTO label (it was showing "min/max dB").
+                if (btn) this._updateAutoBtn(btn);
+            }, 1500);
         }
     },
 
@@ -2856,12 +2885,11 @@ const App = {
     },
 
     _renderWaterfall() {
-        // Read live settings from localStorage (only when NOT in auto mode and
-        // no per-device override is active — _applyDeviceWaterfallRange sets
-        // _dbMin/_dbMax directly from the active device config). Without the
-        // device check the per-device range was overwritten on EVERY frame, so
-        // a device's configured waterfall range never actually applied.
-        if (this._autoMode === 'off' && !this._deviceWaterfallActive) {
+        // Read live settings from localStorage when not in auto mode.
+        // The colour range is GLOBAL (Settings → Display) by design: the
+        // per-device override was removed on purpose in commit 9d86190, so
+        // there is no device flag to consider here.
+        if (this._autoMode === 'off') {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
         }
