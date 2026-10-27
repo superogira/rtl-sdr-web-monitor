@@ -16,6 +16,10 @@ const App = {
     bookmarks: [],
     recordings: [],
     isRecording: false,
+    // Index of the VFO whose server-side listener is doing the MANUAL
+    // recording (null = none). The recording belongs to that VFO's WebSocket,
+    // so stop must be sent to the same VFO even after switching VFOs.
+    _recordingVfoIdx: null,
     isConnected: false,
     isStreaming: false,
     _autoSquelchOn: false,
@@ -62,6 +66,11 @@ const App = {
         // setupWSListeners (so audio WS control messages route correctly).
         if (typeof DashboardPrefs !== 'undefined') {
             try { DashboardPrefs.apply(); } catch (e) { console.warn('Prefs apply:', e); }
+            // Reflect the restored auto-record / auto-squelch choices on the
+            // buttons immediately (they are applied to the server listeners
+            // again by _applyAudioPrefsToVfo on each WS connect).
+            try { this._updateAutoRecordBtn(); } catch (e) {}
+            try { this._onAutoSquelchAck({ enabled: this._autoSquelchOn }); } catch (e) {}
             // Mark the restore time so syncState doesn't immediately overwrite
             // the restored gain/squelch/ppm with stale backend global values.
             this._prefsRestoredAt = Date.now();
@@ -895,6 +904,12 @@ const App = {
                 if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying) {
                     // Per-listener (broadcast to all of THIS user's VFOs only).
                     LiveAudio.setSquelch(level);
+                    // Keep the auto-record gate in step with the SQL slider.
+                    // The gate is only pushed when auto-record is enabled, and
+                    // re-sending enabled=true is idempotent server-side.
+                    if (this._autoRecordOn) {
+                        LiveAudio.setAutoRecord(true, level);
+                    }
                 } else if (Auth.isAdmin && Auth.isAdmin()) {
                     // Admin (not listening) may also set the global baseline.
                     API.sdr.setSquelch(level);
@@ -1229,17 +1244,47 @@ const App = {
             return;
         }
         if (this.isRecording) {
-            // Stop → server saves the file and replies with record_ack
-            LiveAudio.stopRecording();
-            // State is finalized in _onRecordAck (below)
+            // Stop on the VFO that actually started the recording. Sending it
+            // to the currently-active VFO would leave the original server-side
+            // listener recording forever (audio lost, button already reset).
+            const idx = (this._recordingVfoIdx !== null) ? this._recordingVfoIdx : LiveAudio.activeIdx;
+            const sent = LiveAudio.stopRecordingVfo(idx);
+            if (!sent) {
+                // WS already gone → the server finished + saved the file on
+                // disconnect. Clear the local state instead of pretending.
+                this._setRecordingState(false);
+                this._showStreamStoppedToast(I18n.t('dash.recLostConnSaved'));
+            }
+            // Otherwise state is finalized in _onRecordAck (below)
         } else {
+            const idx = LiveAudio.activeIdx;
+            // The recording lives on this VFO's WS listener, so the socket must
+            // be open — otherwise the command is silently dropped and the
+            // button would claim "recording" while nothing is captured.
+            if (!LiveAudio.isVfoConnected(idx)) {
+                alert(I18n.t('dash.errAudioNotReady'));
+                return;
+            }
             // Start → server checks recording-enabled toggle for role=user
-            LiveAudio.startRecording();
+            if (!LiveAudio.startRecordingVfo(idx)) {
+                alert(I18n.t('dash.errAudioNotReady'));
+                return;
+            }
             // Optimistically show recording state; _onRecordAck will correct
             // it if the server rejects (e.g. recording disabled).
-            this.isRecording = true;
-            if (btn) btn.classList.add('recording');
-            console.log('⏺ Per-user manual recording requested');
+            this._setRecordingState(true, idx);
+            console.log('⏺ Per-user manual recording requested (VFO ' + idx + ')');
+        }
+    },
+
+    /** Update the ⏺ button + recording bookkeeping in one place. */
+    _setRecordingState(on, vfoIdx = null) {
+        this.isRecording = !!on;
+        this._recordingVfoIdx = on ? vfoIdx : null;
+        const btn = document.getElementById('btn-record');
+        if (btn) {
+            btn.classList.toggle('recording', this.isRecording);
+            this._updateRecordButton();
         }
     },
 
@@ -1248,35 +1293,45 @@ const App = {
      * Possible statuses: recording | already_recording | saved | no_audio | disabled
      */
     _onRecordAck(obj) {
-        const btn = document.getElementById('btn-record');
         switch (obj.status) {
             case 'recording':
-                this.isRecording = true;
-                if (btn) btn.classList.add('recording');
+            case 'already_recording': {
+                // Only adopt the server's state when THIS client asked for it.
+                // (A broadcast echo must not flip another user's button.)
+                const idx = (this._recordingVfoIdx !== null) ? this._recordingVfoIdx : LiveAudio.activeIdx;
+                this._setRecordingState(true, idx);
                 console.log('⏺ Server confirmed recording started');
                 break;
-            case 'already_recording':
-                this.isRecording = true;
-                if (btn) btn.classList.add('recording');
-                break;
+            }
             case 'saved':
-                this.isRecording = false;
-                if (btn) btn.classList.remove('recording');
+                this._setRecordingState(false);
                 console.log('⏹ Recording saved:', obj.recording);
                 break;
             case 'no_audio':
-                this.isRecording = false;
-                if (btn) btn.classList.remove('recording');
+                this._setRecordingState(false);
                 console.log('⏹ Recording stopped (no audio captured)');
                 break;
             case 'disabled':
                 // The admin has disabled manual recording for regular users.
-                this.isRecording = false;
-                if (btn) btn.classList.remove('recording');
+                this._setRecordingState(false);
                 alert(obj.message || I18n.t('dash.recordingDisabled'));
                 break;
             default:
                 console.warn('🎙️ Unknown record_ack status:', obj.status);
+        }
+        // Server-side notices (max-duration cap, saved-on-disconnect, …)
+        if (obj.message && obj.status !== 'disabled') {
+            this._showStreamStoppedToast(obj.message);
+        }
+    },
+
+    /** The audio WS for a VFO closed (user stopped listening, network drop,
+     *  listener cap, …). The server finished + saved any manual recording that
+     *  lived on that listener, so clear the local state. */
+    _onVfoClosed(idx, code) {
+        if (this.isRecording && this._recordingVfoIdx === idx) {
+            this._setRecordingState(false);
+            this._showStreamStoppedToast(I18n.t('dash.recLostConnSaved'));
         }
     },
 
@@ -1295,14 +1350,62 @@ const App = {
             return;
         }
         const next = !this._autoRecordOn;
-        // Use the current SQL slider value as the record-gate threshold so the
-        // user's existing squelch setting controls what gets recorded. This is
-        // separate from the live LISTENING squelch on the server.
+        if (this._sendAutoRecordState(next)) {
+            // Persist the choice (restored on refresh / re-listen).
+            if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoRecord', next);
+            // Optimistic UI; _onAutoRecordAck confirms (and reverts if refused).
+            this._autoRecordOn = next;
+            this._updateAutoRecordBtn();
+        }
+        // UI state is finalized in _onAutoRecordAck (server confirms).
+    },
+
+    /**
+     * Push the current auto-record choice (+ record gate squelch) to every live
+     * VFO. The gate uses the user's CURRENT squelch slider value so moving SQL
+     * after enabling auto-record takes effect on the next toggle.
+     * Returns true when at least one listener received the command.
+     */
+    _sendAutoRecordState(enabled) {
+        if (typeof LiveAudio === 'undefined') return false;
         const sqlInput = document.getElementById('squelch-input');
         const squelch = sqlInput ? parseFloat(sqlInput.value) : -120;
-        LiveAudio.setAutoRecord(next, squelch);
-        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoRecord', next);
-        // UI state is finalized in _onAutoRecordAck (server confirms).
+        return LiveAudio.setAutoRecord(!!enabled, isNaN(squelch) ? -120 : squelch);
+    },
+
+    /** Reflect _autoRecordOn / _autoSquelchOn on the dashboard buttons. */
+    _updateAutoRecordBtn() {
+        const btn = document.getElementById('btn-auto-record');
+        if (btn) {
+            btn.classList.toggle('auto-rec-active', this._autoRecordOn);
+            btn.title = this._autoRecordOn
+                ? I18n.t('dash.autoRecOnTitle')
+                : I18n.t('dash.autoRecOffTitle');
+            btn.textContent = '🔄';
+        }
+        this._updateRecordButton();
+    },
+
+    /**
+     * Re-apply the user's saved audio preferences to ONE (re)connected VFO
+     * listener. Called from LiveAudio's WS onopen — a fresh server-side
+     * listener always starts with auto-record and auto-squelch OFF, so without
+     * this the buttons could claim "ON" while nothing was recorded.
+     */
+    _applyAudioPrefsToVfo(idx) {
+        if (typeof LiveAudio === 'undefined') return;
+        if (this._autoRecordOn) {
+            const sqlInput = document.getElementById('squelch-input');
+            const squelch = sqlInput ? parseFloat(sqlInput.value) : -120;
+            LiveAudio._sendControlVfo(idx, {
+                type: 'auto_record',
+                enabled: true,
+                squelch: isNaN(squelch) ? -120 : squelch,
+            });
+        }
+        if (this._autoSquelchOn) {
+            LiveAudio._sendControlVfo(idx, { type: 'auto_squelch', enabled: true });
+        }
     },
 
     /**
@@ -1311,14 +1414,8 @@ const App = {
      */
     _onAutoRecordAck(obj) {
         this._autoRecordOn = !!obj.enabled;
-        // Toggle visual state on the dedicated auto-record button (🔄).
-        const btn = document.getElementById('btn-auto-record');
-        if (btn) {
-            btn.classList.toggle('auto-rec-active', this._autoRecordOn);
-            btn.title = this._autoRecordOn
-                ? I18n.t('dash.autoRecOnTitle')
-                : I18n.t('dash.autoRecOffTitle');
-        }
+        this._updateAutoRecordBtn();
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoRecord', this._autoRecordOn);
         if (obj.message) {
             // e.g. recording disabled by admin → revert and inform.
             alert(obj.message);
@@ -1573,53 +1670,16 @@ const App = {
         this._updateVfoRows();
     },
 
-    /** Bind the combined record button:
-     *  - QUICK CLICK: toggle MANUAL recording (start/stop on demand).
-     *  - LONG-PRESS (≥500ms): toggle AUTO-record (auto-capture gated by
-     *    squelch). While auto-record is ON the button shows 🔄 and a yellow
-     *    tint; when it's actively capturing it blinks red (.rec-active).
-     */
-    _bindRecordButton(btn) {
-        if (!btn) return;
-        let holdTimer = null;
-        let didHold = false;
-        const HOLD_MS = 500;
-
-        const startHold = () => {
-            didHold = false;
-            holdTimer = setTimeout(() => {
-                didHold = true;
-                this.toggleAutoRecord();
-            }, HOLD_MS);
-        };
-
-        const endHold = () => {
-            if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-        };
-
-        const onClick = (e) => {
-            if (didHold) { didHold = false; return; }
-            this.toggleRecording();
-        };
-
-        btn.addEventListener('mousedown', startHold);
-        btn.addEventListener('mouseup', endHold);
-        btn.addEventListener('mouseleave', endHold);
-        btn.addEventListener('click', onClick);
-        btn.addEventListener('touchstart', () => startHold(), { passive: true });
-        btn.addEventListener('touchend', () => endHold(), { passive: true });
-    },
-
     /** Update the combined record button icon/class from state.
      *  Called by _onRecordAck, _onAutoRecordAck, and updateAutoRecordIndicator.
-     *  Priority: rec-active (blinking) > recording (manual) > auto-rec-active.
+     *  Icon: ⏹ while a manual recording runs, ⏺ otherwise. The blink is driven
+     *  by CSS classes: .recording (manual, slow red) / .rec-active (this user's
+     *  recording is actively capturing, fast red) / .auto-rec-active (yellow).
      */
     _updateRecordButton() {
         const btn = document.getElementById('btn-record');
         if (!btn) return;
-        if (!btn.classList.contains('rec-active') && !btn.classList.contains('auto-rec-active')) {
-            btn.textContent = btn.classList.contains('recording') ? '⏹' : '⏺';
-        }
+        btn.textContent = this.isRecording ? '⏹' : '⏺';
     },
 
     /**
@@ -1712,13 +1772,16 @@ const App = {
     },
 
     async _syncRecordingState() {
+        // Per-user MANUAL recording always starts OFF on a fresh page load:
+        // `status.manual_recording` is the CENTER-channel recorder (global
+        // auto-record / admin), NOT this user's per-listener recording. The
+        // old code adopted it, so the ⏺ button showed "recording" for users
+        // who had nothing of their own running (and then mispaired stop).
+        this._setRecordingState(false);
         try {
             const status = await API.sdr.status();
-            // Only sync MANUAL recording state (auto runs independently)
-            this.isRecording = !!status.manual_recording;
-            const btn = document.getElementById('btn-record');
-            if (btn) btn.classList.toggle('recording', this.isRecording);
-            // Show auto-recording indicator if active (pass full status)
+            // Show the recording-status list + auto-record indicators from
+            // the server state (this is informational, not control state).
             this.updateAutoRecordIndicator(status);
         } catch (e) { /* ignore */ }
     },
@@ -1746,21 +1809,30 @@ const App = {
             data.active_job_captures.some(cap =>
                 Array.isArray(cap.frequencies) && cap.frequencies.some(f => f.is_recording)
             ));
-        // Blink the combined record button ONLY when THIS user's per-listener
-        // auto-record (or manual record) is actively capturing audio.
-        // Background scheduled jobs and other users' recordings do NOT
-        // trigger the blink — only the user's own button press does.
-        let myRecActive = false;
+        // Blink the ⏺ button when THIS user's MANUAL recording is capturing,
+        // and the 🔄 button when THIS user's AUTO-record is capturing.
+        // Background scheduled jobs and other users' recordings do NOT trigger
+        // the blink — only the user's own button presses do.
+        let myManualActive = false;
+        let myAutoActive = false;
         if (data && Array.isArray(data.listener_recordings)) {
             const myUserId = (typeof Auth !== 'undefined' && Auth.getUser()) ? Auth.getUser().id : null;
             const myListeners = myUserId
                 ? data.listener_recordings.filter(l => l.user_id === myUserId)
                 : [];
-            myRecActive = myListeners.some(l => l.auto_recording || l.manual_recording);
+            myManualActive = myListeners.some(l => l.manual_recording);
+            myAutoActive = myListeners.some(l => l.auto_recording);
         }
         const recBtn = document.getElementById('btn-record');
         if (recBtn) {
-            recBtn.classList.toggle('rec-active', myRecActive);
+            // Blink the ⏺ button ONLY for this user's MANUAL recording, and the
+            // 🔄 button for an active per-user AUTO capture. Previously the
+            // manual button also blinked red while auto-record was capturing,
+            // so pressing it (intending to stop) actually STARTED a manual
+            // recording instead.
+            recBtn.classList.toggle('rec-active', myManualActive);
+            const autoBtn = document.getElementById('btn-auto-record');
+            if (autoBtn) autoBtn.classList.toggle('rec-active', myAutoActive);
         }
 
         // Recording status list (below clock) — shows ALL active recordings:
@@ -2107,12 +2179,12 @@ const App = {
 
         WS.on('new_recording', (data) => {
             this.addLiveFeedItem(data);
-            // If manual recording just finished, clear the button state
-            if (data.source === 'manual') {
-                this.isRecording = false;
-                const btn = document.getElementById('btn-record');
-                if (btn) btn.classList.remove('recording');
-            }
+            // NOTE: do NOT clear the ⏺ button here. `new_recording` is broadcast
+            // to EVERY client, so a file saved by another user (or by the
+            // server's auto-record) used to reset this user's recording state —
+            // the button went idle while our own recording was still running,
+            // and the next press then started a *second* recording. The button
+            // is cleared by our own record_ack / WS-close instead.
         });
 
         // After a WS reconnect, reload the latest recordings to pick up any

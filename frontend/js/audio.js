@@ -462,6 +462,16 @@ const LiveAudio = {
     },
     startRecording() { return this.sendControl({ type: "record_start" }); },
     stopRecording() { return this.sendControl({ type: "record_stop" }); },
+    /** Per-VFO manual recording commands. The recording lives on the SERVER
+     * listener of the VFO it was started on, so a start on VFO A must be
+     * stopped on VFO A even if the user has meanwhile selected VFO B. */
+    startRecordingVfo(idx) { return this._sendControlVfo(idx, { type: "record_start" }); },
+    stopRecordingVfo(idx) { return this._sendControlVfo(idx, { type: "record_stop" }); },
+    /** True when the given VFO's WebSocket is open (commands can be sent). */
+    isVfoConnected(idx) {
+        const v = this._vfos[idx];
+        return !!(v && v.ws && v.ws.readyState === WebSocket.OPEN);
+    },
 
     // ------------------------------------------------------------------
     // WebSocket (one per VFO)
@@ -511,6 +521,13 @@ const LiveAudio = {
                     if (sqlLevel !== null && !isNaN(sqlLevel)) {
                         this._sendControlVfo(idx, { type: "squelch", level: Number(sqlLevel) });
                     }
+                    // Re-apply the user's auto-record / auto-squelch choices.
+                    // Without this a page refresh, a stop→start, or a WS
+                    // reconnect left the 🔄 / 🎚️ buttons showing "ON" while the
+                    // fresh server-side listener had both features OFF.
+                    if (typeof App !== 'undefined' && App._applyAudioPrefsToVfo) {
+                        App._applyAudioPrefsToVfo(idx);
+                    }
                 }
             };
 
@@ -524,6 +541,14 @@ const LiveAudio = {
 
             v.ws.onclose = (ev) => {
                 console.log(`🔊 [audio] VFO ${v.id} WS onclose (code=${ev.code})`);
+                // The server-side listener is gone → any manual recording that
+                // lived on it was finished (and saved) by the server. Let the
+                // app clear its per-VFO recording state so the ⏺ button does
+                // not stay red forever. Skipped for an intentional stop
+                // (v.isPlaying already false) to avoid a spurious toast.
+                if (v.isPlaying && typeof App !== 'undefined' && App._onVfoClosed) {
+                    try { App._onVfoClosed(idx, ev.code); } catch (e) {}
+                }
                 if (ev.code === 1013) {
                     this._updateStatus(I18n.t('audio.full'));
                     v.isPlaying = false;

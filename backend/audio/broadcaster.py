@@ -170,6 +170,9 @@ class Listener:
         self.is_recording = False
         self.record_buffer: list = []  # list of Float32Array demod audio chunks
         self.record_start_time = None  # time.monotonic() when recording started
+        # Set by _batch_listener once mr_max_duration is exceeded; the listener
+        # worker turns it into a save + a record_ack notice to the client.
+        self._mr_timeout_pending = False
         # Per-listener SQUELCH (mute when signal below threshold).
         # Initialized from the global squelch value passed at subscribe time.
         # -120 dBFS is the "disabled" sentinel (pass everything, including
@@ -331,6 +334,11 @@ class AudioBroadcaster:
         self.ar_vad_silence_timeout = 3        # seconds of quiet → finish
         self.ar_max_duration = 300             # hard cap per segment
         self.ar_min_duration = 2               # shorter → discard
+        # Hard cap for a per-listener MANUAL recording. Mirrors ar_max_duration
+        # (both come from the admin's "Max Duration" setting). Without it a user
+        # who forgets to press stop would grow the in-RAM record_buffer forever
+        # (~128 KB/s of float32 audio).
+        self.mr_max_duration = 300
 
     def on_listener_count_change(self, callback: Callable[[int], None]) -> None:
         """Register a callback fired when the listener count changes.
@@ -450,6 +458,22 @@ class AudioBroadcaster:
                 )
         except Exception as e:
             logger.warning("🎙️ Listener %s auto-record finish-on-unsub failed: %s",
+                           listener.id[:8], e)
+        # Same for an in-flight MANUAL recording: previously the buffered audio
+        # was simply dropped (the user closed the tab / pressed stop-listening /
+        # lost the network and everything recorded so far vanished).
+        try:
+            if listener.is_recording:
+                rec_data = self.stop_listener_recording(listener)
+                if rec_data is not None:
+                    rec_data["source"] = "manual"
+                    logger.info(
+                        "🎙️ Listener %s manual recording finished on disconnect (%.1fs)",
+                        listener.id[:8], rec_data.get("duration", 0.0),
+                    )
+                    self._fire_auto_recording(listener, rec_data)
+        except Exception as e:
+            logger.warning("🎙️ Listener %s manual finish-on-unsub failed: %s",
                            listener.id[:8], e)
         task = listener.task
         listener.task = None
@@ -658,6 +682,21 @@ class AudioBroadcaster:
                     frame = self._batch_listener(ln, audio, audio_rate)
                     if frame:
                         self._enqueue_frame(ln, frame)
+
+                    # Manual recording hit the max-duration cap → finish it and
+                    # hand the audio to the persistence callback (the worker is
+                    # the right place: it can await the DB write via the queue).
+                    if getattr(ln, "_mr_timeout_pending", False):
+                        try:
+                            rec_data = self.check_manual_record_timeout(ln)
+                            if rec_data is not None:
+                                rec_data["source"] = "manual"
+                                self._fire_auto_recording(ln, rec_data)
+                        except Exception as e:
+                            logger.warning(
+                                "🎙️ Listener %s manual timeout finish failed: %s",
+                                ln.id[:8], e,
+                            )
         except asyncio.CancelledError:
             # Normal teardown on unsubscribe / disconnect.
             return
@@ -856,6 +895,13 @@ class AudioBroadcaster:
         # Capture audio for manual recording (per-listener, full-quality PCM)
         if listener.is_recording:
             listener.record_buffer.append(merged.copy())
+            # Hard duration cap: stop (and persist) a manual recording that has
+            # run for mr_max_duration seconds so a forgotten button press can't
+            # grow the buffer without bound. The listener worker performs the
+            # actual save on its next tick (see _check_manual_record_timeout).
+            start = listener.record_start_time
+            if start is not None and (time.monotonic() - start) >= self.mr_max_duration:
+                listener._mr_timeout_pending = True
 
         # float32 [-1,1] → int16 PCM → G.711 µ-law (1 byte/sample)
         pcm = np.clip(merged, -1.0, 1.0)
@@ -872,6 +918,10 @@ class AudioBroadcaster:
           - bytes  → an AUD2 audio frame (sent as a WebSocket binary frame)
           - tuple  → ("sig", <db:float>) control text frame for the SIG meter
                      (sent as a WebSocket text frame)
+          - tuple  → ("notice", {type, status, message}) text frame telling the
+                     client about a recording that the SERVER ended (manual
+                     max-duration cap, saved-on-disconnect, …). Forwarded by the
+                     /ws/audio endpoint as a `record_ack` text frame.
 
         Drop-oldest on overflow so a slow WebSocket subscriber cannot
         accumulate seconds of stale audio (which would otherwise manifest as
@@ -912,6 +962,14 @@ class AudioBroadcaster:
         `audio` is the PRE-squelch demodulated signal (the real content), so a
         user who keeps live listening squelch OFF still records complete audio.
         """
+        # Disabled while a segment is in flight → finish it now. This MUST be
+        # checked before the squelch gate: with the gate open the code below
+        # used to keep buffering forever, so turning auto-record off during a
+        # transmission saved nothing until the max-duration cap fired.
+        if not ln.auto_record and ln._ar_recording:
+            self._finish_listener_auto_record(ln, audio_rate, reason="disabled")
+            return
+
         level = ln._sig_smoothed
         # Squelch gate: <= -120 dB means "always record while enabled".
         gate_open = ln.record_squelch_db <= -120.0 or level >= ln.record_squelch_db
@@ -996,6 +1054,36 @@ class AudioBroadcaster:
             ln.id[:8], duration, reason, ln.user_id,
         )
         self._fire_auto_recording(ln, rec_data)
+
+    def check_manual_record_timeout(self, listener: Listener):
+        """Finish + persist a manual recording that hit the max-duration cap.
+
+        Called from the listener worker right after _batch_listener set the
+        pending flag. Returns the rec_data dict (same shape as
+        stop_listener_recording) so the caller can persist it, or None when no
+        recording is in flight. A record_ack notice is queued for the client so
+        its ⏺ button flips back to idle with an explanation.
+        """
+        if not listener.is_recording:
+            listener._mr_timeout_pending = False
+            return None
+        listener._mr_timeout_pending = False
+        rec_data = self.stop_listener_recording(listener)
+        if rec_data is not None:
+            # Two notices: "saved" clears the button + the toast message text.
+            self._enqueue_frame(listener, ("notice", {
+                "type": "record_ack",
+                "status": "saved",
+                "recording": None,  # real metadata follows via new_recording
+                "message": f"⏱ หยุดบันทึกอัตโนมัติ (ครบ {self.mr_max_duration} วินาที)",
+            }))
+        else:
+            self._enqueue_frame(listener, ("notice", {
+                "type": "record_ack",
+                "status": "no_audio",
+                "message": f"⏱ หยุดบันทึก (ครบ {self.mr_max_duration} วินาที แต่ไม่มีเสียง)",
+            }))
+        return rec_data
 
     def start_auto_record(self, listener: Listener, squelch_db: Optional[float] = None) -> bool:
         """Enable per-listener auto-record (optionally setting the record squelch).

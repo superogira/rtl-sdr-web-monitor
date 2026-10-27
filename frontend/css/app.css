@@ -1313,11 +1313,16 @@ a:hover {
     50% { box-shadow: 0 0 0 6px transparent; }
 }
 
-/* Per-user AUTO-record toggle button (live listening). Uses the yellow
-   accent + a slow pulse so it's visually distinct from the red manual
-   record button and from the global auto-record indicator. */
+/* Per-user AUTO-record toggle button (live listening). Yellow pulse while
+   armed, red blink while it is actively capturing a segment. */
 .radio-btn.auto-rec-active {
     /* Overridden by #btn-auto-record.auto-rec-active with valid rgba colors */
+}
+#btn-auto-record.rec-active {
+    border-color: var(--accent-red) !important;
+    background: var(--accent-red) !important;
+    color: #fff !important;
+    animation: blink 0.5s infinite;
 }
 
 

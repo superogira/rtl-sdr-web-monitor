@@ -1122,9 +1122,9 @@ class DeviceCapture:
 
         # Auto-transcribe if enabled
         try:
-            from backend.services.stt import transcribe, _get_stt_config
+            from backend.services.stt import transcribe, _get_stt_config, is_stt_ready
             cfg = await _get_stt_config()
-            if cfg.get("auto_transcribe") and cfg.get("api_key"):
+            if cfg.get("auto_transcribe") and is_stt_ready(cfg):
                 async def _do():
                     try:
                         result = await transcribe(str(filepath))

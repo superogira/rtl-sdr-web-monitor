@@ -27,7 +27,7 @@ from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
 from backend.models.telegram_alert import TelegramAlert
 from backend.services.app_settings import get_setting, set_setting
-from backend.services.stt import transcribe, _get_stt_config
+from backend.services.stt import transcribe, _get_stt_config, is_stt_ready
 from sqlalchemy import select, func, delete
 
 logger = logging.getLogger(__name__)
@@ -1152,6 +1152,8 @@ class SDRManager:
             self._broadcaster.ar_vad_silence_timeout = int(self._vad_silence_timeout)
             self._broadcaster.ar_max_duration = int(self._max_recording_duration)
             self._broadcaster.ar_min_duration = int(self._min_recording_duration)
+            # Manual per-listener recordings obey the same max-duration cap.
+            self._broadcaster.mr_max_duration = int(self._max_recording_duration)
         except Exception as e:
             logger.warning(f"Failed to sync auto-record policy: {e}")
 
@@ -1629,7 +1631,7 @@ class SDRManager:
         # Auto-transcribe if enabled in global settings
         try:
             cfg = await _get_stt_config()
-            if cfg.get("auto_transcribe") and cfg.get("api_key"):
+            if cfg.get("auto_transcribe") and is_stt_ready(cfg):
                 logger.info(f"🔄 Auto-transcribing recording {rec_id}...")
                 rec_info_copy = dict(recording_info)
 
@@ -1838,7 +1840,7 @@ class SDRManager:
         # Auto-transcribe if enabled
         try:
             cfg = await _get_stt_config()
-            if cfg.get("auto_transcribe") and cfg.get("api_key"):
+            if cfg.get("auto_transcribe") and is_stt_ready(cfg):
                 logger.info(f"🔄 Auto-transcribing listener recording {rec_id}...")
                 rec_info_copy = dict(recording_info)
 

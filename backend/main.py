@@ -687,6 +687,14 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                                 await websocket.send_text(
                                     json.dumps({"type": "sig", **payload})
                                 )
+                            elif kind == "notice":
+                                # Server-initiated recording notice (manual
+                                # max-duration cap, saved-on-disconnect, …).
+                                # Forwarded verbatim; the client treats it as a
+                                # regular record_ack.
+                                payload = frame[1]
+                                if isinstance(payload, dict):
+                                    await websocket.send_text(json.dumps(payload))
                         except Exception:
                             pass
                     else:

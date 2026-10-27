@@ -60,6 +60,31 @@ def _validate_audio_format(value: str) -> str:
     return value if value in VALID_FORMATS else "off"
 
 
+def is_stt_ready(cfg: dict) -> bool:
+    """True when the configured STT provider has the credentials it needs.
+
+    Used by the auto-transcribe paths (manager / device_capture) so they gate
+    on the SELECTED provider's credential instead of always requiring the
+    Speechmatics key (which silently skipped auto-transcribe for Groq / Azure /
+    MaxPlus / Whisper Local users).
+    """
+    provider = (cfg.get("provider") or "").lower()
+    if provider == "speechmatics":
+        return bool(cfg.get("api_key"))
+    if provider == "azure":
+        return bool(cfg.get("azure_key"))
+    if provider == "groq":
+        return bool(cfg.get("groq_api_key") or settings.GROQ_API_KEY)
+    if provider == "maxplus":
+        return bool(cfg.get("maxplus_api_key") or settings.MAXPLUS_API_KEY)
+    if provider == "whisper_local":
+        return bool(cfg.get("whisper_local_host"))
+    if provider == "whisper":
+        # Legacy local whisper path configured via env — always considered ready.
+        return True
+    return False
+
+
 async def _get_stt_config() -> dict:
     """Load STT config from DB (global app settings), falling back to env.
 
