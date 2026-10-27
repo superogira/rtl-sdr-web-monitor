@@ -432,6 +432,24 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     # Register a NEW per-listener demodulator. Initialize its VFO/mode/bw to
     # the SDR's current defaults so a freshly-connected user hears the same
     # channel as the global/default demodulator until they tune elsewhere.
+    #
+    # connection_id: this call gets its OWN short id for the whole WebSocket
+    # (shared by all VFOs of this connection) so two clients recording the same
+    # frequency in the same second never collide on the filename.
+    import uuid as _uuid
+    ws_connection_id = _uuid.uuid4().hex[:8]
+    # Resolve the username once so the dashboard can show WHO is recording.
+    ws_username = None
+    if ws_user_id:
+        try:
+            from backend.database import async_session as _async_session
+            from backend.models.user import User as _User
+            async with _async_session() as _s:
+                _u = await _s.get(_User, ws_user_id)
+                if _u:
+                    ws_username = _u.display_name or _u.username
+        except Exception:
+            ws_username = None
     try:
         listener = await audio_broadcaster.subscribe(
             sample_rate=sdr_manager.client._sample_rate,
@@ -441,6 +459,9 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             vfo_offset_hz=sdr_manager._vfo_offset_hz,
             user_id=ws_user_id,
             user_role=ws_user_role,
+            connection_id=ws_connection_id,
+            username=ws_username,
+            center_freq_hz=sdr_manager.client._frequency or 0,
         )
         # Initialize the listener's squelch from the global squelch value so a
         # newly-connected user immediately hears the same squelch behavior as
@@ -469,6 +490,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             "mode": listener.mode.value,
             "channel_bw": listener.channel_bw,
             "device_id": ws_device_id,
+            # Per-connection id: lets the client tell its OWN listeners apart
+            # from other tabs/users (e.g. to blink the record button only for
+            # its own recordings).
+            "connection_id": ws_connection_id,
         }))
     except Exception:
         pass

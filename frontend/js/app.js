@@ -16,10 +16,13 @@ const App = {
     bookmarks: [],
     recordings: [],
     isRecording: false,
-    // Index of the VFO whose server-side listener is doing the MANUAL
-    // recording (null = none). The recording belongs to that VFO's WebSocket,
-    // so stop must be sent to the same VFO even after switching VFOs.
-    _recordingVfoIdx: null,
+    // VFO indexes (this tab) whose server-side listener is doing a MANUAL
+    // recording. A recording belongs to the VFO's own WebSocket, so stop must
+    // be sent to the same VFO even after switching VFOs.
+    _recordingVfoIdxs: [],
+    // VFO indexes (this tab) whose listener is actively capturing an AUTO
+    // segment (driven by server status; used for the per-row REC badge).
+    _autoRecordingVfoIdxs: [],
     isConnected: false,
     isStreaming: false,
     _autoSquelchOn: false,
@@ -1234,57 +1237,104 @@ const App = {
     },
 
     async toggleRecording() {
-        const btn = document.getElementById('btn-record');
-        // Manual recording is now PER-USER via the live audio WebSocket.
-        // Each user records their OWN audio (at their VFO/mode/bandwidth),
-        // independent of everyone else.
-        // Guard: require live audio to be active (the WS carries the recorder)
-        if (!this.isRecording && !LiveAudio.isPlaying) {
+        // Manual recording is PER-USER via the live audio WebSocket, and it is
+        // now PER VFO: pressing ⏺ records EVERY VFO that is currently playing
+        // (one file per VFO, on the server, at each VFO's own frequency/mode).
+        // This matches the auto-record behaviour and stops a multi-VFO listener
+        // from silently recording only the selected VFO.
+        if (!this.isRecording && !LiveAudio.anyPlaying) {
             alert(I18n.t('dash.errNeedListenRecord'));
             return;
         }
         if (this.isRecording) {
-            // Stop on the VFO that actually started the recording. Sending it
-            // to the currently-active VFO would leave the original server-side
-            // listener recording forever (audio lost, button already reset).
-            const idx = (this._recordingVfoIdx !== null) ? this._recordingVfoIdx : LiveAudio.activeIdx;
-            const sent = LiveAudio.stopRecordingVfo(idx);
-            if (!sent) {
-                // WS already gone → the server finished + saved the file on
-                // disconnect. Clear the local state instead of pretending.
-                this._setRecordingState(false);
+            // Stop every VFO this tab started, on the VFO it started on.
+            const idxList = this._recordingVfoIdxs.slice();
+            const { sent, failed } = LiveAudio.stopRecordingAll(idxList);
+            if (failed.length) {
+                // Those sockets are already gone → the server finished and
+                // saved them on disconnect.
                 this._showStreamStoppedToast(I18n.t('dash.recLostConnSaved'));
             }
-            // Otherwise state is finalized in _onRecordAck (below)
+            // Reflect the ones we actually asked to stop; the rest are cleared
+            // immediately (nothing left to wait for).
+            failed.forEach((i) => this._setVfoRecordingState(i, false));
+            if (!sent.length) this._setRecordingState(false);
+            // Otherwise the per-VFO record_acks finalize the state.
         } else {
-            const idx = LiveAudio.activeIdx;
-            // The recording lives on this VFO's WS listener, so the socket must
-            // be open — otherwise the command is silently dropped and the
-            // button would claim "recording" while nothing is captured.
-            if (!LiveAudio.isVfoConnected(idx)) {
+            const started = LiveAudio.startRecordingAllLive();
+            if (!started.length) {
                 alert(I18n.t('dash.errAudioNotReady'));
                 return;
             }
-            // Start → server checks recording-enabled toggle for role=user
-            if (!LiveAudio.startRecordingVfo(idx)) {
-                alert(I18n.t('dash.errAudioNotReady'));
-                return;
-            }
-            // Optimistically show recording state; _onRecordAck will correct
-            // it if the server rejects (e.g. recording disabled).
-            this._setRecordingState(true, idx);
-            console.log('⏺ Per-user manual recording requested (VFO ' + idx + ')');
+            started.forEach((i) => this._setVfoRecordingState(i, true));
+            this._setRecordingState(true, started);
+            console.log('⏺ Manual recording requested on VFO(s): ' + started.join(','));
         }
     },
 
-    /** Update the ⏺ button + recording bookkeeping in one place. */
-    _setRecordingState(on, vfoIdx = null) {
-        this.isRecording = !!on;
-        this._recordingVfoIdx = on ? vfoIdx : null;
+    /** Update the ⏺ button + recording bookkeeping in one place.
+     *  @param on       true while ANY of this tab's VFOs is recording
+     *  @param vfoIdxs  array of VFO indexes recording (when starting)
+     */
+    _setRecordingState(on, vfoIdxs = null) {
+        if (on) {
+            if (Array.isArray(vfoIdxs)) this._recordingVfoIdxs = vfoIdxs.slice();
+            else if (vfoIdxs !== null && vfoIdxs !== undefined) this._recordingVfoIdxs = [vfoIdxs];
+            this.isRecording = this._recordingVfoIdxs.length > 0;
+        } else {
+            this._recordingVfoIdxs = [];
+            this.isRecording = false;
+        }
         const btn = document.getElementById('btn-record');
         if (btn) {
             btn.classList.toggle('recording', this.isRecording);
             this._updateRecordButton();
+        }
+        this._renderVfoRecIndicators();
+    },
+
+    /** Track/untrack ONE VFO's recording state (server-confirmed or local). */
+    _setVfoRecordingState(idx, on) {
+        const set = new Set(this._recordingVfoIdxs);
+        if (on) set.add(idx); else set.delete(idx);
+        this._recordingVfoIdxs = Array.from(set).sort((a, b) => a - b);
+        this.isRecording = this._recordingVfoIdxs.length > 0;
+        const btn = document.getElementById('btn-record');
+        if (btn) {
+            btn.classList.toggle('recording', this.isRecording);
+            this._updateRecordButton();
+        }
+        this._renderVfoRecIndicators();
+    },
+
+    /** Show a REC badge on each VFO row that is recording (manual or auto). */
+    _renderVfoRecIndicators() {
+        for (let i = 0; i < this._MAX_VFOS; i++) {
+            const row = document.getElementById(`vfo-row-${this._vfoLower(i)}`);
+            if (!row) continue;
+            const manual = this._recordingVfoIdxs.includes(i);
+            const auto = !!this._autoRecordingVfoIdxs.includes(i);
+            let badge = row.querySelector('.vfo-rec-badge');
+            if (!manual && !auto) {
+                if (badge) badge.remove();
+                continue;
+            }
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'vfo-rec-badge';
+                badge.style.cssText = 'font-size:0.6rem;font-weight:700;margin-left:4px;'
+                    + 'padding:1px 4px;border-radius:3px;animation:blink 1s infinite;';
+                row.appendChild(badge);
+            }
+            if (manual) {
+                badge.textContent = '⏺ REC';
+                badge.style.color = '#fff';
+                badge.style.background = 'var(--accent-red)';
+            } else {
+                badge.textContent = '🔄 AUTO';
+                badge.style.color = '#000';
+                badge.style.background = 'var(--accent-yellow, #eab308)';
+            }
         }
     },
 
@@ -1292,29 +1342,32 @@ const App = {
      * Handle record_ack messages from the audio WebSocket.
      * Possible statuses: recording | already_recording | saved | no_audio | disabled
      */
-    _onRecordAck(obj) {
+    _onRecordAck(obj, idx = null) {
+        // `idx` is the VFO whose WebSocket delivered this ack. Each VFO's
+        // listener records independently, so the state is tracked per VFO.
+        const from = (idx === null || idx === undefined) ? LiveAudio.activeIdx : idx;
         switch (obj.status) {
             case 'recording':
             case 'already_recording': {
-                // Only adopt the server's state when THIS client asked for it.
-                // (A broadcast echo must not flip another user's button.)
-                const idx = (this._recordingVfoIdx !== null) ? this._recordingVfoIdx : LiveAudio.activeIdx;
-                this._setRecordingState(true, idx);
-                console.log('⏺ Server confirmed recording started');
+                this._setVfoRecordingState(from, true);
+                console.log('⏺ Server confirmed recording started (VFO ' + from + ')');
                 break;
             }
             case 'saved':
-                this._setRecordingState(false);
-                console.log('⏹ Recording saved:', obj.recording);
-                break;
             case 'no_audio':
-                this._setRecordingState(false);
-                console.log('⏹ Recording stopped (no audio captured)');
+                this._setVfoRecordingState(from, false);
+                console.log('⏹ Recording stopped (VFO ' + from + '): ' + obj.status);
                 break;
             case 'disabled':
                 // The admin has disabled manual recording for regular users.
-                this._setRecordingState(false);
-                alert(obj.message || I18n.t('dash.recordingDisabled'));
+                this._setVfoRecordingState(from, false);
+                // Several VFOs can be recording at once → show the alert only
+                // once per burst instead of one popup per VFO.
+                if (!this._recDisabledNoticeAt
+                    || (Date.now() - this._recDisabledNoticeAt) > 3000) {
+                    this._recDisabledNoticeAt = Date.now();
+                    alert(obj.message || I18n.t('dash.recordingDisabled'));
+                }
                 break;
             default:
                 console.warn('🎙️ Unknown record_ack status:', obj.status);
@@ -1327,11 +1380,25 @@ const App = {
 
     /** The audio WS for a VFO closed (user stopped listening, network drop,
      *  listener cap, …). The server finished + saved any manual recording that
-     *  lived on that listener, so clear the local state. */
+     *  lived on that listener, so clear that VFO's state (other VFOs keep
+     *  recording). */
     _onVfoClosed(idx, code) {
-        if (this.isRecording && this._recordingVfoIdx === idx) {
-            this._setRecordingState(false);
+        if (this._recordingVfoIdxs.includes(idx)) {
+            this._setVfoRecordingState(idx, false);
             this._showStreamStoppedToast(I18n.t('dash.recLostConnSaved'));
+        }
+    },
+
+    /** A VFO started/stopped playing. While a manual recording is running,
+     *  newly started VFOs join it (and stopping one leaves the others alone). */
+    _onVfoPlayStateChanged(idx, playing) {
+        if (playing && this.isRecording) {
+            // A VFO that (re)connected while recording: record it too, so the
+            // user does not silently lose the channel they just opened.
+            if (LiveAudio.isVfoConnected(idx) && LiveAudio.startRecordingVfo(idx)) {
+                this._setVfoRecordingState(idx, true);
+                console.log('⏺ New VFO joined the running manual recording: ' + idx);
+            }
         }
     },
 
@@ -1433,6 +1500,10 @@ const App = {
             this._setVfoOffset(idx, obj.vfo_offset_hz);
             this.updateFreqDisplay();
         }
+        // A VFO that just (re)connected must join a manual recording that is
+        // already running in this tab — otherwise the user would silently stop
+        // recording the channel they just opened.
+        this._onVfoPlayStateChanged(idx, true);
     },
 
     /** A VFO's per-listener SIG level update (its own channel power).
@@ -1815,13 +1886,34 @@ const App = {
         // the blink — only the user's own button presses do.
         let myManualActive = false;
         let myAutoActive = false;
+        this._autoRecordingVfoIdxs = [];
         if (data && Array.isArray(data.listener_recordings)) {
-            const myUserId = (typeof Auth !== 'undefined' && Auth.getUser()) ? Auth.getUser().id : null;
-            const myListeners = myUserId
-                ? data.listener_recordings.filter(l => l.user_id === myUserId)
-                : [];
-            myManualActive = myListeners.some(l => l.manual_recording);
-            myAutoActive = myListeners.some(l => l.auto_recording);
+            // Identify OUR listeners by the WebSocket connection id, not by
+            // user id: one account can be open in several tabs/browsers, and a
+            // recording started in another tab must not flip THIS tab's button.
+            const myConns = new Set();
+            for (let i = 0; i < this._MAX_VFOS; i++) {
+                const v = LiveAudio._vfos && LiveAudio._vfos[i];
+                if (v && v.connectionId) myConns.add(v.connectionId);
+            }
+            const mine = data.listener_recordings.filter(l => {
+                if (myConns.size) return myConns.has(l.connection_id);
+                // Fallback (older server): match by user id.
+                const myUserId = (typeof Auth !== 'undefined' && Auth.getUser()) ? Auth.getUser().id : null;
+                return myUserId ? l.user_id === myUserId : false;
+            });
+            myManualActive = mine.some(l => l.manual_recording);
+            myAutoActive = mine.some(l => l.auto_recording);
+            // Per-VFO auto badges: match each listener to the VFO index whose
+            // connection id it carries.
+            for (let i = 0; i < this._MAX_VFOS; i++) {
+                const v = LiveAudio._vfos && LiveAudio._vfos[i];
+                if (!v || !v.connectionId) continue;
+                if (mine.some(l => l.connection_id === v.connectionId && l.auto_recording)) {
+                    this._autoRecordingVfoIdxs.push(i);
+                }
+            }
+            this._renderVfoRecIndicators();
         }
         const recBtn = document.getElementById('btn-record');
         if (recBtn) {
@@ -1880,7 +1972,19 @@ const App = {
                 const freqMhz = freqFromOffset(ln.vfo_offset_hz);
                 const mode = ln.mode || 'FM';
                 const bwKhz = ((ln.channel_bw || 12000) / 1000).toFixed(0);
-                const userTag = ln.user_id ? `👤 ${ln.user_id.slice(0, 8)}` : I18n.t('dash.guest');
+                // Prefer the username; fall back to a short user id for
+                // anonymous/legacy listeners. Mark OUR OWN listeners clearly so
+                // a multi-user dashboard stays readable.
+                const who = ln.username || (ln.user_id ? ln.user_id.slice(0, 8) : I18n.t('dash.guest'));
+                const isMine = (() => {
+                    for (let i = 0; i < this._MAX_VFOS; i++) {
+                        const v = LiveAudio._vfos && LiveAudio._vfos[i];
+                        if (v && v.connectionId && v.connectionId === ln.connection_id) return true;
+                    }
+                    const me = (typeof Auth !== 'undefined' && Auth.getUser()) ? Auth.getUser() : null;
+                    return !!(me && ln.user_id === me.id);
+                })();
+                const userTag = isMine ? `👤 ${who} (${I18n.t('dash.youTag')})` : `👤 ${who}`;
                 if (ln.manual_recording) {
                     items.push(row('🔴', I18n.t('dash.recManualUser', userTag, freqMhz, mode, bwKhz)));
                 }

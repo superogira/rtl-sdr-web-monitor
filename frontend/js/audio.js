@@ -153,6 +153,7 @@ const LiveAudio = {
             reconnectTimer: null,
             heartbeatTimer: null,
             sigDb: -120,
+            connectionId: null,   // server connection id (from the ready frame)
         };
     },
 
@@ -467,10 +468,43 @@ const LiveAudio = {
      * stopped on VFO A even if the user has meanwhile selected VFO B. */
     startRecordingVfo(idx) { return this._sendControlVfo(idx, { type: "record_start" }); },
     stopRecordingVfo(idx) { return this._sendControlVfo(idx, { type: "record_stop" }); },
+    /** Start manual recording on EVERY VFO that is currently playing.
+     *  Returns the indexes that accepted the command. */
+    startRecordingAllLive() {
+        const started = [];
+        for (let i = 0; i < this._vfos.length; i++) {
+            const v = this._vfos[i];
+            if (v && v.enabled && v.isPlaying && this.isVfoConnected(i)) {
+                if (this.startRecordingVfo(i)) started.push(i);
+            }
+        }
+        return started;
+    },
+    /** Stop manual recording on every VFO this tab started it on.
+     *  Returns {sent:[...], failed:[...]} so the caller can decide what to do
+     *  about VFOs whose socket already closed (server saved them already). */
+    stopRecordingAll(idxList) {
+        const sent = [];
+        const failed = [];
+        (idxList || []).forEach((i) => {
+            if (this.stopRecordingVfo(i)) sent.push(i);
+            else failed.push(i);
+        });
+        return { sent, failed };
+    },
     /** True when the given VFO's WebSocket is open (commands can be sent). */
     isVfoConnected(idx) {
         const v = this._vfos[idx];
         return !!(v && v.ws && v.ws.readyState === WebSocket.OPEN);
+    },
+    /** Indexes of VFOs that are enabled and currently playing. */
+    liveVfoIndexes() {
+        const out = [];
+        for (let i = 0; i < this._vfos.length; i++) {
+            const v = this._vfos[i];
+            if (v && v.enabled && v.isPlaying) out.push(i);
+        }
+        return out;
     },
 
     // ------------------------------------------------------------------
@@ -601,6 +635,11 @@ const LiveAudio = {
             try {
                 const obj = JSON.parse(txt);
                 if (obj.type === "ready") {
+                    // Remember which connection this VFO belongs to. The
+                    // dashboard uses it to tell THIS tab's listeners apart from
+                    // other tabs/users (record-button blink + "you" labels).
+                    const v = this._vfos[idx];
+                    if (v && obj.connection_id) v.connectionId = obj.connection_id;
                     if (typeof App !== 'undefined' && App._onVfoReady) App._onVfoReady(idx, obj);
                 } else if (obj.type === "sig") {
                     const v = this._vfos[idx];
@@ -615,7 +654,7 @@ const LiveAudio = {
                 } else if (obj.type === "vfo_ack") {
                     if (typeof App !== 'undefined' && App._onVfoAck) App._onVfoAck(idx, obj);
                 } else if (obj.type === "record_ack") {
-                    if (typeof App !== 'undefined' && App._onRecordAck) App._onRecordAck(obj);
+                    if (typeof App !== 'undefined' && App._onRecordAck) App._onRecordAck(obj, idx);
                 } else if (obj.type === "auto_record_ack") {
                     if (typeof App !== 'undefined' && App._onAutoRecordAck) App._onAutoRecordAck(obj);
                 } else if (obj.type === "auto_squelch_ack") {

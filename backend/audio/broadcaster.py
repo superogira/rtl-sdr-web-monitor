@@ -143,8 +143,17 @@ class Listener:
     def __init__(self, sample_rate: int, audio_rate: int,
                  mode, channel_bw: int,
                  vfo_offset_hz: float = 0.0,
-                 user_id=None, user_role=None):
+                 user_id=None, user_role=None,
+                 connection_id: Optional[str] = None,
+                 username: Optional[str] = None):
         self.id = str(uuid.uuid4())
+        # Short id of the WebSocket connection that owns this listener. Used in
+        # recording filenames so two listeners recording the SAME frequency in
+        # the SAME second (two users, or one user on two VFOs) cannot collide.
+        self.connection_id = connection_id or self.id[:8]
+        # Display name of the owner, surfaced in status so the dashboard can
+        # show who is recording instead of a raw UUID prefix.
+        self.username = username
         # Output queue: AUD1 frames ready to send to the WebSocket client.
         self.queue: "asyncio.Queue" = asyncio.Queue(maxsize=200)
         # Input queue: raw IQ packets waiting to be demodulated by this
@@ -173,6 +182,14 @@ class Listener:
         # Set by _batch_listener once mr_max_duration is exceeded; the listener
         # worker turns it into a save + a record_ack notice to the client.
         self._mr_timeout_pending = False
+        # Capture context frozen at recording START. The recording's frequency
+        # label (and split boundaries) use these, not the live values, so a
+        # mid-recording retune/mode change cannot relabel audio that was
+        # already captured at another frequency.
+        self.record_freq_hz: Optional[int] = None
+        self.record_mode: Optional[str] = None
+        self._ar_freq_hz: Optional[int] = None
+        self._ar_mode: Optional[str] = None
         # Per-listener SQUELCH (mute when signal below threshold).
         # Initialized from the global squelch value passed at subscribe time.
         # -120 dBFS is the "disabled" sentinel (pass everything, including
@@ -304,6 +321,11 @@ class AudioBroadcaster:
         # id(listener) → Listener. Keyed by id(listener) so the endpoint can
         # store the returned Listener object and unsubscribe with it directly.
         self._listeners: Dict[int, Listener] = {}
+        # Center frequency of the tuner. Set by SDRManager on every retune so a
+        # listener can resolve its absolute VFO frequency (center + offset) —
+        # needed to LABEL and SPLIT recordings correctly when the tuner moves
+        # mid-recording.
+        self.center_freq_hz: int = 0
         self._lock = asyncio.Lock()
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=_POOL_CEILING, thread_name_prefix="demod"
@@ -412,7 +434,10 @@ class AudioBroadcaster:
     async def subscribe(self, sample_rate: int, audio_rate: int,
                         mode, channel_bw: int,
                         vfo_offset_hz: float = 0.0,
-                        user_id=None, user_role=None) -> Listener:
+                        user_id=None, user_role=None,
+                        connection_id: Optional[str] = None,
+                        username: Optional[str] = None,
+                        center_freq_hz: int = 0) -> Listener:
         """Register a new listener and return it.
 
         The caller (/ws/audio endpoint) owns the returned Listener and drains
@@ -430,7 +455,13 @@ class AudioBroadcaster:
         listener = Listener(
             sample_rate, audio_rate, mode, channel_bw, vfo_offset_hz,
             user_id=user_id, user_role=user_role,
+            connection_id=connection_id,
+            username=username,
         )
+        # Seed the tuner center so recording labels/splits are correct from the
+        # very first chunk (SDRManager keeps it updated afterwards).
+        if center_freq_hz:
+            self.center_freq_hz = int(center_freq_hz)
         async with self._lock:
             self._listeners[id(listener)] = listener
             # Start the per-listener demod worker (non-blocking pipeline).
@@ -494,6 +525,12 @@ class AudioBroadcaster:
         Called by SDRManager when the hardware center frequency changes,
         because offsets are relative to the (old) center and would now point
         elsewhere on the band.
+
+        NOTE: recordings are NOT silently shifted. The listener's frozen
+        recording context (record_freq_hz / _ar_freq_hz) keeps the OLD
+        frequency, and the next audio chunk triggers a split, so the audio
+        captured before the retune is filed under the frequency it was
+        actually recorded at.
         """
         for ln in self._listeners.values():
             ln.set_vfo_offset(0.0)
@@ -697,6 +734,31 @@ class AudioBroadcaster:
                                 "🎙️ Listener %s manual timeout finish failed: %s",
                                 ln.id[:8], e,
                             )
+
+                    # Manual recording spans a channel change (tuner retune,
+                    # VFO move, mode change) → save what was captured at the old
+                    # channel under its original frequency and keep recording
+                    # the new channel in a fresh segment. Invisible to the user.
+                    if ln.is_recording:
+                        split = self._recording_split_reason(
+                            ln, ln.record_freq_hz, ln.record_mode)
+                        if split:
+                            try:
+                                seg = self.split_listener_recording(ln)
+                                if seg is not None:
+                                    logger.info(
+                                        "🎙️ Listener %s manual recording split (%s): "
+                                        "saved %.1fs @ %.4f MHz, continuing @ %.4f MHz",
+                                        ln.id[:8], split, seg.get("duration", 0.0),
+                                        (seg.get("freq_hz") or 0) / 1e6,
+                                        self.current_vfo_freq(ln) / 1e6,
+                                    )
+                                    self._fire_auto_recording(ln, seg)
+                            except Exception as e:
+                                logger.warning(
+                                    "🎙️ Listener %s manual split failed: %s",
+                                    ln.id[:8], e,
+                                )
         except asyncio.CancelledError:
             # Normal teardown on unsubscribe / disconnect.
             return
@@ -970,6 +1032,15 @@ class AudioBroadcaster:
             self._finish_listener_auto_record(ln, audio_rate, reason="disabled")
             return
 
+        # The channel changed mid-segment (tuner retune, VFO move, mode change)
+        # → close the old segment under its ORIGINAL frequency and let the gate
+        # logic below start a fresh segment for the new one. Without this the
+        # file would contain audio from two different frequencies.
+        if ln._ar_recording:
+            split = self._recording_split_reason(ln, ln._ar_freq_hz, ln._ar_mode)
+            if split:
+                self._finish_listener_auto_record(ln, audio_rate, reason=split)
+
         level = ln._sig_smoothed
         # Squelch gate: <= -120 dB means "always record while enabled".
         gate_open = ln.record_squelch_db <= -120.0 or level >= ln.record_squelch_db
@@ -982,9 +1053,12 @@ class AudioBroadcaster:
                 ln._ar_buffer = []
                 ln._ar_start_time = now
                 ln._ar_silence_start = None
+                # Freeze the channel context for this segment.
+                ln._ar_freq_hz = self.current_vfo_freq(ln)
+                ln._ar_mode = ln.mode.value
                 logger.info(
-                    "🎙️ Listener %s auto-record started (signal %.1f dB, user=%s)",
-                    ln.id[:8], level, ln.user_id,
+                    "🎙️ Listener %s auto-record started (signal %.1f dB, user=%s, %.4f MHz)",
+                    ln.id[:8], level, ln.user_id, (ln._ar_freq_hz or 0) / 1e6,
                 )
             else:
                 # Already recording and still above gate → reset silence timer.
@@ -1026,6 +1100,8 @@ class AudioBroadcaster:
         ln._ar_buffer = []
         ln._ar_start_time = None
         ln._ar_silence_start = None
+        ln._ar_freq_hz = None
+        ln._ar_mode = None
         if not buf:
             return
 
@@ -1042,10 +1118,13 @@ class AudioBroadcaster:
             "audio_data": audio_data,
             "duration": duration,
             "sample_rate": audio_rate,
-            "mode": ln.mode.value,
+            "mode": ln._ar_mode or ln.mode.value,
             "vfo_offset_hz": ln.vfo_offset_hz,
+            "freq_hz": ln._ar_freq_hz,
             "user_id": ln.user_id,
             "user_role": ln.user_role,
+            "username": ln.username,
+            "connection_id": ln.connection_id,
             "channel_bw": int(ln.channel_bw),
             "source": "auto",
         }
@@ -1054,6 +1133,27 @@ class AudioBroadcaster:
             ln.id[:8], duration, reason, ln.user_id,
         )
         self._fire_auto_recording(ln, rec_data)
+
+    def current_vfo_freq(self, ln: "Listener") -> int:
+        """Absolute frequency this listener is currently decoding (Hz)."""
+        return int(round((self.center_freq_hz or 0) + ln.vfo_offset_hz))
+
+    def _recording_split_reason(self, ln: "Listener", frozen_freq, frozen_mode):
+        """Return a reason string when the channel changed since `frozen_*`.
+
+        Recording audio must never mix two frequencies (or two demod modes) in
+        one file: after a tuner retune / VFO move / mode change the audio is
+        recorded in a NEW file, labelled with the frequency it was captured at.
+        Returns None when nothing changed.
+        """
+        if frozen_freq is None:
+            return None
+        cur = self.current_vfo_freq(ln)
+        if int(cur) != int(frozen_freq):
+            return "retune"
+        if frozen_mode and ln.mode.value != frozen_mode:
+            return "mode"
+        return None
 
     def check_manual_record_timeout(self, listener: Listener):
         """Finish + persist a manual recording that hit the max-duration cap.
@@ -1121,7 +1221,9 @@ class AudioBroadcaster:
         for ln in self._listeners.values():
             entry = {
                 "listener_id": ln.id[:8],
+                "connection_id": ln.connection_id,
                 "user_id": ln.user_id,
+                "username": ln.username,
                 "user_role": ln.user_role,
                 "mode": ln.mode.value,
                 "vfo_offset_hz": round(ln.vfo_offset_hz, 1),
@@ -1156,6 +1258,10 @@ class AudioBroadcaster:
     def start_listener_recording(self, listener: Listener) -> bool:
         """Start manual recording for THIS listener only.
 
+        Freezes the channel context (frequency + mode) at start so the saved
+        file is labelled with the frequency the audio was actually captured at,
+        even if the user retunes while recording.
+
         Returns True if started, False if already recording.
         """
         if listener.is_recording:
@@ -1163,9 +1269,12 @@ class AudioBroadcaster:
         listener.is_recording = True
         listener.record_buffer = []
         listener.record_start_time = time.monotonic()
+        listener.record_freq_hz = self.current_vfo_freq(listener)
+        listener.record_mode = listener.mode.value
         logger.info(
-            "🎙️ Listener %s manual recording started (user=%s)",
+            "🎙️ Listener %s manual recording started (user=%s, %.4f MHz, mode=%s)",
             listener.id[:8], listener.user_id,
+            (listener.record_freq_hz or 0) / 1e6, listener.record_mode,
         )
         return True
 
@@ -1179,6 +1288,8 @@ class AudioBroadcaster:
         listener.is_recording = False
         if not listener.record_buffer:
             listener.record_start_time = None
+            listener.record_freq_hz = None
+            listener.record_mode = None
             return None
 
         audio_data = np.concatenate(listener.record_buffer)
@@ -1188,21 +1299,43 @@ class AudioBroadcaster:
             "audio_data": audio_data,
             "duration": duration,
             "sample_rate": listener.audio_rate,
-            "mode": listener.mode.value,
+            "mode": listener.record_mode or listener.mode.value,
             "vfo_offset_hz": listener.vfo_offset_hz,
+            "freq_hz": listener.record_freq_hz,
             "user_id": listener.user_id,
             "user_role": listener.user_role,
+            "username": listener.username,
+            "connection_id": listener.connection_id,
             "channel_bw": int(listener.channel_bw),
         }
 
         # Reset state
         listener.record_buffer = []
         listener.record_start_time = None
+        listener.record_freq_hz = None
+        listener.record_mode = None
         logger.info(
             "🎙️ Listener %s manual recording stopped (%.1fs, user=%s)",
             listener.id[:8], duration, listener.user_id,
         )
         return result
+
+    def split_listener_recording(self, listener: Listener) -> Optional[dict]:
+        """Finish the CURRENT manual segment because the channel changed, and
+        immediately continue recording in a new segment.
+
+        Returns the finished segment's data (or None when nothing to save) so
+        the caller can persist it; the listener keeps recording without the
+        user noticing anything.
+        """
+        if not listener.is_recording:
+            return None
+        rec_data = self.stop_listener_recording(listener)
+        if rec_data is not None:
+            rec_data["source"] = "manual"
+        # Continue recording the new channel in a fresh segment.
+        self.start_listener_recording(listener)
+        return rec_data
 
 
 # Global broadcaster instance

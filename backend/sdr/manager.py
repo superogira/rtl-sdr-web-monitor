@@ -799,6 +799,13 @@ class SDRManager:
         # Defensive clamp: if the existing offset still fits in the new
         # passband, keep it; otherwise reset to 0.
         self._clamp_vfo_offset()
+        # Keep the broadcaster's notion of the tuner center current so it can
+        # label/split recordings correctly (a retune during a recording must not
+        # relabel audio captured at the previous frequency).
+        try:
+            self._broadcaster.center_freq_hz = int(self.client._frequency or 0)
+        except Exception:
+            pass
         # Reset EVERY listener's per-user VFO offset, since their offsets
         # were relative to the old center frequency too.
         self._broadcaster.reset_all_vfo()
@@ -1538,8 +1545,15 @@ class SDRManager:
         # so the log reflects what the user was actually listening to, not the
         # SDR hardware center frequency.
         freq_hz = self.vfo_frequency
-        filename = f"{timestamp}_{freq_hz}_{self.mode.value}.wav"
+        # Same collision guard as the per-listener path: two records written in
+        # the same second at the same frequency must not share a filename.
+        filename = f"{timestamp}_{freq_hz}_{self.mode.value}_center.wav"
         filepath = recordings_dir / filename
+        suffix = 1
+        while filepath.exists():
+            filename = f"{timestamp}_{freq_hz}_{self.mode.value}_center_{suffix}.wav"
+            filepath = recordings_dir / filename
+            suffix += 1
 
         sf.write(str(filepath), audio_data, self.audio_rate, subtype="PCM_16")
 
@@ -1724,12 +1738,30 @@ class SDRManager:
         recordings_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        # Compute this listener's actual VFO frequency
-        center_freq = self.client._frequency if self.client._frequency else settings.RTL_TCP_CENTER_FREQ
-        offset_hz = rec_data.get("vfo_offset_hz", 0.0)
-        freq_hz = int(center_freq + offset_hz)
-        filename = f"{timestamp}_{freq_hz}_{mode.value}.wav"
+        # Frequency label: prefer the context FROZEN when the segment started
+        # (so a mid-recording retune cannot relabel audio captured earlier).
+        # Falls back to the live VFO frequency for legacy callers.
+        frozen_freq = rec_data.get("freq_hz")
+        if frozen_freq:
+            freq_hz = int(frozen_freq)
+        else:
+            center_freq = self.client._frequency if self.client._frequency else settings.RTL_TCP_CENTER_FREQ
+            offset_hz = rec_data.get("vfo_offset_hz", 0.0)
+            freq_hz = int(center_freq + offset_hz)
+        # Filename: append the recording CONNECTION id. Without it, two clients
+        # recording the same frequency in the same second (two users, or one
+        # user with several VFOs on the same channel) produced the same name and
+        # the second write overwrote the first file while BOTH rows kept pointing
+        # at it — deleting one recording then destroyed the other one's audio.
+        conn_id = (rec_data.get("connection_id") or "x")[:8]
+        filename = f"{timestamp}_{freq_hz}_{mode.value}_{conn_id}.wav"
         filepath = recordings_dir / filename
+        # Belt-and-braces: never reuse an existing path.
+        suffix = 1
+        while filepath.exists():
+            filename = f"{timestamp}_{freq_hz}_{mode.value}_{conn_id}_{suffix}.wav"
+            filepath = recordings_dir / filename
+            suffix += 1
 
         # Normalize float32 [-1,1] → int16 PCM and write WAV
         audio_f32 = np.asarray(audio_data, dtype=np.float32)
@@ -1817,6 +1849,10 @@ class SDRManager:
             "recorded_by_user_id": user_id,
             "recorded_by_username": recorder_username,
             "recorded_by_display_name": recorder_display_name,
+            # Username captured at record time (works even if the DB lookup for
+            # the payload above failed).
+            "recorded_by_name": rec_data.get("username"),
+            "connection_id": rec_data.get("connection_id"),
         }
 
         self._last_recording_path = str(filepath)

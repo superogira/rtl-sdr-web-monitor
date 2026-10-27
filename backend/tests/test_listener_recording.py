@@ -31,7 +31,7 @@ def _audio(seconds: float, rate: int = 12000) -> np.ndarray:
 
 
 def _make_listener(**kwargs) -> Listener:
-    return Listener(
+    params = dict(
         sample_rate=2048000,
         audio_rate=12000,
         mode=DemodMode.FM,
@@ -39,8 +39,11 @@ def _make_listener(**kwargs) -> Listener:
         vfo_offset_hz=0.0,
         user_id="user-1",
         user_role="admin",
-        **kwargs,
+        connection_id="conn1",
+        username="tester",
     )
+    params.update(kwargs)
+    return Listener(**params)
 
 
 class ManualRecordingTests(unittest.TestCase):
@@ -209,6 +212,95 @@ class STTReadyTests(unittest.TestCase):
         self.assertFalse(is_stt_ready(cfg))
         cfg["groq_api_key"] = "gsk_x"
         self.assertTrue(is_stt_ready(cfg))
+
+
+class MultiVfoMultiUserTests(unittest.TestCase):
+    """Two listeners (two connections) must record independently and never
+    collide on a filename, even on the same frequency in the same second."""
+
+    def setUp(self):
+        self.b = AudioBroadcaster()
+        self.b.center_freq_hz = 145_000_000
+        self.b.ar_min_duration = 1
+
+    def test_manual_recording_labels_frozen_frequency(self):
+        """A retune during recording must not relabel audio captured earlier."""
+        ln = _make_listener(connection_id="connA")
+        self.b.start_listener_recording(ln)
+        self.assertEqual(ln.record_freq_hz, 145_000_000)
+        ln.record_buffer.append(_audio(2.0))
+        # Tuner moves mid-recording (VFO offset reset by reset_all_vfo).
+        self.b.center_freq_hz = 146_000_000
+        self.b.reset_all_vfo()
+        rec = self.b.stop_listener_recording(ln)
+        # The saved segment keeps the frequency it was captured at.
+        self.assertEqual(rec["freq_hz"], 145_000_000)
+        self.assertEqual(rec["connection_id"], "connA")
+        self.assertEqual(rec["username"], "tester")
+
+    def test_manual_split_on_retune_keeps_recording(self):
+        ln = _make_listener(connection_id="connA")
+        self.b.start_listener_recording(ln)
+        ln.record_buffer.append(_audio(2.0))
+        # Retune while recording.
+        self.b.center_freq_hz = 147_000_000
+        self.b.reset_all_vfo()
+        # The worker detects the change and splits.
+        self.assertEqual(
+            self.b._recording_split_reason(ln, ln.record_freq_hz, ln.record_mode),
+            "retune",
+        )
+        seg = self.b.split_listener_recording(ln)
+        self.assertEqual(seg["freq_hz"], 145_000_000)   # old segment
+        self.assertEqual(seg["source"], "manual")
+        # ... and recording continues at the new frequency.
+        self.assertTrue(ln.is_recording)
+        self.assertEqual(ln.record_freq_hz, 147_000_000)
+
+    def test_split_on_mode_change(self):
+        ln = _make_listener(connection_id="connA")
+        self.b.start_listener_recording(ln)
+        ln.set_mode(DemodMode.AM)
+        self.assertEqual(
+            self.b._recording_split_reason(ln, ln.record_freq_hz, ln.record_mode),
+            "mode",
+        )
+
+    def test_no_split_when_channel_unchanged(self):
+        ln = _make_listener(connection_id="connA")
+        self.b.start_listener_recording(ln)
+        self.assertIsNone(
+            self.b._recording_split_reason(ln, ln.record_freq_hz, ln.record_mode)
+        )
+
+    def test_two_listeners_same_freq_get_distinct_connection_ids(self):
+        """Two users on the SAME frequency must be distinguishable, which is
+        what keeps their filenames (and DB rows) apart."""
+        a = _make_listener(connection_id="connA", user_id="userA")
+        b = _make_listener(connection_id="connB", user_id="userB")
+        self.b.start_listener_recording(a)
+        self.b.start_listener_recording(b)
+        a.record_buffer.append(_audio(1.5))
+        b.record_buffer.append(_audio(1.5))
+        ra = self.b.stop_listener_recording(a)
+        rb = self.b.stop_listener_recording(b)
+        self.assertEqual(ra["freq_hz"], rb["freq_hz"])
+        self.assertNotEqual(ra["connection_id"], rb["connection_id"])
+        self.assertNotEqual(ra["user_id"], rb["user_id"])
+
+    def test_auto_segments_are_independent_per_listener(self):
+        a = _make_listener(connection_id="connA", user_id="userA")
+        b = _make_listener(connection_id="connB", user_id="userB")
+        self.b.start_auto_record(a, -120.0)
+        self.b.start_auto_record(b, -50.0)
+        a._sig_smoothed = -30.0
+        b._sig_smoothed = -100.0   # below B's gate
+        self.b._process_auto_record(a, _audio(2.0), 12000)
+        self.b._process_auto_record(b, _audio(2.0), 12000)
+        self.assertTrue(a._ar_recording)
+        self.assertFalse(b._ar_recording, "each listener keeps its own gate")
+        # A's segment carries its own context.
+        self.assertEqual(a._ar_freq_hz, 145_000_000)
 
 
 if __name__ == "__main__":
