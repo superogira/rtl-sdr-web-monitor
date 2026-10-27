@@ -660,6 +660,13 @@
                         <input type="number" id="wf-db-max" value="-55" min="-100" max="0">
                     </div>
                 </div>
+                <div class="form-group" style="margin-top:12px;">
+                    <label data-i18n="set.disp.autoSpanLabel">ความกว้างช่วงสีของ AUTO (dB)</label>
+                    <input type="number" id="wf-auto-span" value="50" min="20" max="100" step="5">
+                    <p style="font-size:0.74rem; color:var(--text-secondary); margin-top:4px;" data-i18n="set.disp.autoSpanHint">
+                        ใช้กับปุ่ม 🎚️ AUTO: ระบบหาค่า noise floor แล้วตั้งค่าต่ำสุดให้ต่ำกว่านั้น 10 dB และค่าสูงสุด = ค่าต่ำสุด + ค่านี้
+                    </p>
+                </div>
             </div>
             <div class="settings-section">
                 <h2 data-i18n="set.disp.presetTitle">📋 พรีเซ็ต</h2>
@@ -1723,11 +1730,15 @@
             const elSpeed = document.getElementById('wf-speed');
             const elDbMin = document.getElementById('wf-db-min');
             const elDbMax = document.getElementById('wf-db-max');
+            const elAutoSpan = document.getElementById('wf-auto-span');
             const elFft = document.getElementById('wf-fft-size');
             const elTheme = document.getElementById('ui-theme');
             if (elSpeed) elSpeed.value = speed;
             if (elDbMin) elDbMin.value = dbMin;
             if (elDbMax) elDbMax.value = dbMax;
+            if (elAutoSpan) {
+                elAutoSpan.value = localStorage.getItem('waterfall_auto_span') || '50';
+            }
             if (elTheme) {
                 elTheme.value = theme;
                 // Live preview: apply theme immediately when changed
@@ -1787,9 +1798,16 @@
             const speed = document.getElementById('wf-speed').value;
             const dbMin = document.getElementById('wf-db-min').value;
             const dbMax = document.getElementById('wf-db-max').value;
+            const autoSpanEl = document.getElementById('wf-auto-span');
             const fftSize = parseInt(document.getElementById('wf-fft-size').value);
             const theme = document.getElementById('ui-theme').value;
             localStorage.setItem('waterfall_speed', speed);
+            if (autoSpanEl && autoSpanEl.value !== '') {
+                // Clamp 20–100 dB (same bounds as the dashboard's AUTO span).
+                const span = Math.max(20, Math.min(100, Math.round(Number(autoSpanEl.value) || 50)));
+                localStorage.setItem('waterfall_auto_span', String(span));
+                autoSpanEl.value = String(span);
+            }
             localStorage.setItem('fft_size', String(fftSize));
             localStorage.setItem('ui_theme', theme);
             // Apply theme immediately (live preview already did, but ensure)

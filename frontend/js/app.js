@@ -733,12 +733,18 @@ const App = {
                     didHold = true;
                     // Toggle continuous mode
                     this._autoMode = (this._autoMode === 'cont') ? 'off' : 'cont';
+                    // Fresh tracking state on every (re)start so a stale floor
+                    // from minutes ago cannot bias the new range.
+                    this._autoFloor = null;
+                    this._autoLastTs = null;
                     if (this._autoMode === 'cont') {
-                        this._autoContMin = this.waterfallDbMin;
-                        this._autoContMax = this.waterfallDbMax;
                         console.log('🎚️ Waterfall AUTO = CONT (continuous tracking)');
                     } else {
-                        console.log('🎚️ Waterfall AUTO = OFF (stopped continuous)');
+                        // Keep the range the user was just looking at: persist
+                        // it so manual mode does not snap back to the old
+                        // values (ONCE already behaves this way).
+                        this._saveAutoRange();
+                        console.log('🎚️ Waterfall AUTO = OFF (kept last auto range)');
                     }
                     this._updateAutoBtn(wfAutoBtn);
                 }, 500);
@@ -753,8 +759,10 @@ const App = {
                     // reverting to OFF so user can read the result.
                     this._autoMode = 'once';
                     this._onceComputed = false;
+                    this._onceStartTs = null;
+                    this._onceFrames = [];
                     this._updateAutoBtn(wfAutoBtn);
-                    console.log('🎚️ Waterfall AUTO = ONCE (will compute on next frame)');
+                    console.log('🎚️ Waterfall AUTO = ONCE (averaging ~1.5 s of frames)');
                     if (this._onceTimer) clearTimeout(this._onceTimer);
                     this._onceTimer = setTimeout(() => {
                         this._autoMode = 'off';
@@ -2647,6 +2655,138 @@ const App = {
 
     _dbMin: -110,
     _dbMax: -55,
+    // === Auto-range (dB scale) tuning ===
+    // The AUTO range is anchored on a ROBUST noise-floor estimate and uses a
+    // FIXED span, instead of the raw per-frame min/max:
+    //   * the raw frame minimum is driven by a few deep noise dips (mostly near
+    //     the filter edges) and jittered by ~8 dB between frames, so the whole
+    //     palette used to shift constantly;
+    //   * the raw frame maximum depends on whether a transmission happens to be
+    //     on screen, so the background colour "breathed" between dark blue and
+    //     green.
+    // Measured on real spectra (145.3 MHz, 10 fps): the floor estimate below
+    // moves only ~2 dB over 30 s, and the palette stops shifting.
+    AUTO_EDGE_FRACTION: 0.05,   // ignore this fraction of bins at each edge
+    AUTO_FLOOR_PERCENTILE: 10,  // low percentile of the remaining bins
+    AUTO_FLOOR_MARGIN_DB: 10,   // min = floor - margin (noise → dark blue)
+    AUTO_SPAN_DEFAULT_DB: 50,   // max = min + span
+    AUTO_SPAN_MIN_DB: 20,
+    AUTO_SPAN_MAX_DB: 100,
+    AUTO_CONT_TAU_S: 3.0,       // continuous tracking time constant
+    AUTO_DEADBAND_DB: 1,        // ignore smaller changes (avoids striping)
+    _autoFloor: null,           // smoothed noise-floor estimate (dB)
+    _autoLastTs: null,          // timestamp of the previous tracking update
+    _onceFrames: [],            // frames collected while ONCE is averaging
+    _onceStartTs: null,
+
+    /** Configured AUTO span in dB (Display tab; default 50). */
+    get waterfallAutoSpan() {
+        const v = parseInt(localStorage.getItem('waterfall_auto_span') || '');
+        if (!Number.isFinite(v)) return this.AUTO_SPAN_DEFAULT_DB;
+        return Math.max(this.AUTO_SPAN_MIN_DB, Math.min(this.AUTO_SPAN_MAX_DB, v));
+    },
+    set waterfallAutoSpan(val) {
+        const v = Math.max(this.AUTO_SPAN_MIN_DB,
+            Math.min(this.AUTO_SPAN_MAX_DB, Math.round(Number(val) || 0)));
+        localStorage.setItem('waterfall_auto_span', String(v));
+    },
+
+    /**
+     * Robust noise-floor estimate for one spectrum frame.
+     * Drops the filter skirts at both edges (they read several dB low and used
+     * to own the minimum) and uses a low percentile instead of the absolute
+     * minimum, so a single deep dip cannot drag the scale.
+     */
+    _estimateNoiseFloor(spectrum) {
+        const n = spectrum.length;
+        if (!n) return null;
+        const e = Math.floor(n * this.AUTO_EDGE_FRACTION);
+        const lo = e;
+        const hi = n - e;
+        const count = hi - lo;
+        if (count <= 0) return null;
+        // Histogram over integer dB values — O(bins) and no allocation-heavy
+        // sorting of 4096 floats on every frame.
+        let minV = Infinity, maxV = -Infinity;
+        for (let i = lo; i < hi; i++) {
+            const v = spectrum[i];
+            if (v < minV) minV = v;
+            if (v > maxV) maxV = v;
+        }
+        if (!(maxV >= minV)) return null;
+        const nb = Math.min(4096, Math.max(64, Math.round(maxV - minV) + 1));
+        const hist = new Uint32Array(nb);
+        const scale = (nb - 1) / (maxV - minV);
+        for (let i = lo; i < hi; i++) {
+            hist[Math.round((spectrum[i] - minV) * scale)]++;
+        }
+        const target = (count * this.AUTO_FLOOR_PERCENTILE) / 100;
+        let acc = 0;
+        for (let b = 0; b < nb; b++) {
+            acc += hist[b];
+            if (acc >= target) return minV + b / scale;
+        }
+        return maxV;
+    },
+
+    /** dB range for the current AUTO sample (min anchored on the floor). */
+    _autoRangeFromFloor(floor) {
+        const span = this.waterfallAutoSpan;
+        const min = Math.round(floor - this.AUTO_FLOOR_MARGIN_DB);
+        return { min, max: min + span };
+    },
+
+    /** ONCE: average the floor over ~1.5 s, then fall back to manual mode.
+     *  Averaging (instead of a single frame) makes the result independent of
+     *  whether a transmission happened to be on screen at that instant. */
+    _runAutoOnce(spectrumData) {
+        const now = performance.now();
+        if (!this._onceStartTs) {
+            this._onceStartTs = now;
+            this._onceFrames = [];
+        }
+        const floor = this._estimateNoiseFloor(spectrumData);
+        if (floor !== null) this._onceFrames.push(floor);
+        const elapsed = now - this._onceStartTs;
+        // Finish after ~1.5 s (or 20 frames, whichever comes first) so a slow
+        // spectrum feed still completes.
+        if (elapsed < 1500 && this._onceFrames.length < 20) return;
+
+        const n = this._onceFrames.length;
+        const avg = n
+            ? this._onceFrames.reduce((a, b) => a + b, 0) / n
+            : this._estimateNoiseFloor(spectrumData);
+        this._onceFrames = [];
+        this._onceStartTs = null;
+        this._onceComputed = true;
+        if (avg !== null) {
+            this._applyAutoRange(this._autoRangeFromFloor(avg));
+            this._saveAutoRange();
+            const btn = document.getElementById('wf-auto-btn');
+            if (btn) btn.textContent = `${this._dbMin}/${this._dbMax} dB`;
+            console.log(`🎚️ ONCE done (${n} frames): dB range set to [${this._dbMin}, ${this._dbMax}]`);
+        }
+    },
+
+    /** Apply a computed range, rebuilding the colour LUT only when it moves. */
+    _applyAutoRange(range) {
+        if (!range) return false;
+        const changed = Math.abs(range.min - this._dbMin) >= this.AUTO_DEADBAND_DB
+            || Math.abs(range.max - this._dbMax) >= this.AUTO_DEADBAND_DB;
+        if (!changed) return false;
+        this._dbMin = range.min;
+        this._dbMax = range.max;
+        this._colorLUTDbMin = null;
+        this._colorLUTDbMax = null;
+        return true;
+    },
+
+    /** Persist the current AUTO range so manual mode keeps it. */
+    _saveAutoRange() {
+        localStorage.setItem('waterfall_db_min', String(this._dbMin));
+        localStorage.setItem('waterfall_db_max', String(this._dbMax));
+    },
+
     _colorLUT: null,  // Color Lookup Table (256 entries) for fast rendering
     _colorLUTDbMin: null,
     _colorLUTDbMax: null,
@@ -2716,10 +2856,12 @@ const App = {
     },
 
     _renderWaterfall() {
-        // Read live settings from localStorage (only when NOT in auto mode
-        // AND no per-device override is active — _applyDeviceWaterfallRange
-        // sets _dbMin/_dbMax directly from the active device config).
-        if (this._autoMode === 'off') {
+        // Read live settings from localStorage (only when NOT in auto mode and
+        // no per-device override is active — _applyDeviceWaterfallRange sets
+        // _dbMin/_dbMax directly from the active device config). Without the
+        // device check the per-device range was overwritten on EVERY frame, so
+        // a device's configured waterfall range never actually applied.
+        if (this._autoMode === 'off' && !this._deviceWaterfallActive) {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
         }
@@ -3348,69 +3490,25 @@ const App = {
 
         // === Auto Range (3 modes: off / once / cont) ===
         // off:  manual — read from localStorage
-        // once: compute min/max ONE time, then switch to 'off'
-        // cont: continuous tracking (fast rise +1, slow fall -0.1)
-        if (this._autoMode === 'once' || this._autoMode === 'cont') {
-            let smin = Infinity, smax = -Infinity;
-            for (let i = 0; i < spectrumData.length; i++) {
-                const v = spectrumData[i];
-                if (v < smin) smin = v;
-                if (v > smax) smax = v;
-            }
-
-            if (this._autoMode === 'once') {
-                // === ONCE: compute once (first frame only), then show values ===
-                if (this._onceComputed) {
-                    // Already computed this cycle; wait for timer to revert to OFF
-                } else {
-                    let paddedMin = smin - 5;
-                    let paddedMax = smax + 5;
-                    if (paddedMax - paddedMin < 20) {
-                        const mid = (paddedMax + paddedMin) / 2;
-                        paddedMin = mid - 10;
-                        paddedMax = mid + 10;
-                    }
-                    this._dbMin = Math.round(paddedMin);
-                    this._dbMax = Math.round(paddedMax);
-                    this._onceComputed = true;
-                    // Save to localStorage so manual mode inherits these values
-                    localStorage.setItem('waterfall_db_min', this._dbMin);
-                    localStorage.setItem('waterfall_db_max', this._dbMax);
-                    // Show computed min/max on the button so user sees the values
-                    const btn = document.getElementById('wf-auto-btn');
-                    if (btn) {
-                        btn.textContent = `${this._dbMin}/${this._dbMax} dB`;
-                    }
-                    console.log(`🎚️ ONCE done: dB range set to [${this._dbMin}, ${this._dbMax}]`);
+        // once: average ~1.5 s of frames, apply, then switch back to 'off'
+        // cont: track the noise floor continuously (time-based smoothing)
+        if (this._autoMode === 'once') {
+            this._runAutoOnce(spectrumData);
+        } else if (this._autoMode === 'cont') {
+            const floor = this._estimateNoiseFloor(spectrumData);
+            if (floor !== null) {
+                const now = performance.now();
+                if (this._autoFloor === null) {
+                    this._autoFloor = floor;
+                } else if (this._autoLastTs !== null) {
+                    // Exponential smoothing on REAL elapsed time, so the
+                    // behaviour no longer depends on the spectrum frame rate.
+                    const dt = Math.max(0, (now - this._autoLastTs) / 1000);
+                    const alpha = 1 - Math.exp(-dt / this.AUTO_CONT_TAU_S);
+                    this._autoFloor += alpha * (floor - this._autoFloor);
                 }
-            } else {
-                // === CONT: continuous tracking with smoothing ===
-                // Initialize continuous tracking
-                if (this._autoContMin === undefined || this._autoContMax === undefined) {
-                    this._autoContMin = smin;
-                    this._autoContMax = smax;
-                }
-                // Fast rise (+1), slow fall (-0.1) — prevents flicker
-                if (smax > this._autoContMax + 1) {
-                    this._autoContMax += 1;
-                } else if (smax < this._autoContMax - 1) {
-                    this._autoContMax -= 0.1;
-                }
-                if (smin < this._autoContMin - 1) {
-                    this._autoContMin -= 1;
-                } else if (smin > this._autoContMin + 1) {
-                    this._autoContMin += 0.1;
-                }
-                // Add padding and ensure minimum range of 20 dB
-                let paddedMin = this._autoContMin - 5;
-                let paddedMax = this._autoContMax + 5;
-                if (paddedMax - paddedMin < 20) {
-                    const mid = (paddedMax + paddedMin) / 2;
-                    paddedMin = mid - 10;
-                    paddedMax = mid + 10;
-                }
-                this._dbMin = Math.round(paddedMin);
-                this._dbMax = Math.round(paddedMax);
+                this._autoLastTs = now;
+                this._applyAutoRange(this._autoRangeFromFloor(this._autoFloor));
             }
         }
 
