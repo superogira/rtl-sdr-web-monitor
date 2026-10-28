@@ -50,6 +50,17 @@ class RtlTcpClient:
         # keepalive, a session silently dropped by NAT/CGNAT gear or a powered
         # off remote host stays "established" until the first read timeout.
         self.tcp_keepalive_s = 15
+        # Timeouts for the two connect() stages. They are separate because the
+        # failures mean completely different things:
+        #   TCP:     nothing answered SYN (routers/firewall/port-forward/NAT,
+        #            wrong host/port, host down) — a NETWORK problem.
+        #   HANDSHAKE: TCP opened but the rtl_tcp magic never arrived (another
+        #            program is already using the single-client rtl_tcp server).
+        self.tcp_connect_timeout_s = 8.0
+        self.handshake_timeout_s = 10.0
+        # (stage, human message) of the last failed connect() — shown in the UI.
+        self.last_error: Optional[str] = None
+        self.last_error_stage: Optional[str] = None
         self._frequency = settings.RTL_TCP_CENTER_FREQ
         self._sample_rate = settings.RTL_TCP_SAMPLE_RATE
         self._gain = settings.RTL_TCP_GAIN
@@ -121,9 +132,15 @@ class RtlTcpClient:
         # with FIN + drain instead of an RST that wedges the server.
         if self.writer is not None:
             await self.disconnect()
+        self.last_error = None
+        self.last_error_stage = None
         try:
-            self.reader, self.writer = await asyncio.open_connection(
-                self.host, self.port
+            # Stage 1: TCP connect. Timed out separately so the report can say
+            # whether nothing answered (network/router/firewall) instead of
+            # blaming the rtl_tcp handshake.
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port),
+                timeout=self.tcp_connect_timeout_s,
             )
             # TCP keepalive probes (Go reference: 15s) so silently-dropped
             # NAT/CGNAT sessions are detected instead of hanging forever.
@@ -135,7 +152,8 @@ class RtlTcpClient:
             info_data = b''
             while len(info_data) < 12:
                 chunk = await asyncio.wait_for(
-                    self.reader.read(12 - len(info_data)), timeout=10.0
+                    self.reader.read(12 - len(info_data)),
+                    timeout=self.handshake_timeout_s,
                 )
                 if not chunk:
                     raise ConnectionError("Connection closed during handshake")
@@ -156,17 +174,66 @@ class RtlTcpClient:
                 await self.set_gain(self._gain)
                 return True
             else:
+                self.last_error_stage = "handshake"
+                self.last_error = (
+                    f"connected to {self.host}:{self.port} but it did not send an "
+                    f"rtl_tcp header (got {hex(magic)}) — is this really an "
+                    f"rtl_tcp server?"
+                )
                 logger.error(f"Invalid RTL-TCP magic: {hex(magic)}")
                 await self._close_failed_socket()
                 return False
 
         except asyncio.TimeoutError:
-            logger.error(f"Timeout connecting to RTL-TCP at {self.host}:{self.port}")
+            if self.writer is None:
+                # Nothing answered the TCP handshake: a NETWORK-level problem.
+                self.last_error_stage = "tcp"
+                self.last_error = (
+                    f"cannot reach {self.host}:{self.port} — no response within "
+                    f"{self.tcp_connect_timeout_s:.0f}s (wrong host/port, host "
+                    f"offline, or a router/firewall/port-forward rule blocking "
+                    f"the port)"
+                )
+                logger.error(
+                    f"Timeout connecting to RTL-TCP at {self.host}:{self.port} "
+                    f"(TCP stage — no answer)"
+                )
+            else:
+                # TCP opened but the rtl_tcp header never arrived. rtl_tcp
+                # serves ONE client at a time, so another program is usually
+                # already connected.
+                self.last_error_stage = "handshake"
+                self.last_error = (
+                    f"TCP connected to {self.host}:{self.port} but no rtl_tcp "
+                    f"header arrived within {self.handshake_timeout_s:.0f}s — "
+                    f"rtl_tcp accepts one client at a time, so another program "
+                    f"may already be using it"
+                )
+                logger.error(
+                    f"Timeout waiting for the RTL-TCP header from "
+                    f"{self.host}:{self.port} (handshake stage — TCP is open)"
+                )
             # Close the half-open socket so it does not leak (and does not
             # occupy the single-client slot on the server side).
             await self._close_failed_socket()
             return False
         except Exception as e:
+            if self.writer is None:
+                # Connection refused / DNS failure / no route: still a
+                # network-level problem, so name the usual culprits.
+                self.last_error_stage = "tcp"
+                self.last_error = (
+                    f"cannot reach {self.host}:{self.port} ({e}) - check the "
+                    f"host/port, that the server is running, and that no "
+                    f"router/firewall/port-forward rule blocks the port"
+                )
+            else:
+                self.last_error_stage = "handshake"
+                self.last_error = (
+                    f"connected to {self.host}:{self.port} but the rtl_tcp "
+                    f"handshake failed ({e}) - rtl_tcp accepts one client at "
+                    f"a time, so another program may already be using it"
+                )
             logger.error(f"Failed to connect to RTL-TCP: {e}")
             self.connected = False
             self._poisoned = False  # never established — reconnect is allowed

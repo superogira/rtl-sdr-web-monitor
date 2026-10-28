@@ -134,6 +134,9 @@ class SDRManager:
         self._last_iq_sample_rate: int = 0
         self._spectrum_prev: Optional[np.ndarray] = None  # For exponential averaging
         self._spectrum_alpha: float = 0.2  # EMA factor (lower = smoother, less noise)
+        # Why the last connect() failed (None when the last attempt worked).
+        self._last_connect_error: Optional[str] = None
+        self._last_connect_error_stage: Optional[str] = None
         self._fft_bins: int = 1024  # FFT output bins (configurable: 256-8192, power of 2)
         self._channel_bw: int = self._DEFAULT_CHANNEL_BW
         # VFO offset (Hz) relative to center frequency. 0 = decode at center.
@@ -249,6 +252,12 @@ class SDRManager:
             # owning user. Drives the dashboard indicator below the clock so
             # admins can see who is recording what (manual vs auto, which user).
             "listener_recordings": self._broadcaster.get_listener_recordings(),
+            # Why the last connect() failed (None = last attempt worked).
+            # "stage" says whether the TCP handshake got no answer (network /
+            # router / firewall) or rtl_tcp accepted but stayed silent (it
+            # serves one client at a time).
+            "last_connect_error": self._last_connect_error,
+            "last_connect_error_stage": self._last_connect_error_stage,
         }
 
     def cursor_signal_level(self, offset_hz: float) -> Optional[float]:
@@ -670,7 +679,17 @@ class SDRManager:
             self.client = consumer
             self._consumer_id = "live"
             self._pool_device_id = device_id
+            self._last_connect_error = None
+            self._last_connect_error_stage = None
         else:
+            # Keep WHY it failed (network vs rtl_tcp busy) so the UI can
+            # report something actionable instead of a bare "failed".
+            self._last_connect_error = (
+                getattr(consumer, "last_error", None)
+                or "could not connect to the RTL-TCP server"
+            )
+            self._last_connect_error_stage = getattr(consumer, "last_error_stage", None)
+            logger.warning(f"RTL-TCP connect failed: {self._last_connect_error}")
             # Clean up: release the failed consumer so the pool can tear down
             # the failed connection (otherwise refcount leak blocks reconnect).
             try:
@@ -682,7 +701,12 @@ class SDRManager:
             self._consumer_id = None
             self._pool_device_id = None
         self._save_persisted_settings()
-        return {"success": ok, "status": self.status}
+        result = {"success": ok, "status": self.status}
+        if not ok and self._last_connect_error:
+            # Surfaced by POST /api/sdr/connect so the UI can explain WHY.
+            result["error"] = self._last_connect_error
+            result["error_stage"] = self._last_connect_error_stage
+        return result
 
     async def _release_pool_consumer(self) -> None:
         """Release the current pool consumer and revert to legacy client."""

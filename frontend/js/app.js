@@ -318,6 +318,11 @@ const App = {
         } catch (err) {
             btn.textContent = I18n.t('dash.connect');
             btn.disabled = false;
+            // err.detail now carries the staged reason from the server, e.g.
+            // "cannot reach host:port - no response within 8s (wrong host/port,
+            //  host offline, or a router/firewall/port-forward rule)" or
+            // "TCP connected but no rtl_tcp header - another program may be
+            //  using it". That distinction is what makes this debuggable.
             alert(I18n.t('dash.errConnectRtl') + (err.detail || err.message || err));
         }
     },

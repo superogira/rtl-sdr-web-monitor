@@ -102,6 +102,16 @@ class SharedConnectionConsumer:
         return self._conn.client.connected
 
     @property
+    def last_error(self):
+        # Diagnostic message of the last failed connect() (or None).
+        return getattr(self._conn.client, "last_error", None)
+
+    @property
+    def last_error_stage(self):
+        # "tcp" (nothing answered) | "handshake" (TCP open, no RTL0) | None.
+        return getattr(self._conn.client, "last_error_stage", None)
+
+    @property
     def poisoned(self) -> bool:
         """True when the underlying connection is known-dead (Go reference's
         "poisoned" flag). SDRManager checks this to trigger reconnects."""
@@ -197,6 +207,9 @@ class SharedDeviceConnection:
         self._read_task: Optional[asyncio.Task] = None
         self._controller_id: Optional[str] = None
         self._controller_priority: int = 0
+        # Diagnostics of the last failed connect (surfaced to the UI).
+        self.last_error: Optional[str] = None
+        self.last_error_stage: Optional[str] = None
         self._lock = asyncio.Lock()
         self._refcount = 0
         self._pending_host: Optional[str] = None
@@ -267,7 +280,13 @@ class SharedDeviceConnection:
             self._read_task = asyncio.create_task(self._read_loop())
             logger.info(f"🔌 SharedConnection {self.device_id}: read loop started")
         elif not ok:
-            logger.warning(f"SharedConnection {self.device_id}: connect failed")
+            self.last_error = getattr(self.client, "last_error", None)
+            self.last_error_stage = getattr(self.client, "last_error_stage", None)
+            detail = f" - {self.last_error}" if self.last_error else ""
+            logger.warning(f"SharedConnection {self.device_id}: connect failed{detail}")
+        else:
+            self.last_error = None
+            self.last_error_stage = None
         return ok
 
     async def register_consumer(self, consumer: SharedConnectionConsumer) -> bool:

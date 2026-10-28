@@ -136,7 +136,10 @@ async def connect_sdr(
         mgr.set_connection(req.host, req.port)
     result = await mgr.connect()
     if not result["success"]:
-        raise HTTPException(status_code=503, detail="Failed to connect to RTL-TCP")
+        # Include the staged reason (network vs rtl_tcp busy) so the UI can
+        # tell the operator what to check instead of a generic failure.
+        detail = result.get("error") or "Failed to connect to RTL-TCP"
+        raise HTTPException(status_code=503, detail=detail)
     return result
 
 
