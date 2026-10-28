@@ -2365,6 +2365,49 @@ a:hover {
     gap: 6px;
     flex: 0 0 auto;
 }
+
+/* Per-VFO recording badge (REC / AUTO), placed just before the SIG meter.
+   The slot is ALWAYS present in the markup with a FIXED width and only becomes
+   visible while recording; it is never added/removed. Previously the badge
+   was appended/removed at the end of the row, and because .vfo-freq is
+   flex:1 every show/hide resized the row, so the frequency, SIG meter and
+   buttons jumped left/right. */
+.vfo-rec-badge {
+    flex: 0 0 auto;
+    width: 54px;
+    box-sizing: border-box;
+    padding: 1px 0;
+    border-radius: 3px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 1.4;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    visibility: hidden;          /* hidden but still reserves its width */
+}
+.vfo-rec-badge.rec-manual,
+.vfo-rec-badge.rec-auto {
+    visibility: visible;
+    animation: blink 1s infinite; /* opacity only - no layout change */
+}
+.vfo-rec-badge.rec-manual {
+    color: #fff;
+    background: var(--accent-red);
+}
+.vfo-rec-badge.rec-auto {
+    color: #000;
+    background: var(--accent-yellow, #eab308);
+}
+/* Narrow screens: icon only, so the row keeps room for the frequency. */
+@media (max-width: 480px) {
+    .vfo-rec-badge { width: 22px; }
+    .vfo-rec-badge .vfo-rec-label { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .vfo-rec-badge.rec-manual,
+    .vfo-rec-badge.rec-auto { animation: none; }
+}
 .vfo-sig-bars {
     display: flex;
     gap: 1px;

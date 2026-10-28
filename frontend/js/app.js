@@ -1331,33 +1331,36 @@ const App = {
         this._renderVfoRecIndicators();
     },
 
-    /** Show a REC badge on each VFO row that is recording (manual or auto). */
+    /** Show a REC / AUTO badge on each VFO row that is recording.
+     *  Uses the FIXED slot `#vfo-<x>-rec` from dashboard.html (placed before the
+     *  SIG meter, fixed width, `visibility:hidden` when idle). It is never
+     *  created or removed, so showing/hiding it cannot shift the row layout. */
     _renderVfoRecIndicators() {
         for (let i = 0; i < this._MAX_VFOS; i++) {
-            const row = document.getElementById(`vfo-row-${this._vfoLower(i)}`);
-            if (!row) continue;
+            const lo = this._vfoLower(i);
+            const badge = document.getElementById(`vfo-${lo}-rec`);
+            if (!badge) continue;
             const manual = this._recordingVfoIdxs.includes(i);
-            const auto = !!this._autoRecordingVfoIdxs.includes(i);
-            let badge = row.querySelector('.vfo-rec-badge');
-            if (!manual && !auto) {
-                if (badge) badge.remove();
-                continue;
-            }
-            if (!badge) {
-                badge = document.createElement('span');
-                badge.className = 'vfo-rec-badge';
-                badge.style.cssText = 'font-size:0.6rem;font-weight:700;margin-left:4px;'
-                    + 'padding:1px 4px;border-radius:3px;animation:blink 1s infinite;';
-                row.appendChild(badge);
-            }
+            const auto = !manual && this._autoRecordingVfoIdxs.includes(i);
+            const state = manual ? 'manual' : (auto ? 'auto' : '');
+            // Skip DOM writes when nothing changed (called on every status tick).
+            if (badge.dataset.state === state) continue;
+            badge.dataset.state = state;
+            badge.classList.toggle('rec-manual', manual);
+            badge.classList.toggle('rec-auto', auto);
             if (manual) {
-                badge.textContent = '⏺ REC';
-                badge.style.color = '#fff';
-                badge.style.background = 'var(--accent-red)';
+                badge.innerHTML = '⏺<span class="vfo-rec-label"> REC</span>';
+                badge.title = I18n.t('dash.vfoRecManual');
+            } else if (auto) {
+                badge.innerHTML = '🔄<span class="vfo-rec-label"> AUTO</span>';
+                badge.title = I18n.t('dash.vfoRecAuto');
             } else {
-                badge.textContent = '🔄 AUTO';
-                badge.style.color = '#000';
-                badge.style.background = 'var(--accent-yellow, #eab308)';
+                // Clear both fields: innerHTML from a previous state would
+                // otherwise linger in the DOM (hidden, but confusing when
+                // inspecting or when a screen reader is active).
+                badge.innerHTML = '';
+                badge.textContent = '';
+                badge.title = '';
             }
         }
     },
