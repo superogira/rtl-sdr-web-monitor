@@ -128,9 +128,17 @@
             // Channel bandwidth
             if (p.channelBw !== undefined && app._channelBw !== undefined) {
                 console.log(`[DashboardPrefs] restore channelBw=${p.channelBw}`);
-                app._channelBw = p.channelBw;
-                const btn = document.querySelector(`.bw-btn[data-bw="${p.channelBw}"]`);
-                if (btn) document.querySelectorAll('.bw-btn').forEach(b => b.classList.toggle('active', b === btn));
+                // Use App's setter so the buttons, the trigger label AND the
+                // live listener / global BW all get the restored value. The old
+                // code only changed `app._channelBw` + the button class, so a
+                // refresh showed 25k while the DSP still demodulated 12k.
+                if (typeof app._setChannelBw === 'function') {
+                    app._setChannelBw(p.channelBw);
+                } else {
+                    app._channelBw = p.channelBw;
+                    const btn = document.querySelector(`.bw-btn[data-bw="${p.channelBw}"]`);
+                    if (btn) document.querySelectorAll('.bw-btn').forEach(b => b.classList.toggle('active', b === btn));
+                }
             }
             // Mode (demodulator)
             if (p.mode && typeof app.setMode === 'function') {

@@ -2,14 +2,14 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.10-2026.07.03',  // Waterfall AUTO (once/cont) fix: no longer
-                               // clobbered by periodic status sync. AUTO
-                               // values now persist until the user changes
-                               // them or the active device changes.
-                               // mute/speaker button to listen to ONLY that
-                               // VFO (others auto-muted). Click again (or
-                               // long-press the same VFO) to restore each
-                               // VFO's previous mute state.
+    VERSION: 'v1.11-2026.10.29',  // Squelch + BW audit fixes: per-chunk level
+                               // measurement (was 4% of the chunk / one reading
+                               // per 400 ms batch), fast-attack EMA + 200 ms
+                               // hang + 5 ms fades, AUTO squelch no longer cuts
+                               // long transmissions, record gate follows AUTO,
+                               // BW-aware Weaver SSB (was fixed 2.5 kHz and
+                               // +1.5 kHz off-pitch), FM IF floor, per-mode BW
+                               // choices, and mode/BW pushed on WS connect.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -101,6 +101,9 @@ const App = {
 
         await this.loadRecentRecordings();
         this.initBookmarks();
+        // Fill the More-menu version rows now (and refresh on every open) so
+        // the operator can see which build is loaded.
+        this.updateVersionInfo();
         console.log('✅ App initialized v' + this.VERSION);
     },
 
@@ -441,6 +444,64 @@ const App = {
     },
 
     // === Mode Selector ===
+    // Per-mode channel-bandwidth choices. The BW buttons are filtered to these
+    // so a mode can only be given a bandwidth that makes sense for it:
+    //   FM  : NBFM needs >= ~13 kHz of IF (Carson) up to WBFM 200 kHz.
+    //   AM  : ~6 kHz is the widest useful AM channel; 3k/12k give selectivity.
+    //   SSB : sideband width — 1.8k (narrow), 2.4k (voice), 3k (wide).
+    _BW_CHOICES: {
+        FM: [6000, 12000, 25000, 50000, 200000],
+        AM: [3000, 6000, 12000],
+        USB: [1800, 2400, 3000],
+        LSB: [1800, 2400, 3000],
+    },
+    // Default channel BW applied when the user switches to a mode whose
+    // current BW is not in that mode's list.
+    _BW_DEFAULT: { FM: 12000, AM: 6000, USB: 2400, LSB: 2400 },
+
+    /** Rebuild the BW popover for the given mode (hide buttons that do not
+     *  belong to it) and highlight the active one. */
+    _applyBwChoicesForMode(mode) {
+        const list = this._BW_CHOICES[String(mode || 'FM').toUpperCase()];
+        const container = document.getElementById('bw-buttons');
+        if (!list || !container) return;
+        container.querySelectorAll('.bw-btn').forEach(btn => {
+            const bw = parseInt(btn.dataset.bw);
+            btn.style.display = list.includes(bw) ? '' : 'none';
+        });
+        // If the current BW is not valid for this mode, switch to its default.
+        if (!list.includes(this._channelBw)) {
+            this._setChannelBw(this._BW_DEFAULT[String(mode).toUpperCase()] || 12000);
+        } else {
+            this._updateBwTriggerLabel(this._channelBw);
+        }
+    },
+
+    /** Set the channel BW from code (button click or mode change): updates the
+     *  buttons/label, remembers the choice and pushes it to the listener. */
+    _setChannelBw(newBw) {
+        newBw = parseInt(newBw, 10);
+        if (isNaN(newBw) || newBw <= 0) return;
+        this._channelBw = newBw;
+        const bwButtons = document.getElementById('bw-buttons');
+        if (bwButtons) {
+            bwButtons.querySelectorAll('.bw-btn').forEach(b =>
+                b.classList.toggle('active', parseInt(b.dataset.bw) === newBw));
+        }
+        this._updateBwTriggerLabel(newBw);
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('channelBw', newBw);
+        // Per-VFO bandwidth change (audio WS) when listening; else global REST.
+        if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setBandwidth(newBw)) {
+            console.log(`🎛️ Channel BW (per-VFO): ${newBw/1e3} kHz`);
+        } else if (Auth.isAdmin && Auth.isAdmin()) {
+            // The global BW feeds the center-channel recording and the default
+            // for new listeners, so only admins may change it (the endpoint is
+            // admin-only). A regular user's choice is remembered locally and is
+            // pushed to their own listener as soon as they press ฟังสด.
+            API.sdr.setBandwidth(newBw).catch(err => console.error('Set bandwidth failed:', err));
+        }
+    },
+
     setupModeSelector() {
         const selector = document.getElementById('mode-selector');
         if (!selector) return;
@@ -451,17 +512,38 @@ const App = {
             if (mode === this.currentMode) return;
             selector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            this.currentMode = mode;
-            if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('mode', mode);
-            const radioMode = document.getElementById('radio-mode');
-            if (radioMode) radioMode.textContent = mode;
-            // Per-listener mode change (audio WS) when listening; else global REST.
-            if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setMode(mode)) {
-                console.log(`🎛️ Mode (per-VFO): ${mode}`);
-                return;
-            }
-            try { await API.sdr.setMode(mode); } catch (err) { console.error('Set mode failed:', err); }
+            this.setMode(mode);
         });
+    },
+
+    /** Change the demodulation mode (also called by DashboardPrefs restore).
+     *  Updates the UI, the per-mode BW choices and the live listener. */
+    async setMode(mode) {
+        mode = String(mode).toUpperCase();
+        this.currentMode = mode;
+        if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('mode', mode);
+        const selector = document.getElementById('mode-selector');
+        if (selector) {
+            selector.querySelectorAll('.mode-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.mode === mode));
+        }
+        const radioMode = document.getElementById('radio-mode');
+        if (radioMode) radioMode.textContent = mode;
+        // Only offer BW choices that make sense for this mode, and pick the
+        // mode's default when the current one is not valid (e.g. 12k -> 2.4k
+        // when switching to USB).
+        this._applyBwChoicesForMode(mode);
+        // Per-listener mode change (audio WS) when listening; else global REST.
+        if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setMode(mode)) {
+            console.log(`🎛️ Mode (per-VFO): ${mode}`);
+            return;
+        }
+        // Global mode is admin-only (it drives the center-channel recording and
+        // the default for new listeners). A regular user's choice is remembered
+        // and pushed to their own listener when they press ฟังสด.
+        if (Auth.isAdmin && Auth.isAdmin()) {
+            try { await API.sdr.setMode(mode); } catch (err) { console.error('Set mode failed:', err); }
+        }
     },
 
     // === Radio Controls ===
@@ -526,6 +608,10 @@ const App = {
     // flashes green (class "vfo-rx-active") so the operator can see which
     // frequency is active at a glance.
     _vfoSqOpen: [false, false, false, false],
+    // Effective squelch threshold reported by the server per VFO (dB), and
+    // whether it came from AUTO squelch. null = not reported yet.
+    _vfoThr: [null, null, null, null],
+    _vfoThrAuto: [false, false, false, false],
     // Backwards-compat: code that checked _vfoMode === 'dual'.
     get _vfoMode() { return this._vfoCount > 1 ? 'dual' : 'single'; },
     // Set of control values the user is CURRENTLY editing (e.g. 'gain',
@@ -567,7 +653,35 @@ const App = {
         if (e) e.stopPropagation();
         const popover = document.getElementById('more-popover');
         if (!popover) return;
-        popover.style.display = (popover.style.display === 'none') ? '' : 'none';
+        const opening = (popover.style.display === 'none');
+        popover.style.display = opening ? '' : 'none';
+        // Refresh the build versions each time the menu is opened (they cannot
+        // change while the page is loaded, but this also covers a popover that
+        // was rendered before all scripts had finished initialising).
+        if (opening) this.updateVersionInfo();
+    },
+
+    /**
+     * Fill the "More" popover with the versions of the JS files this browser
+     * actually loaded: App (app.js), Audio (audio.js) and Prefs
+     * (dashboard_prefs.js). After a deploy these are the quickest way to tell
+     * whether the browser is running fresh code or a cached copy — if a number
+     * is older than the deployed one, a hard refresh (Ctrl+F5) is needed.
+     *
+     * Each entry degrades gracefully: if a file failed to load (or an older
+     * cached copy has no VERSION property) the row shows "n/a" instead of
+     * throwing.
+     */
+    updateVersionInfo() {
+        const set = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        };
+        set('ver-app', (typeof this.VERSION === 'string' && this.VERSION) || 'n/a');
+        set('ver-audio',
+            (typeof LiveAudio !== 'undefined' && LiveAudio.VERSION) || 'n/a');
+        set('ver-prefs',
+            (typeof DashboardPrefs !== 'undefined' && DashboardPrefs.VERSION) || 'n/a');
     },
 
     toggleBwPopover(e) {
@@ -648,27 +762,12 @@ const App = {
         // Channel bandwidth selector (buttons in header)
         const bwButtons = document.getElementById('bw-buttons');
         if (bwButtons) {
-            bwButtons.addEventListener('click', async (e) => {
+            bwButtons.addEventListener('click', (e) => {
                 const btn = e.target.closest('.bw-btn');
                 if (!btn) return;
-                const newBw = parseInt(btn.dataset.bw);
-                bwButtons.querySelectorAll('.bw-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this._channelBw = newBw;
-                if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('channelBw', newBw);
-                // Update the trigger button label
-                this._updateBwTriggerLabel(newBw);
-                // Per-VFO bandwidth change (audio WS) when listening; else global REST.
-                if (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying && LiveAudio.setBandwidth(newBw)) {
-                    console.log(`🎛️ Channel BW (per-VFO): ${newBw/1e3} kHz`);
-                } else {
-                    try {
-                        await API.sdr.setBandwidth(newBw);
-                        console.log(`🎛️ Channel BW set to ${newBw/1e3} kHz`);
-                    } catch (err) {
-                        console.error('Set bandwidth failed:', err);
-                    }
-                }
+                // _setChannelBw handles the active state, the trigger label,
+                // the saved preference and the live listener / REST push.
+                this._setChannelBw(parseInt(btn.dataset.bw));
                 // Close the popover after selection
                 const popover = document.getElementById('bw-popover');
                 if (popover) popover.style.display = 'none';
@@ -1542,9 +1641,15 @@ const App = {
      *  Also carries `sq_open` (squelch gate open = audio is passing) which
      *  flashes the VFO row green so the operator can see which frequency is
      *  active at a glance. */
-    _onVfoSig(idx, db, sqOpen) {
+    _onVfoSig(idx, db, sqOpen, thr, auto) {
         if (idx >= 0 && idx < this._vfoSig.length) this._vfoSig[idx] = db;
         if (idx >= 0 && idx < this._vfoSqOpen.length) this._vfoSqOpen[idx] = !!sqOpen;
+        // Effective squelch threshold in force (manual SQL, or what AUTO picked
+        // from the noise floor). Shown next to the SIG bars as "SQL -83" so the
+        // operator can see why audio is muted — with AUTO on, the manual slider
+        // is disabled and there was previously no way to see the live threshold.
+        this._vfoThr[idx] = (thr === undefined || thr === null) ? null : Number(thr);
+        this._vfoThrAuto[idx] = !!auto;
         // Refresh the SIG bar. In dual mode both VFOs feed separate bars.
         this._renderVfoSig();
         // Apply/remove the green "RX active" flash on the VFO row.
@@ -1610,7 +1715,19 @@ const App = {
                 else bar.classList.add('active-red');
             }
         });
-        if (label) label.textContent = `${v.toFixed(0)} dB`;
+        if (label) {
+            // Show the level plus the effective SQL threshold, e.g. "-64 dB · SQL -83".
+            // With AUTO squelch on, the slider is disabled, so this is the only
+            // place the operator can see what threshold the server is using.
+            const thr = (this._vfoThr && this._vfoThr[idx] !== null && this._vfoThr[idx] !== undefined)
+                ? this._vfoThr[idx] : null;
+            if (thr !== null && thr > -120) {
+                const tag = (this._vfoThrAuto && this._vfoThrAuto[idx]) ? 'AUTO' : 'SQL';
+                label.textContent = `${v.toFixed(0)} dB · ${tag} ${thr.toFixed(0)}`;
+            } else {
+                label.textContent = `${v.toFixed(0)} dB`;
+            }
+        }
     },
 
     /**
@@ -3561,6 +3678,10 @@ const App = {
             this._waterfallPendingLines.splice(0, this._waterfallPendingLines.length - maxPending);
         }
 
+        // Calibrate the waterfall↔SQL dB offset from this frame while the
+        // channel is quiet (needed so signal tags / bookmark flashes use the
+        // same effective threshold as the squelch).
+        this._calibrateWfSqlOffset(line, this._vfoSig && this._vfoSig[this._activeVfoIdx]);
         // Signal Tag: detect strong signals and update annotations
         this._updateSignalAnnotations(line);
         // Bookmark signal detection: blink chips/rows green when their
@@ -3573,6 +3694,62 @@ const App = {
         return '#000';
     },
 
+    // === Waterfall → SQL scale calibration ===
+    // The waterfall dB values and the squelch dB values come from DIFFERENT
+    // measurements: the waterfall is a per-bin FFT magnitude (20·log10|X|/N)
+    // while the squelch uses the mean channel power (10·log10 of averaged
+    // |X|²/N² over the channel). Their difference is NOT a constant — measured
+    // at +3.1 dB for noise, +5.7 dB for a CW carrier and -3.3 dB for NBFM — so
+    // comparing a waterfall bin directly against the SQL slider marked the
+    // wrong signals (noise tagged, or weak signals missed).
+    //
+    // Instead of a magic offset we calibrate once per session: take the noise
+    // floor of the waterfall (a low percentile of the bins) and the noise floor
+    // the squelch sees (the reported `thr` minus the AUTO/manual margin when
+    // available, else the low percentile of the SIG level). The difference is
+    // then applied to every waterfall threshold comparison.
+    _wfSqlOffset: null,       // dB the waterfall reads ABOVE the channel power
+    _wfSqlOffsetAt: 0,
+
+    /** Waterfall→SQL dB offset (0 until calibrated).
+     *  waterfall_dB ≈ channel_power_dB + offset. */
+    _wfSqlOffsetDb() {
+        return (this._wfSqlOffset === null) ? 0 : this._wfSqlOffset;
+    },
+
+    /** Learn the waterfall→SQL offset from the current spectrum + SIG level. */
+    _calibrateWfSqlOffset(spectrum, sigDb) {
+        if (!spectrum || spectrum.length < 16) return;
+        if (typeof sigDb !== 'number' || !isFinite(sigDb)) return;
+        const now = Date.now();
+        // Re-learn at most every 5 s, and only after enough samples.
+        if (now - this._wfSqlOffsetAt < 5000) return;
+        // Low percentile of the visible bins = waterfall noise floor.
+        const sorted = Array.from(spectrum).sort((a, b) => a - b);
+        const p25 = sorted[Math.floor(sorted.length * 0.25)];
+        if (!isFinite(p25)) return;
+        // The SIG level is already the squelch-domain level of the listened
+        // channel. Only calibrate while the channel is quiet (gate closed),
+        // otherwise a transmission would bias the offset.
+        const quiet = !(this._vfoSqOpen && this._vfoSqOpen[this._activeVfoIdx]);
+        if (!quiet) return;
+        // `sigDb` is in the squelch (channel-power) domain, `p25` is the
+        // waterfall noise floor. Their difference is how much HIGHER the
+        // waterfall scale reads, so subtracting it converts a SQL threshold
+        // into the waterfall domain.
+        const sample = p25 - sigDb;
+        // Exponential average so one odd frame cannot skew the offset.
+        this._wfSqlOffset = (this._wfSqlOffset === null)
+            ? sample
+            : (0.9 * this._wfSqlOffset + 0.1 * sample);
+        this._wfSqlOffsetAt = now;
+    },
+
+    /** Effective waterfall-domain threshold for the current SQL setting. */
+    _wfSqlThreshold(squelchDb) {
+        return squelchDb - this._wfSqlOffsetDb();
+    },
+
     // === Signal Tag: detect signals above squelch ===
     // Returns array of { freq, rightFreq } for each signal region.
     // freq       = peak frequency of the signal (Hz)
@@ -3581,6 +3758,8 @@ const App = {
         const squelchInput = document.getElementById('squelch-input');
         const squelchLevel = squelchInput ? parseFloat(squelchInput.value) : -70;
         if (!isFinite(squelchLevel)) return [];
+        // Convert the SQL (channel-power domain) into the waterfall domain.
+        const threshold = this._wfSqlThreshold(squelchLevel);
 
         const numBins = spectrum.length;
         if (numBins <= 0) return [];
@@ -3598,7 +3777,7 @@ const App = {
 
         for (let i = 0; i <= numBins; i++) {
             const val = (i < numBins) ? spectrum[i] : -Infinity;
-            if (val > squelchLevel) {
+            if (val > threshold) {
                 if (regionStart < 0) {
                     regionStart = i;
                     regionPeakVal = val;
@@ -3983,10 +4162,13 @@ const App = {
         const lowHz = this.currentFreq - sr / 2;
         const highHz = this.currentFreq + sr / 2;
 
-        // Read the current squelch threshold.
+        // Read the current squelch threshold and convert it into the
+        // waterfall's dB domain (see _wfSqlThreshold / _calibrateWfSqlOffset).
         const squelchInput = document.getElementById('squelch-input');
         const squelchLevel = squelchInput ? parseFloat(squelchInput.value) : -120;
-        const sql = isFinite(squelchLevel) ? squelchLevel : -120;
+        const sql = isFinite(squelchLevel)
+            ? this._wfSqlThreshold(squelchLevel)
+            : -120;
 
         const now = Date.now();
         const HOLD_MS = 400;  // keep flash on through brief dips

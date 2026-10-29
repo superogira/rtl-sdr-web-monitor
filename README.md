@@ -70,7 +70,8 @@ Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
 
 ### 🎧 Multi-Listener Audio
 - **Independent VFO per listener** — Each user can listen to a different frequency within the passband
-- **Per-Listener Squelch** — Auto (adaptive) or manual squelch with hysteresis
+- **Per-Listener Squelch** — Auto (adaptive) or manual squelch with hysteresis, a 200 ms hang time (bridges word gaps) and 5 ms fade ramps (no clicks). The gate opens within ~50 ms so the first syllable is never clipped
+- **Per-mode channel bandwidth** — FM: 6k/12k/25k/50k/200k · AM: 3k/6k/12k · SSB: 1.8k/2.4k/3k. The selection is applied per listener and reaches the DSP on every (re)connect
 - **Solo / Priority Mode** — Long-press mute button to set a listener as SOLO (only that VFO) or PRIORITY (dims others)
 - **G.711 µ-law Audio** — Efficient bandwidth usage for live streaming
 
@@ -501,7 +502,8 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 ### 🎧 ระบบเสียงสำหรับผู้ฟังหลายคน
 
 * **VFO อิสระสำหรับผู้ใช้แต่ละคน** — ผู้ใช้แต่ละคนสามารถเลือกฟังความถี่ที่แตกต่างกันได้ภายในย่านความถี่ (passband) ที่รับได้
-* **Squelch แยกตามผู้ฟัง** — ระบบตัดเสียงรบกวน (Squelch) แบบอัตโนมัติ (ปรับตามสภาพ) หรือแบบกำหนดเองพร้อมระบบ hysteresis
+* **Squelch แยกตามผู้ฟัง** — ระบบตัดเสียงรบกวน (Squelch) แบบอัตโนมัติ (ปรับตามสภาพ) หรือแบบกำหนดเอง พร้อม hysteresis, hang time 200 ms (ไม่ขาดตอนระหว่างช่วงเว้นคำ) และ fade 5 ms (ไม่มีเสียงคลิก) เปิดประตูเสียงภายใน ~50 ms คำแรกจึงไม่หาย
+* **เลือก Bandwidth ตามโหมด** — FM: 6k/12k/25k/50k/200k · AM: 3k/6k/12k · SSB: 1.8k/2.4k/3k โดยค่าที่เลือกมีผลกับ DSP ของผู้ฟังแต่ละคน และถูกส่งไปทุกครั้งที่เชื่อมต่อใหม่
 * **โหมดเดี่ยว (Solo) / โหมดให้ความสำคัญ (Priority)** — กดปุ่มปิดเสียงค้างไว้เพื่อตั้งให้ผู้ฟังเป็นแบบ SOLO (ฟังเฉพาะ VFO นั้น) หรือ PRIORITY (หรี่เสียง VFO อื่นลง)
 * **เสียงรูปแบบ G.711 µ-law** — ใช้แบนด์วิดท์อย่างมีประสิทธิภาพสำหรับการสตรีมสด
 

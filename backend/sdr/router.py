@@ -292,9 +292,18 @@ async def set_gain(
 async def set_mode(
     req: ModeRequest,
     device_id: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set demodulation mode."""
+    """Set the GLOBAL demodulation mode (admin only).
+
+    While listening live, each user's mode is PER-LISTENER and is sent over
+    the audio WebSocket ({"type":"mode"}), so a regular user never needs this
+    endpoint. Letting them change the global mode here also changed the
+    center-channel recording (global auto-record) and the default for every
+    newly connected listener — a normal user could silently break everyone
+    else's recording, which matched the behaviour already enforced for SQL and
+    the hardware settings (gain / sample rate / ppm).
+    """
     mgr, _ = await _get_runtime(device_id)
     try:
         await mgr.set_mode(req.mode)
@@ -341,9 +350,16 @@ async def set_fft_size(
 async def set_bandwidth(
     req: BandwidthRequest,
     device_id: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Set channel bandwidth (Hz) for signal level computation."""
+    """Set the GLOBAL channel bandwidth (admin only).
+
+    Used by the center-channel DSP (global auto-record / SIG) and as the
+    default for newly connected listeners. While listening live, each user's
+    bandwidth is PER-LISTENER via the audio WebSocket
+    ({"type":"bandwidth"}), so regular users never need this endpoint — and
+    letting them call it changed everyone else's recording bandwidth.
+    """
     mgr, _ = await _get_runtime(device_id)
     try:
         mgr.set_channel_bw(req.bandwidth)

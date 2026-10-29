@@ -112,6 +112,9 @@ class SDRManager:
 
         self._audio_buffer: list[np.ndarray] = []
         self._signal_level = -120.0
+        # EMA-smoothed signal level used ONLY by the global auto-record gate
+        # (None = not yet initialised; see _stream_loop TRACK 2).
+        self._auto_sig_smoothed: Optional[float] = None
         self._squelch_level = persisted["squelch_level"]
         self._vad_silence_timeout = persisted["vad_silence_timeout"]
         self._max_recording_duration = persisted["max_recording_duration"]
@@ -1416,7 +1419,30 @@ class SDRManager:
                         await self._finish_auto_recording()
 
                     if should_auto_record:
-                        above_squelch = self._signal_level > self._squelch_level
+                        # Same gate quality as the per-listener path: a smoothed
+                        # level (fast attack / slow release) and a hysteresis
+                        # band below the threshold. Comparing the RAW per-chunk
+                        # level against a single threshold made this recorder
+                        # chatter open/closed at the crossing and split one
+                        # transmission into many short files.
+                        if self._auto_sig_smoothed is None:
+                            self._auto_sig_smoothed = self._signal_level
+                        elif self._signal_level > self._auto_sig_smoothed:
+                            self._auto_sig_smoothed = (
+                                0.7 * self._signal_level
+                                + 0.3 * self._auto_sig_smoothed)
+                        else:
+                            self._auto_sig_smoothed = (
+                                0.4 * self._signal_level
+                                + 0.6 * self._auto_sig_smoothed)
+                        thr = self._squelch_level
+                        close_thr = thr - 4.0
+                        # Open on the threshold; stay open until the level falls
+                        # 4 dB below it.
+                        if self._auto_recording:
+                            above_squelch = self._auto_sig_smoothed > close_thr
+                        else:
+                            above_squelch = self._auto_sig_smoothed > thr
 
                         if above_squelch and not self._auto_recording:
                             # Signal detected → start auto recording
@@ -1424,8 +1450,7 @@ class SDRManager:
                             self._auto_buffer = []
                             self._auto_start_time = time.time()
                             self._auto_silence_start = None
-                            logger.info(f"🎙️ Auto recording started (signal: {self._signal_level:.1f} dB)"
-                                        f" | manual_recording={self._manual_recording}")
+                            logger.info(f"🎙️ Auto recording started (signal: {self._signal_level:.1f} dB)")
                         elif above_squelch and self._auto_recording:
                             self._auto_silence_start = None
                             if len(audio) > 0:

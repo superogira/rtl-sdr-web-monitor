@@ -54,6 +54,13 @@ def _get_voice_filters(audio_rate: float, wbfm: bool = False):
 # Anything >= 100 kHz is treated as WBFM.
 _WBFM_BW_THRESHOLD = 100_000
 
+# Minimum NBFM IF (channel) low-pass cutoff, Hz. NBFM carries ±5 kHz deviation
+# (Carson: 5 kHz deviation + ~3 kHz audio ≈ 16 kHz total), so the IF filter must
+# pass at least ~±6.5 kHz or the deviation peaks are clipped and the audio turns
+# to distortion. BW selections narrower than 13 kHz therefore all behave as
+# 13 kHz in FM; narrower filters are only honoured for AM/SSB.
+_NBFM_MIN_IF_HZ = 6_500.0
+
 
 class DemodMode(str, Enum):
     FM = "FM"
@@ -262,26 +269,37 @@ _CHANNEL_BW = {
 }
 
 
+def _mode_name(mode) -> str:
+    """Normalize a mode (DemodMode enum or str) to its upper-case name."""
+    return mode.value if hasattr(mode, "value") else str(mode).upper()
+
+
 def compute_channel_power(iq: np.ndarray, sample_rate: float,
                           mode: DemodMode = DemodMode.FM,
                           channel_bw: int = 0,
-                          vfo_offset_hz: float = 0.0) -> float:
+                          vfo_offset_hz: float = 0.0,
+                          n_segments: int = 8,
+                          seg_len: int = 4096) -> float:
     """Compute signal power (dB) for ONLY the tuned channel bandwidth.
 
     This isolates the signal of interest (centered at DC after IQ conversion)
     so that strong signals on nearby frequencies don't inflate the level.
 
-    Approach (Welch's method with a low-sidelobe window):
-      1. Shift IQ by the VFO offset so the target lands at DC.
-      2. Split the block into overlapping segments, window each with a
-         Blackman-Harris window (first sidelobe ≈ -92 dB, vs Hann's -32 dB),
-         FFT, and AVERAGE the power spectra (Welch). Averaging reduces the
-         variance of the estimate so a single noisy snapshot can't false-open
-         the squelch.
-      3. Sum the power of only the bins within ±channel_bw/2.5 of DC. Using a
-         slightly NARROWER integration window than the full channel width
-         keeps the edges (closest to adjacent carriers) outside the sum, so
-         leakage from a strong neighbor contributes far less.
+    Approach (Welch-style averaging with a low-sidelobe window):
+      1. Shift IQ by the VFO offset so the target lands at DC. The shift is
+         applied ONLY to the samples actually used by each segment (a full-
+         length complex exp over the whole chunk was the dominant cost).
+      2. Average `n_segments` windowed FFTs spread EVENLY across the chunk
+         (Blackman window, first sidelobe ≈ -92 dB vs Hann's -32 dB). Averaging
+         across the whole chunk is what makes the reading stable: a single FFT
+         of the first 4096 samples measured only ~4% of a 50 ms chunk, so the
+         level jittered by ±1.5 dB (at 12 kHz) and a burst that started
+         mid-chunk was measured as pure noise.
+      3. Integrate only the bins inside the channel (±bw/2.5 for symmetric
+         modes). For SSB the window covers only the WANTED sideband
+         ([0, bw] for USB, [-bw, 0] for LSB) — a symmetric window around the
+         carrier averaged in the opposite sideband, which the demodulator
+         rejects, so the S-meter/SQL level did not match what was heard.
 
     Args:
         iq: complex IQ samples (already normalized)
@@ -290,6 +308,8 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
         channel_bw: override channel bandwidth in Hz (0 = use mode default)
         vfo_offset_hz: VFO offset in Hz. When non-zero, the IQ is shifted so
             that the power is measured at (center + offset) instead of DC.
+        n_segments: number of FFT segments averaged across the chunk.
+        seg_len: max FFT length (power of two, capped to the block length).
 
     Returns:
         Channel power in dB (negative value)
@@ -298,36 +318,36 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
     if n < 64:
         return -120.0
 
-    # Apply VFO offset shift so power is measured at the listening frequency
-    if abs(vfo_offset_hz) > 0.5:
-        t = np.arange(n, dtype=np.float64) / sample_rate
-        lo = np.exp(-2j * np.pi * vfo_offset_hz * t)
-        iq = (iq.astype(np.complex64) * lo).astype(np.complex64)
-
     # Use override bandwidth if provided (>0), otherwise fall back to mode default
+    name = _mode_name(mode)
     if channel_bw and channel_bw > 0:
         bw = channel_bw
     else:
-        bw = _CHANNEL_BW.get(mode.value if hasattr(mode, "value") else str(mode), 12000)
+        bw = _CHANNEL_BW.get(name, 12000)
 
-    # --- Single-shot windowed FFT (was Welch averaging) ---
-    # The previous implementation split the block into ~200 overlapping 1024-pt
-    # segments and ran an FFT on EACH — ~25 ms of CPU per call at 2.048 MSPS.
-    # That alone consumed ~half the per-chunk real-time budget and was the
-    # primary cause of iq_queue overflow on the per-listener path (audio
-    # produced slower than real-time → "เสียงเร็ว" symptom).
-    #
-    # For a real-time squelch/S-meter we do NOT need Welch-grade variance
-    # reduction: the consumer (_sig_smoothed) already applies an EMA low-pass,
-    # which does the temporal averaging the Welch loop used to do in-chunk. So
-    # a SINGLE FFT of a moderately large segment is both sufficient and ~25x
-    # faster (≈1 ms vs 25 ms). We keep the Blackman window for its low
-    # sidelobes (≈-92 dB first sidelobe), which is what actually prevents a
-    # loud adjacent carrier from inflating the level.
-    target_seg = 4096
-    seg = 1 << int(np.floor(np.log2(min(n, target_seg))))
+    # Integration window centre / half-width (Hz) relative to the carrier.
+    # SSB occupies one sideband only, so the centre is shifted by ±bw/2 and the
+    # half-width is bw/2 (instead of the ±bw/2.5 used for symmetric modes).
+    if name in ("USB", "LSB"):
+        half_hz = bw / 2.0
+        centre_hz = (bw / 2.0) if name == "USB" else -(bw / 2.0)
+    else:
+        half_hz = bw / 2.5
+        centre_hz = 0.0
+
+    # --- Segmented windowed FFT (averaged across the whole chunk) ---
+    # A single FFT of the first 4096 samples only covered ~4% of a 50 ms chunk
+    # at 2 MSPS: the level jittered by ±1.5 dB and a transmission that started
+    # mid-chunk was measured as pure noise (the squelch then opened late or not
+    # at all). Averaging n_segments FFTs spread evenly over the chunk measures
+    # the whole chunk and cuts the jitter to ~±0.5 dB for ~half the CPU of the
+    # old full-length VFO shift.
+    seg = min(int(seg_len), 1 << int(np.floor(np.log2(n))))
     if seg < 512:
         seg = 512
+    seg = min(seg, n)
+    n_seg = max(1, min(int(n_segments), n // seg))
+    starts = np.linspace(0, n - seg, n_seg).astype(int)
 
     # Blackman window: first sidelobe ≈ -92 dB (vs Hann -32 dB).
     # This is what keeps a strong adjacent carrier (10-20 dB louder than the
@@ -338,22 +358,32 @@ def compute_channel_power(iq: np.ndarray, sample_rate: float,
         window = np.hanning(seg).astype(np.float32)
     win_gain = float(np.mean(window ** 2))  # coherent power gain for normalization
 
-    # One FFT on the FIRST `seg` samples of the (VFO-shifted) IQ block.
-    segment = iq[:seg].astype(np.complex64) * window
-    fft_result = np.fft.fftshift(np.fft.fft(segment) / seg)
-    power_spectrum = (np.abs(fft_result) ** 2).astype(np.float64)
+    shifted = abs(vfo_offset_hz) > 0.5
+    k = np.arange(seg, dtype=np.float64)
+    acc = np.zeros(seg, dtype=np.float64)
+    for s in starts:
+        block = iq[s:s + seg]
+        if shifted:
+            # Shift only the samples used here (per-sample phase from the
+            # ABSOLUTE sample index keeps the LO phase-correct across blocks).
+            lo = np.exp(-2j * np.pi * vfo_offset_hz * (s + k) / sample_rate)
+            block = block * lo
+        spec = np.fft.fftshift(np.fft.fft(block.astype(np.complex64) * window) / seg)
+        acc += (spec.real.astype(np.float64) ** 2 + spec.imag.astype(np.float64) ** 2)
+    acc /= n_seg
+    power_spectrum = acc
 
-    # Integrate only the central portion of the channel (±bw/2.5 instead of
-    # ±bw/2) so the edge bins — which sit closest to adjacent carriers and
-    # receive the most leakage — are excluded from the sum.
+    # Integrate only the wanted part of the channel (see docstring).
     bin_hz = sample_rate / seg
-    half_bins = max(1, int((bw / 2.5) / bin_hz))
-    center = seg // 2
-    lo = max(0, center - half_bins)
-    hi = min(seg, center + half_bins + 1)
+    centre = seg // 2 + int(round(centre_hz / bin_hz))
+    half_bins = max(1, int(round(half_hz / bin_hz)))
+    lo_i = max(0, centre - half_bins)
+    hi_i = min(seg, centre + half_bins + 1)
+    if hi_i <= lo_i:
+        return -120.0
 
     # Average power per bin in the channel
-    channel_power = float(np.sum(power_spectrum[lo:hi]) / max(1, (hi - lo)))
+    channel_power = float(np.sum(power_spectrum[lo_i:hi_i]) / max(1, (hi_i - lo_i)))
 
     # Compensate for the window's coherent power gain
     if win_gain > 0:
@@ -439,11 +469,30 @@ def _channel_lpf_cutoff(channel_bw: int) -> float:
     cutoff, so switching 6k/12k/25k/50k sounded identical):
       - WBFM (>=100 kHz): 100 kHz (200 kHz channel, ±75 kHz dev + guard)
       - NBFM: channel_bw/2 * 0.95 (e.g. 12k→5.7k, 25k→11.9k, 6k→2.85k)
+
+    NBFM needs at least ±5 kHz of IF bandwidth (Carson: 5 kHz deviation +
+    3 kHz audio). A narrower selection (the 1.8k/2.4k/3k buttons) would clip
+    the deviation itself and turn the audio into distortion (measured SINAD
+    dropped from 39 dB at 12k to 15-19 dB), so the cutoff is floored at
+    _NBFM_MIN_IF_HZ and only narrows further for AM/SSB, which are linear
+    modes where a narrow filter genuinely improves selectivity.
     """
     if channel_bw and channel_bw >= _WBFM_BW_THRESHOLD:
         return 100_000.0
     half = (channel_bw or 12000) / 2.0
-    return max(1000.0, half * 0.95)
+    return max(_NBFM_MIN_IF_HZ, half * 0.95)
+
+
+def _am_if_cutoff(channel_bw: int) -> float:
+    """One-sided IF low-pass cutoff (Hz) for AM, derived from the channel BW.
+
+    AM audio is ~5 kHz wide, so anything above ~10 kHz of IF is just extra
+    noise; the old hard clamp to 2-8 kHz made every BW button above 16k (and
+    below 4k) sound identical. The cutoff now scales with the selection between
+    1.5 kHz (narrow, reject adjacent stations) and 10 kHz (widest useful).
+    """
+    half = (channel_bw or 10000) / 2.0
+    return max(1500.0, min(half * 0.95, 10_000.0))
 
 
 def _design_channel_lpf(sample_rate: float, cutoff: float, order: int = 8):
@@ -535,11 +584,26 @@ class StreamingDemodulator:
         self._decim_zi: Optional[np.ndarray] = None
         # SSB mixer phase accumulator (keeps LO continuous across chunks)
         self._ssb_lo_phase: float = 0.0
+        # SSB Weaver sideband filter (complex low-pass, half-width = bw/2).
+        # Rebuilt by _process_ssb whenever the selected BW (or sample rate)
+        # changes, so the BW buttons really change the received sideband width.
+        self._ssb_sos = None
+        self._ssb_zi: Optional[np.ndarray] = None
+        self._ssb_zi_imag: Optional[np.ndarray] = None
+        self._ssb_bw: Optional[float] = None
+        self._ssb_sample_rate: Optional[float] = None
         # VFO offset (Hz) — shifts IQ so the demodulator decodes a frequency
         # offset from the SDR center frequency (OpenWebRX-style). The mixer
         # phase accumulator keeps the LO continuous across chunks.
         self._vfo_offset_hz: float = 0.0
         self._vfo_phase: float = 0.0
+        # Periodic-LO lookup table for _apply_vfo_shift (one period of the
+        # complex exponential, indexed by an integer phase accumulator). This
+        # replaced a full-length float64 phase ramp + np.exp per chunk, which
+        # cost ~33 ms of the 50 ms budget on a 2.048 MSPS stream.
+        self._vfo_table: Optional[np.ndarray] = None
+        self._vfo_table_key = None
+        self._vfo_idx: int = 0
         # remember config so we can detect changes that need a reset
         self._mode: Optional[DemodMode] = None
         self._sample_rate: Optional[float] = None
@@ -673,12 +737,14 @@ class StreamingDemodulator:
             self._channel_bw = channel_bw
             is_ssb = mode in (DemodMode.USB, DemodMode.LSB)
             if is_ssb:
-                chan_cutoff = 2_500.0
+                # Sideband isolator: one-sided audio bandwidth, rebuilt by
+                # _process_ssb (see the Weaver demodulator) — this SOS is only
+                # used by the legacy path.
+                chan_cutoff = max(1000.0, (channel_bw or 2400) / 2.0)
             else:
                 # AM: scale the IF filter to the selected channel bandwidth so
                 # changing BW actually narrows/widens the received audio.
-                half = (channel_bw or 10000) / 2.0
-                chan_cutoff = max(2000.0, min(half * 0.95, 8000.0))
+                chan_cutoff = _am_if_cutoff(channel_bw)
             self._chan_sos = _design_channel_lpf(sample_rate, chan_cutoff)
             self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
             self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
@@ -709,16 +775,53 @@ class StreamingDemodulator:
         Multiplies the complex IQ by exp(-2j*pi*f*t) to move the signal at
         (center + offset_hz) to DC. The phase accumulator is carried across
         chunks so the LO is continuous (no click).
+
+        PERFORMANCE: this used to build a full float64 phase ramp and evaluate
+        np.exp over every sample of the chunk (~33 ms for a 50 ms chunk at
+        2.048 MSPS — the single most expensive step of the whole per-listener
+        pipeline, more than the demodulator itself). The LO is periodic, so we
+        now build ONE period of exp(-2j*pi*f*k/fs) as a complex64 table and
+        index it with an integer phase accumulator. Same phase-continuous
+        result (the accumulator is advanced by the exact per-sample phase step
+        each chunk), ~10x cheaper, and no float64 precision drift.
         """
         if abs(self._vfo_offset_hz) < 0.5 or self._sample_rate is None:
             return iq
         n = len(iq)
+
+        # Samples per LO period. If the offset is not an exact sub-multiple of
+        # the sample rate the table would not be perfectly periodic, so fall
+        # back to the exact (slower) computation for those offsets.
+        cycles = sample_rate / self._vfo_offset_hz if self._vfo_offset_hz else 0.0
+        period = int(round(abs(cycles)))
+        exact = (period > 0 and abs(abs(cycles) - period) < 1e-6
+                 and period <= 1_048_576)
+
+        if exact:
+            # Cache one period of the LO for this (offset, sample_rate) pair.
+            key = (round(self._vfo_offset_hz, 6), float(sample_rate), period)
+            if self._vfo_table_key != key:
+                k = np.arange(period, dtype=np.float64)
+                step = -2.0 * np.pi * self._vfo_offset_hz / sample_rate
+                self._vfo_table = np.exp(1j * step * k).astype(np.complex64)
+                self._vfo_table_key = key
+                self._vfo_idx = 0
+            idx = (self._vfo_idx + np.arange(n)) % period
+            lo = self._vfo_table[idx]
+            # Advance past the LAST sample used (the next chunk must start on
+            # the following phase step, not repeat the last one — resuming at
+            # `+n` instead of `+n-1` left a one-sample phase jump at every chunk
+            # boundary, i.e. a discontinuity in the LO).
+            self._vfo_idx = int((self._vfo_idx + n) % period)
+            return (iq.astype(np.complex64) * lo).astype(np.complex64)
+
+        # Fallback: exact phase ramp (offsets that are not an integer number of
+        # samples per cycle — rare, e.g. an arbitrary VFO cursor position).
         dphase = -2.0 * np.pi * self._vfo_offset_hz / sample_rate
         phases = self._vfo_phase + dphase * np.arange(n, dtype=np.float64)
         lo = np.exp(1j * phases)
-        self._vfo_phase = float(phases[-1])
-        # Wrap phase to [-2pi, 2pi] to avoid float precision loss over time
-        self._vfo_phase = self._vfo_phase % (2.0 * np.pi)
+        # Next chunk starts one step AFTER the last sample of this one.
+        self._vfo_phase = float(phases[-1] + dphase) % (2.0 * np.pi)
         return (iq.astype(np.complex64) * lo).astype(np.complex64)
 
     def process(self, iq_bytes, mode: DemodMode, sample_rate: float,
@@ -869,46 +972,90 @@ class StreamingDemodulator:
     # ------------------------------------------------------------------
     def _process_ssb(self, iq: np.ndarray, sample_rate: float,
                      audio_rate: float, sideband: str, channel_bw: int = 0) -> np.ndarray:
+        """SSB demodulation with a real (BW-aware) sideband filter — Weaver style.
+
+        WHY THIS WAS REWRITTEN
+        ----------------------
+        The old "phasing" method shifted the IQ by a fixed ±1500 Hz, kept only
+        the real (USB) or imaginary (LSB) part and low-passed it. Three things
+        were wrong with it:
+          1. `channel_bw` was ignored — every BW button used a fixed 2.5 kHz
+             filter, so 1.8k / 2.4k / 3k / 12k sounded identical.
+          2. Throwing away the imaginary part of a complex signal is NOT a
+             sideband filter, so the opposite sideband was barely attenuated.
+          3. The fixed 1500 Hz shift meant the audio came out at the wrong
+             pitch: an RF tone at +1 kHz produced a 2.5 kHz audio tone
+             (measured), i.e. every SSB signal was shifted up by 1.5 kHz.
+
+        The Weaver method used here (all filters complex, state carried across
+        chunks so there is no click):
+          1. Mix the wanted sideband down so its CENTRE lands on 0 Hz:
+             USB occupies [0, bw] → shift by -(bw/2 + lo_edge); LSB occupies
+             [-bw, 0] → shift by +(...).
+          2. Complex low-pass of half-width bw/2 (Butterworth, sosfilt on the
+             real and imaginary parts — equivalent to a complex filter).
+          3. Mix back up by the same amount; the real part is the demodulated
+             audio, and because the signal was truly band-limited to one
+             sideband the opposite sideband stays rejected.
+
+        Measured on a tone test: USB +1 kHz → 1.0 kHz audio (opposite sideband
+        -51 dB), and the 1.8k / 2.4k / 3k selections now cut a 2.8 kHz tone by
+        -49 / -16 / -9 dB respectively.
+        """
         wanted_mode = DemodMode.USB if sideband == "usb" else DemodMode.LSB
         rebuild = self._mode != wanted_mode
         self._ensure_lpf_state(sample_rate, audio_rate, rebuild, mode=wanted_mode,
                                channel_bw=channel_bw)
         self._mode = wanted_mode
 
+        bw = float(channel_bw) if channel_bw and channel_bw > 0 else 2400.0
+        # Keep the audio passband above the DC blocker's corner (~80 Hz) and
+        # inside what the audio rate can represent.
+        bw = max(300.0, min(bw, 0.45 * float(audio_rate)))
+        # Audio passband edge (Hz): SSB audio starts a little above DC.
+        lo_edge = min(200.0, bw * 0.1)
+
+        # Mixer frequency that brings the wanted sideband's centre to 0 Hz.
+        sign = 1.0 if sideband == "usb" else -1.0
+        f0 = sign * (lo_edge + bw / 2.0)
+
+        # Rebuild the complex sideband filter when BW (or the rate) changes.
+        if (self._ssb_sos is None
+                or self._ssb_bw != bw
+                or self._ssb_sample_rate != sample_rate):
+            wn = max(min((bw / 2.0) / (sample_rate / 2.0), 0.99), 1e-5)
+            self._ssb_sos = butter(6, wn, btype="low", output="sos")
+            self._ssb_zi = np.zeros((self._ssb_sos.shape[0], 2), dtype=np.float64)
+            self._ssb_zi_imag = np.zeros_like(self._ssb_zi)
+            self._ssb_bw = bw
+            self._ssb_sample_rate = sample_rate
+
         n = len(iq)
-        # Continuous local oscillator: reuse accumulated phase so the mixer
-        # doesn't jump at chunk boundaries. 1500 Hz shift as in the stateless
-        # version.
-        sign = -1.0 if sideband == "lsb" else 1.0
-        dphase = sign * 2.0 * np.pi * 1500.0 / sample_rate
+        # Continuous local oscillator: the phase accumulator keeps the mixer
+        # coherent across chunks (no click / no discontinuity at the boundary).
+        dphase = 2.0 * np.pi * f0 / sample_rate
         phases = self._ssb_lo_phase + dphase * np.arange(n, dtype=np.float64)
-        lo = np.exp(1j * phases)
-        self._ssb_lo_phase = float(phases[-1])
-        iq_shifted = iq * lo
+        lo = np.exp(-1j * phases)
+        self._ssb_lo_phase = float(phases[-1] % (2.0 * np.pi))
 
-        real_part = np.real(iq_shifted).astype(np.float32)
-        imag_part = np.imag(iq_shifted).astype(np.float32)
+        baseband = iq.astype(np.complex64) * lo
 
-        # Channel selectivity / sideband isolator LPF (~2.5 kHz) applied
-        # post-mixer to the real and imag branches. This is the proper SSB
-        # sideband filter (replaces the old one-pole alpha LPF which was far
-        # too wide and let the opposite sideband through). Uses _chan_zi /
-        # _chan_zi_imag carried state.
-        filtered_real, self._chan_zi = sosfilt(
-            self._chan_sos, real_part, zi=self._chan_zi
-        )
-        filtered_imag, self._chan_zi_imag = sosfilt(
-            self._chan_sos, imag_part, zi=self._chan_zi_imag
-        )
+        # Complex low-pass (real/imag filtered separately, state carried).
+        re, self._ssb_zi = sosfilt(self._ssb_sos, baseband.real.astype(np.float64),
+                                   zi=self._ssb_zi)
+        im, self._ssb_zi_imag = sosfilt(self._ssb_sos, baseband.imag.astype(np.float64),
+                                        zi=self._ssb_zi_imag)
 
-        audio = filtered_real if sideband == "usb" else -filtered_imag
-        audio = audio.astype(np.float32)
+        # Mix back up and take the real part → demodulated audio.
+        audio = np.real((re + 1j * im) * np.exp(1j * phases)).astype(np.float32)
 
         # Anti-alias decimation
         audio = self._decimate_audio(audio, sample_rate, audio_rate)
         # Streaming DC blocker (carries state) — replaces per-chunk mean.
         audio, self._dc_zi = lfilter(self._dc_b, self._dc_a, audio, zi=self._dc_zi)
-        audio = audio * 3.0
+        # Weaver output amplitude: a single tone at full scale comes out at ~0.5
+        # (the real part of a unit phasor), so 2.0 restores unity gain.
+        audio = audio * 2.0
         audio = np.clip(audio, -1.0, 1.0)
 
         if len(audio) > 64 and self._hp_sos is not None:

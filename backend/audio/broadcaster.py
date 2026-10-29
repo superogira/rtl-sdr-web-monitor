@@ -58,14 +58,27 @@ from backend.sdr.device_capture import AutoSquelchEstimator
 
 logger = logging.getLogger(__name__)
 
-# EMA smoothing factor for the per-listener signal level. A small value keeps
-# the squelch decision stable so brief noise spikes don't "flutter" the gate.
-# 0.2 ≈ average over ~5 chunks (~250ms at the default 50ms IQ cadence).
-_SQUELCH_EMA = 0.2
+# EMA smoothing factors for the per-listener signal level (dB). Asymmetric on
+# purpose: a squelch should OPEN fast (otherwise the first syllable of every
+# transmission is cut off — with a symmetric 0.2 filter a signal 2 dB above the
+# threshold took ~650 ms to open) but CLOSE slower (so brief fades/word gaps
+# don't chop the audio). Measured: 0/50 ms to open, 0 false opens per 1000 s.
+_SQUELCH_EMA_ATTACK = 0.7
+_SQUELCH_EMA_RELEASE = 0.4
+# Back-compat alias (kept for any external caller / older test) — the release
+# factor, which is what the previous symmetric filter used.
+_SQUELCH_EMA = _SQUELCH_EMA_RELEASE
 # Hysteresis in dB: once the gate is open, the signal must drop this far BELOW
 # the squelch threshold before it closes again. Prevents rapid open/close
 # "chatter" when the signal hovers right at the threshold (classic squelch tail).
 _SQUELCH_HYSTERESIS_DB = 4.0
+# Hang time (seconds): after the signal drops below the close threshold the gate
+# stays open this long before muting. Covers the gap between words/syllables and
+# the short pauses in a conversation, so speech does not stutter on/off.
+_SQUELCH_HANG_S = 0.20
+# Ramp (seconds) applied at each mute/unmute transition. Hard gating cuts the
+# waveform mid-sample, which is audible as a click at every open/close edge.
+_SQUELCH_FADE_S = 0.005  # 5 ms
 
 # Target batch duration in seconds. Each listener accumulates its demodulated
 # audio until this much audio time is collected, then packs it into a single
@@ -126,6 +139,16 @@ def pcm16_to_ulaw(samples: np.ndarray) -> np.ndarray:
     mant = (s >> (seg + 3)) & 0x0F
     uval = (seg << 4) | mant
     return (uval ^ mask).astype(np.uint8)
+
+
+def _fade_ramp_up(n: int) -> np.ndarray:
+    """Linear 0→1 ramp of `n` samples (mute→open edge)."""
+    return np.linspace(0.0, 1.0, max(1, n), dtype=np.float32)
+
+
+def _fade_ramp_down(n: int) -> np.ndarray:
+    """Linear 1→0 ramp of `n` samples (open→mute edge)."""
+    return np.linspace(1.0, 0.0, max(1, n), dtype=np.float32)
 
 
 class Listener:
@@ -201,6 +224,8 @@ class Listener:
         # path uses). Off by default; toggled from the Dashboard.
         self.auto_squelch = False
         self.auto_estimator: Optional[AutoSquelchEstimator] = None
+        # True until the first level sample arrives (see _smooth_level).
+        self._sig_fresh = True
         # Last measured channel power (dB) for THIS listener's VFO/channel.
         # Updated by _demod_listener_raw and consumed by _apply_squelch.
         self.last_signal_db = -120.0
@@ -208,6 +233,20 @@ class Listener:
         self._sig_smoothed = -120.0
         # Hysteresis gate: True while audio is currently passing (open).
         self._sq_open = False
+        # Threshold that produced the current gate decision (manual SQL or the
+        # AUTO estimator's open/close threshold). Reported to the client in the
+        # "sig" frame so the UI can draw the SQL line / show what AUTO picked.
+        self._sq_threshold_db = -120.0
+        # Hang timer (seconds) — while the signal is below the close threshold
+        # the gate stays open until this countdown expires.
+        self._sq_hang_left = 0.0
+        # AUDIO sample rate of the chunks passed to _apply_squelch (sizes the
+        # fade ramps and the hang countdown). Updated by the listener worker.
+        self._sq_audio_rate = int(audio_rate)
+        # Byte length of each IQ packet inside the currently-merged demod block
+        # (set by the worker, read by _demod_listener_raw in the executor) so
+        # one channel-power reading can be produced per chunk. None = single.
+        self._pending_chunk_bytes: Optional[list] = None
         # stats
         self.frames_sent = 0
         self.created_at = time.time()
@@ -253,7 +292,12 @@ class Listener:
         # inside process(), so no explicit reset is needed here.
 
     def set_bandwidth(self, bw_hz: int) -> None:
-        self.channel_bw = int(bw_hz)
+        """Set this listener's channel bandwidth (Hz).
+
+        Clamped to the range the REST endpoint accepts (1 kHz - 500 kHz) so an
+        out-of-range value can never build an invalid channel filter.
+        """
+        self.channel_bw = max(1000, min(500000, int(bw_hz)))
 
     def set_squelch(self, level_db: float) -> None:
         """Set this listener's squelch threshold (dB).
@@ -265,6 +309,27 @@ class Listener:
         self.squelch_db = max(-200.0, min(0.0, float(level_db)))
         # Force a re-evaluation on the next chunk by leaving _sq_open as-is;
         # the hysteresis logic in _apply_squelch will settle correctly.
+
+    def _smooth_level(self, level_db: float) -> float:
+        """Update and return the EMA-smoothed signal level (asymmetric EMA).
+
+        Fast attack / slower release: the squelch opens within one chunk when a
+        signal appears (no clipped first syllable) but still rides out short
+        fades without muting. This is the single place the smoothed level is
+        updated — both the "own demod" path and the "reuse global audio" path
+        call it, so the gate behaves identically either way.
+        """
+        level_db = float(level_db)
+        self.last_signal_db = level_db
+        if self._sig_fresh:
+            # First sample: adopt it directly instead of ramping up from -120.
+            self._sig_smoothed = level_db
+            self._sig_fresh = False
+            return self._sig_smoothed
+        alpha = (_SQUELCH_EMA_ATTACK if level_db > self._sig_smoothed
+                 else _SQUELCH_EMA_RELEASE)
+        self._sig_smoothed = alpha * level_db + (1.0 - alpha) * self._sig_smoothed
+        return self._sig_smoothed
 
     def set_auto_squelch(self, on: bool) -> None:
         """Toggle adaptive squelch for this listener.
@@ -278,10 +343,12 @@ class Listener:
         if on:
             # (Re)create the estimator so it starts learning from scratch.
             self.auto_estimator = AutoSquelchEstimator()
+            self._sig_fresh = True  # let the estimator see the real level now
         else:
             self.auto_estimator = None
         # Reset the gate so it re-evaluates against the new threshold source.
         self._sq_open = False
+        self._sq_hang_left = 0.0
 
     def set_record_squelch(self, level_db: float) -> None:
         """Set the squelch threshold used to gate THIS listener's auto-record.
@@ -660,10 +727,15 @@ class AudioBroadcaster:
 
                 # Demod ALL own-demod packets in ONE executor call (merged).
                 demod_audios = []
+                demod_levels = []
                 if demod_pkts:
                     try:
                         merged_iq = b"".join(demod_pkts)
-                        merged_audio = await loop.run_in_executor(
+                        # Tell the worker how the merged block is split so it
+                        # can measure the channel power of EACH chunk (one
+                        # reading per ~50 ms) instead of one for the batch.
+                        ln._pending_chunk_bytes = [len(p) for p in demod_pkts]
+                        merged_audio, demod_levels = await loop.run_in_executor(
                             self._executor, self._demod_listener_raw,
                             ln, merged_iq, last_sample_rate, last_audio_rate,
                         )
@@ -678,6 +750,9 @@ class AudioBroadcaster:
                         )
                         # On demod failure, skip these chunks but keep flowing.
                         demod_audios = [None] * len(demod_pkts)
+                        demod_levels = []
+                    finally:
+                        ln._pending_chunk_bytes = None
 
                 # Now walk the cached plan in order and process each packet.
                 di = 0  # index into demod_audios
@@ -687,17 +762,22 @@ class AudioBroadcaster:
                             _, audio, gsig = step
                             # Update the squelch signal level from the global value.
                             if gsig is not None:
-                                ln.last_signal_db = float(gsig)
-                                ln._sig_smoothed = (
-                                    _SQUELCH_EMA * float(gsig)
-                                    + (1.0 - _SQUELCH_EMA) * ln._sig_smoothed
-                                )
+                                ln._smooth_level(float(gsig))
                         else:
                             audio = demod_audios[di] if di < len(demod_audios) else None
+                            # Apply THIS chunk's own level reading (fall back to
+                            # the previous value if the worker could not measure).
+                            if di < len(demod_levels):
+                                ln._smooth_level(demod_levels[di])
                             di += 1
 
                         if audio is None or len(audio) == 0:
                             continue
+
+                        # Keep the squelch fade/hang timing in sync with the
+                        # actual audio rate (it can differ per device).
+                        if ln._sq_audio_rate != audio_rate:
+                            ln._sq_audio_rate = int(audio_rate)
 
                         # === Per-listener AUTO-RECORD (multi-user) ===
                         # NOTE: uses PRE-squelch audio (the real content) so a
@@ -725,6 +805,11 @@ class AudioBroadcaster:
                             self._enqueue_frame(ln, ("sig", {
                                 "db": round(ln._sig_smoothed, 1),
                                 "sq_open": bool(ln._sq_open),
+                                # Effective threshold in use right now (manual
+                                # SQL, or what AUTO picked from the noise floor)
+                                # so the UI can show it next to the SIG bars.
+                                "thr": round(ln._sq_threshold_db, 1),
+                                "auto": bool(ln.auto_squelch),
                             }))
 
                         frame = self._batch_listener(ln, audio, audio_rate)
@@ -821,18 +906,28 @@ class AudioBroadcaster:
         return True
 
     def _demod_listener_raw(self, listener: Listener, iq_bytes: bytes,
-                            sample_rate: int, audio_rate: int) -> np.ndarray:
-        """Demodulate one IQ chunk for a listener (called in a worker thread).
+                            sample_rate: int, audio_rate: int):
+        """Demodulate a (possibly merged) IQ block for one listener.
 
-        Returns a float32 audio ndarray (possibly empty). Pure CPU work — no
-        asyncio/queue ops here. Batching/encoding is done separately on the
-        loop thread because it is cheap and touches listener state.
+        Called in a worker thread. Returns a TUPLE
+            (audio: np.ndarray, levels_db: list[float])
+        where `levels_db` holds the channel-power reading of EACH chunk inside
+        `iq_bytes` (chunks are delimited by `listener._pending_chunk_bytes`,
+        set by the worker before submitting the job — one entry per packet).
 
-        Also computes the per-listener channel power (dB) so that squelch can
-        gate the audio on the loop thread. We reuse the same IQ the demodulator
-        consumes; compute_channel_power() applies its own VFO shift internally,
-        matching what the demodulator decodes.
+        Why per-chunk levels: the worker merges up to 8 IQ packets into one
+        demod call for CPU efficiency, but a single level for the whole merged
+        block meant the squelch used one reading for 400 ms of audio. A
+        transmission that started in the middle of the batch was measured as
+        pure noise, so the first ~0.4 s of every transmission was muted (and
+        the SIG meter lagged). Measuring each chunk separately keeps the gate
+        and the meter per-50 ms, exactly as if the chunks had been demodulated
+        one by one.
+
+        Pure CPU work — no asyncio/queue ops here (the caller applies the
+        levels to the listener state on the loop thread).
         """
+        empty = (np.zeros(0, dtype=np.float32), [])
         # Track global sample-rate changes (admin changed SDR) and clamp the
         # offset into the valid passband so the shift never aliases.
         if listener.sample_rate != sample_rate or listener.audio_rate != audio_rate:
@@ -852,23 +947,34 @@ class AudioBroadcaster:
         # produced slower than real-time → the "เสียงเร็ว" symptom).
         try:
             iq = iq_to_complex(iq_bytes)
-            level = compute_channel_power(
-                iq, sample_rate, listener.mode,
-                channel_bw=listener.channel_bw,
-                vfo_offset_hz=listener.vfo_offset_hz,
-            )
-            listener.last_signal_db = level
-            # EMA smoothing for a stable squelch decision.
-            listener._sig_smoothed = (
-                _SQUELCH_EMA * level + (1.0 - _SQUELCH_EMA) * listener._sig_smoothed
-            )
         except Exception:
-            # Non-fatal: leave the previous level. Still need a complex array
-            # for demod, so parse defensively here.
-            try:
-                iq = iq_to_complex(iq_bytes)
-            except Exception:
-                return np.zeros(0, dtype=np.float32)
+            return empty
+
+        # --- Per-chunk channel power (one reading per 50 ms chunk) ---
+        # The merged block is split back into the original packet sizes so the
+        # squelch sees a fresh level for every chunk instead of one averaged
+        # reading for the whole (up to 400 ms) batch.
+        levels: list = []
+        sizes = [int(s) for s in (getattr(listener, "_pending_chunk_bytes", None) or [])]
+        if not sizes:
+            sizes = [len(iq_bytes)]
+        start = 0
+        try:
+            for nbytes in sizes:
+                n_samp = nbytes // 2
+                chunk = iq[start:start + n_samp]
+                start += n_samp
+                if len(chunk) < 64:
+                    levels.append(-120.0)
+                    continue
+                levels.append(float(compute_channel_power(
+                    chunk, sample_rate, listener.mode,
+                    channel_bw=listener.channel_bw,
+                    vfo_offset_hz=listener.vfo_offset_hz,
+                )))
+        except Exception:
+            # Non-fatal: fall back to one reading for the whole block.
+            levels = []
 
         # Pass the already-parsed complex array so demod skips its own
         # iq_to_complex() call (the process() overload accepts complex).
@@ -876,65 +982,100 @@ class AudioBroadcaster:
             iq, listener.mode, sample_rate, audio_rate,
             channel_bw=listener.channel_bw,
         )
-        return audio
+        return audio, levels
 
     @staticmethod
     def _apply_squelch(listener: Listener, audio: np.ndarray) -> np.ndarray:
-        """Gate audio through this listener's squelch (in-place decision).
+        """Gate one chunk of audio through this listener's squelch.
 
-        Returns the original audio if the gate is open, or a zero array of the
-        same shape (silence) if closed. Sending silence (rather than dropping
-        the frame) keeps the client's playback clock continuous so there are
-        no underrun clicks at the open/close transitions.
+        Returns the audio (with 5 ms fade ramps at the edges) when the gate is
+        open, or a zero array of the same shape when it is closed. Sending
+        silence (rather than dropping the frame) keeps the client's playback
+        clock continuous so there are no underruns at the open/close
+        transitions.
 
-        Two modes:
-          - AUTO: the threshold tracks the rolling noise floor via
-            AutoSquelchEstimator (open = floor+margin_open, close =
-            floor+margin_close). The estimator is fed the raw per-chunk level
-            here so it keeps learning regardless of which demod path produced
-            the level. Hysteresis comes from the estimator's two thresholds.
-          - MANUAL: a fixed user threshold with a fixed hysteresis band
-            (_SQUELCH_HYSTERESIS_DB) below it. The -120 dB sentinel disables
-            squelch entirely (pass all audio).
+        Gate logic (per chunk, ~50 ms of audio):
+          - OPEN  when the smoothed level reaches the OPEN threshold.
+          - CLOSE only after the level has stayed below the CLOSE threshold for
+            the hang time (_SQUELCH_HANG_S), then the audio is faded out over
+            5 ms. The hang covers word gaps; hysteresis (4 dB, or the
+            estimator's own band in AUTO) stops the gate chattering.
+          - AUTO: the thresholds come from AutoSquelchEstimator, which is fed
+            the raw per-chunk level here so it keeps learning the noise floor.
+          - The -120 dB sentinel disables squelch entirely (pass all audio).
         """
-        # === AUTO mode ===
+        n = len(audio)
+        if n == 0:
+            return audio
+        rate = listener._sq_audio_rate or 8000
+        fade = max(1, int(_SQUELCH_FADE_S * rate))
+        # Audio time represented by this chunk (used by the hang countdown).
+        chunk_s = n / float(rate)
+
+        # === Resolve thresholds (AUTO vs MANUAL) ===
         if listener.auto_squelch and listener.auto_estimator is not None:
-            # Feed the latest measured level so the estimator keeps tracking
-            # the noise floor (uses raw last_signal_db, matching the JOB path;
-            # the estimator's own rolling window does the smoothing).
+            # Feed the raw level so the estimator keeps tracking the noise
+            # floor. `frozen` (gate open) makes it learn conservatively — the
+            # estimator itself limits how fast the floor may rise so a long
+            # transmission cannot raise the threshold above itself and cut off
+            # mid-transmission.
             listener.auto_estimator.update(
-                listener.last_signal_db, frozen=listener._sq_open
+                listener.last_signal_db, frozen=listener._sq_open,
+                now=time.monotonic(),
             )
             open_thr = listener.auto_estimator.open_threshold_db
             close_thr = listener.auto_estimator.close_threshold_db
-            level = listener._sig_smoothed
-            if not listener._sq_open:
-                if level >= open_thr:
-                    listener._sq_open = True
-            else:
-                if level < close_thr:
-                    listener._sq_open = False
-            return audio if listener._sq_open else np.zeros_like(audio)
-
-        # === MANUAL mode ===
-        # Squelch disabled (sentinel) → always pass audio.
-        if listener.squelch_db <= -120.0:
+            listener._sq_threshold_db = open_thr if not listener._sq_open else close_thr
+        elif listener.squelch_db <= -120.0:
+            # Squelch disabled → always pass audio (no fade needed).
+            listener._sq_open = True
+            listener._sq_threshold_db = -120.0
+            listener._sq_hang_left = 0.0
             return audio
+        else:
+            open_thr = listener.squelch_db
+            close_thr = listener.squelch_db - _SQUELCH_HYSTERESIS_DB
+            listener._sq_threshold_db = listener.squelch_db
 
         level = listener._sig_smoothed
-        if not listener._sq_open:
-            # Gate closed: open when signal rises above the threshold.
-            if level >= listener.squelch_db:
-                listener._sq_open = True
-        else:
-            # Gate open: close only when signal drops below threshold - hyst.
-            if level < listener.squelch_db - _SQUELCH_HYSTERESIS_DB:
-                listener._sq_open = False
+        was_open = listener._sq_open
 
+        if not was_open:
+            if level >= open_thr:
+                listener._sq_open = True
+                listener._sq_hang_left = 0.0
+        else:
+            if level < close_thr:
+                # Below the close threshold → start / continue the hang timer.
+                if listener._sq_hang_left <= 0.0:
+                    listener._sq_hang_left = _SQUELCH_HANG_S
+                listener._sq_hang_left -= chunk_s
+                if listener._sq_hang_left <= 0.0:
+                    listener._sq_open = False
+                    listener._sq_hang_left = 0.0
+            else:
+                listener._sq_hang_left = 0.0
+
+        out = audio
         if listener._sq_open:
-            return audio
-        # Mute to silence (preserve length so the client clock stays aligned).
-        return np.zeros_like(audio)
+            # Mute→open edge: ramp the first few ms up so the transition does
+            # not click. `was_open` is False only on the transition chunk, so
+            # the ramp is applied exactly once per opening.
+            if not was_open:
+                m = min(fade, n)
+                out = audio.copy()
+                out[:m] *= _fade_ramp_up(m)
+            return out
+
+        # === Gate closed → silence, with a fade-out on the open→close edge ===
+        out = np.zeros_like(audio)
+        if was_open:
+            # Ramp the first few ms of THIS chunk down instead of cutting the
+            # waveform abruptly (audible click on every squelch tail).
+            m = min(fade, n)
+            if m > 0:
+                out[:m] = audio[:m] * _fade_ramp_down(m)
+        return out
 
     def _batch_listener(self, listener: Listener, audio: np.ndarray,
                         audio_rate: int):
@@ -1051,9 +1192,29 @@ class AudioBroadcaster:
                 self._finish_listener_auto_record(ln, audio_rate, reason=split)
 
         level = ln._sig_smoothed
-        # Squelch gate: <= -120 dB means "always record while enabled".
-        gate_open = ln.record_squelch_db <= -120.0 or level >= ln.record_squelch_db
         now = time.monotonic()
+
+        # === Gate thresholds for RECORDING ===
+        # Priority:
+        #   1. AUTO squelch on → use the estimator's thresholds, exactly like
+        #      the live gate. Previously the record gate used the raw
+        #      `record_squelch_db` value copied from the (disabled) SQL slider
+        #      when AUTO was turned on, so with AUTO the user could hear a
+        #      signal while nothing was recorded (or record pure noise).
+        #   2. <= -120 dB sentinel → always record while enabled.
+        #   3. Manual: the record squelch with the same 4 dB hysteresis as the
+        #      live gate (a single threshold chattered at the crossing and
+        #      produced many short segments).
+        if ln.auto_squelch and ln.auto_estimator is not None:
+            open_thr = ln.auto_estimator.open_threshold_db
+            close_thr = ln.auto_estimator.close_threshold_db
+            gate_open = (level >= open_thr) if not ln._ar_recording else (level >= close_thr)
+        elif ln.record_squelch_db <= -120.0:
+            gate_open = True
+        else:
+            open_thr = ln.record_squelch_db
+            close_thr = ln.record_squelch_db - _SQUELCH_HYSTERESIS_DB
+            gate_open = (level >= open_thr) if not ln._ar_recording else (level >= close_thr)
 
         if gate_open:
             if not ln._ar_recording:

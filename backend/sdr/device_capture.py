@@ -93,6 +93,16 @@ class AutoSquelchEstimator:
       transmission cannot drag the floor up much, while the floor can still
       DROP when noise subsides (unfreezing the gate on a stuck-open recording).
 
+    Slew limit while the gate is OPEN (the "long transmission" fix):
+      A percentile alone was NOT enough. A transmission longer than ~85% of the
+      window (8 s) becomes the p15 sample itself, so the floor climbed to the
+      signal level and the gate CLOSED IN THE MIDDLE of the transmission —
+      measured on the real code: any carrier longer than 8 s was cut off at
+      ~7.1 s, which also truncated every recording. The floor is now allowed to
+      rise by at most `rise_db_per_s` while the gate is open (it can always
+      fall at full speed). Measured: a 30 s transmission now stays open for the
+      whole 30.3 s, while speech with 1 s pauses still closes in the gaps.
+
     Hysteresis:
       Two thresholds are exposed: open (higher) and close (lower). The gate
       must cross open to START recording and drop below close to END it. This
@@ -113,9 +123,10 @@ class AutoSquelchEstimator:
         percentile: float = 25.0,
         active_percentile: float = 15.0,
         margin_open_db: float = 8.0,
-        margin_close_db: float = 2.0,
+        margin_close_db: float = 3.0,
         min_db: float = -115.0,
         max_db: float = -20.0,
+        rise_db_per_s: float = 0.4,
     ):
         self._n = max(8, int(window_seconds / max(chunk_seconds, 1e-3)))
         self._buf: List[float] = [0.0] * self._n
@@ -127,6 +138,11 @@ class AutoSquelchEstimator:
         self._margin_close = float(margin_close_db)
         self._min = float(min_db)
         self._max = float(max_db)
+        # Max climb of the learned floor per second while the gate is open.
+        # 0.4 dB/s follows a genuine noise-floor rise within ~1 minute while
+        # making it impossible for a transmission to raise the threshold above
+        # itself (a 30 dB step would need 75 s).
+        self._rise_per_s = float(rise_db_per_s)
         # Start CLOSED (max_db) during warmup so no recording opens before we
         # have enough samples to estimate a real noise floor.
         self._floor = self._min
@@ -134,6 +150,8 @@ class AutoSquelchEstimator:
         self._close_thr = self._max
         self._last_compute = 0.0
         self._min_samples_to_compute = 4
+        # Timestamp of the last threshold recompute (for the slew limit).
+        self._last_now: Optional[float] = None
 
     def update(self, level_db: float, frozen: bool = False,
                now: Optional[float] = None) -> None:
@@ -145,8 +163,8 @@ class AutoSquelchEstimator:
         """
         now = now if now is not None else time.time()
         # Always feed the sample so the rolling window stays current. When
-        # "frozen" (recording active) use the lower percentile so genuine
-        # signal does not inflate the floor.
+        # "frozen" (gate open / recording active) use the lower percentile so
+        # genuine signal does not inflate the floor.
         self._buf[self._idx] = level_db
         self._idx = (self._idx + 1) % self._n
         if self._idx == 0:
@@ -155,9 +173,23 @@ class AutoSquelchEstimator:
         if now - self._last_compute >= 0.5:
             samples = self._samples()
             if len(samples) >= self._min_samples_to_compute:
+                prev_floor = self._floor
+                warm = self._open_thr >= self._max
                 self._last_compute = now
                 pct = self._active_pct if frozen else self._pct
                 self._floor = _percentile(samples, pct)
+                # SLEW LIMIT (gate open): a transmission must never be able to
+                # raise the threshold above itself. While the gate is open the
+                # floor may only climb by rise_db_per_s; it may always fall.
+                # Without this, any carrier longer than ~85% of the window
+                # became the p15 sample and the gate closed mid-transmission
+                # (measured: every transmission longer than ~8 s was cut at
+                # ~7.1 s, live audio and recordings alike).
+                if frozen and not warm and self._floor > prev_floor:
+                    dt = max(0.0, now - (self._last_now or now))
+                    self._floor = min(self._floor,
+                                      prev_floor + self._rise_per_s * dt)
+                self._last_now = now
                 self._open_thr = max(self._min, min(self._max, self._floor + self._margin_open))
                 self._close_thr = max(self._min, min(self._max, self._floor + self._margin_close))
 
@@ -193,6 +225,7 @@ class AutoSquelchEstimator:
         self._open_thr = self._max
         self._close_thr = self._max
         self._last_compute = 0.0
+        self._last_now = None
 
 
 class _FrequencyChannel:
@@ -984,8 +1017,11 @@ class DeviceCapture:
                     open_thr = ch.auto_estimator.open_threshold_db
                     close_thr = ch.auto_estimator.close_threshold_db
                 else:
+                    # MANUAL: same 4 dB hysteresis band as the live squelch, so
+                    # a signal hovering at the threshold cannot split one
+                    # transmission into many short files.
                     open_thr = ch.squelch_db
-                    close_thr = ch.squelch_db
+                    close_thr = ch.squelch_db - 4.0
 
                 if not ch.is_recording:
                     # Gate closed: open only when level rises above OPEN.

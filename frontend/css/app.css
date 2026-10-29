@@ -261,6 +261,39 @@ a:hover {
     font-size: 0.75rem;
 }
 
+/* === Build versions (More menu) === */
+/* Small "footer" inside the More popover showing which app / audio / prefs
+   build the browser actually loaded. Monospace so the versions line up and are
+   easy to compare against a deploy; the separator line sets it apart from the
+   menu buttons above it. */
+.more-versions {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: help;
+}
+.more-ver-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    line-height: 1.3;
+}
+.more-ver-label {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.more-ver-value {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
 /* === Channel Bandwidth Selector (1.8k - 200k) === */
 .bw-selector {
     display: flex;

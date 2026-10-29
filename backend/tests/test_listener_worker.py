@@ -159,5 +159,79 @@ class WorkerSurvivesChannelChangeTests(unittest.TestCase):
         self.assertTrue(asyncio.run(run()))
 
 
+class PerChunkLevelTests(unittest.TestCase):
+    """The worker must produce ONE level reading per chunk of a merged batch.
+
+    Previously a whole batch (up to 8 chunks = 400 ms) was demodulated in one
+    call and measured ONCE, so the squelch used a single reading for 400 ms of
+    audio: a transmission that started mid-batch was measured as noise and its
+    first ~0.4 s were muted.
+    """
+
+    def setUp(self):
+        self.b = AudioBroadcaster()
+        self.b.center_freq_hz = 145_000_000
+        self.ln = Listener(
+            sample_rate=RATE, audio_rate=AUDIO_RATE, mode=DemodMode.FM,
+            channel_bw=12000, vfo_offset_hz=0.0,
+        )
+
+    def test_demod_raw_returns_one_level_per_chunk(self):
+        n = 8192
+        rng = np.random.default_rng(4)
+        # Three chunks of raw IQ; only the LAST one contains a carrier.
+        quiet = (0.003 * (rng.standard_normal(n) + 1j * rng.standard_normal(n)))
+        loud = quiet.copy()
+        loud += 0.05
+        chunks = []
+        for x in (quiet, quiet, loud):
+            raw = np.empty(2 * n)
+            raw[0::2] = x.real
+            raw[1::2] = x.imag
+            chunks.append(np.clip(raw * 127.5 + 127.5, 0, 255).astype(np.uint8).tobytes())
+
+        self.ln._pending_chunk_bytes = [len(c) for c in chunks]
+        audio, levels = self.b._demod_listener_raw(
+            self.ln, b"".join(chunks), RATE, AUDIO_RATE)
+        self.assertEqual(len(levels), 3, "one level per chunk is required")
+        self.assertGreater(len(audio), 0)
+        self.assertLess(levels[0], levels[2] - 10.0,
+                        f"carrier in the last chunk not detected: {levels}")
+
+    def test_worker_uses_the_per_chunk_levels(self):
+        """The listener's smoothed level must follow the LAST chunk of a batch."""
+        n = 8192
+        rng = np.random.default_rng(6)
+        quiet = 0.003 * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
+
+        def _bytes(x):
+            raw = np.empty(2 * n)
+            raw[0::2] = x.real
+            raw[1::2] = x.imag
+            return np.clip(raw * 127.5 + 127.5, 0, 255).astype(np.uint8).tobytes()
+
+        loud = quiet + 0.05
+        pkts = [( _bytes(quiet), RATE, AUDIO_RATE, None, None, None, None, None),
+                ( _bytes(loud), RATE, AUDIO_RATE, None, None, None, None, None)]
+        self.ln.iq_queue = _FakeQueue(pkts)
+
+        async def run():
+            task = asyncio.create_task(self.b._listener_worker(self.ln))
+            await asyncio.sleep(0.6)
+            alive = not task.done()
+            level = self.ln._sig_smoothed
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            return alive, level
+
+        alive, level = asyncio.run(run())
+        self.assertTrue(alive)
+        self.assertGreater(level, -60.0,
+                           f"worker did not apply the strong chunk's level ({level:.1f} dB)")
+
+
 if __name__ == "__main__":
     unittest.main()

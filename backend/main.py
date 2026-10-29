@@ -558,11 +558,25 @@ async def audio_websocket_endpoint(websocket: WebSocket):
         elif mtype == "mode":
             try:
                 listener.set_mode(str(msg["mode"]).upper())
+                await websocket.send_text(json.dumps({
+                    "type": "mode_ack",
+                    "mode": listener.mode.value,
+                }))
             except Exception as e:
                 logger_aud.warning(f"🔊 Bad mode control: {e}")
         elif mtype == "bandwidth":
             try:
-                listener.set_bandwidth(int(msg["bandwidth"]))
+                bw = int(msg["bandwidth"])
+                # Same range the REST endpoint enforces (1 kHz - 500 kHz):
+                # an out-of-range value would build an invalid filter and
+                # silently produce noise/garbage audio.
+                if not (1000 <= bw <= 500000):
+                    raise ValueError(f"bandwidth out of range: {bw}")
+                listener.set_bandwidth(bw)
+                await websocket.send_text(json.dumps({
+                    "type": "bandwidth_ack",
+                    "bandwidth": listener.channel_bw,
+                }))
             except Exception as e:
                 logger_aud.warning(f"🔊 Bad bandwidth control: {e}")
         elif mtype == "squelch":

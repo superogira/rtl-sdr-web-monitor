@@ -31,6 +31,10 @@ const SPEAKER_PAN = { left: -1, both: 0, right: 1 };
 const MAX_VFOS = 4;
 
 const LiveAudio = {
+    // Version of this file. Bumped on every change (same convention as App's
+    // VERSION) so the dashboard can show which build the browser actually
+    // loaded — useful to confirm a hard refresh picked up new code.
+    VERSION: 'v1.1-2026.10.29',
     // === Shared audio graph (one output device for all VFOs) ===
     ctx: null,
     masterGain: null,    // master volume → destination
@@ -454,6 +458,24 @@ const LiveAudio = {
     // mode/bandwidth/squelch/auto-* apply to ALL VFOs (shared UI controls).
     setMode(mode) { return this.sendControlAll({ type: "mode", mode: String(mode).toUpperCase() }); },
     setBandwidth(bwHz) { return this.sendControlAll({ type: "bandwidth", bandwidth: bwHz }); },
+    /** Push the dashboard's current mode + channel BW to ONE listener.
+     *
+     *  Called on every WS (re)connect: the server-side listener is created with
+     *  the SDR's global mode/bandwidth, so a refresh / reconnect / newly added
+     *  VFO would otherwise demodulate a different mode or bandwidth than the
+     *  UI shows. Values come from App (the single source of truth for this
+     *  tab's controls). */
+    _pushModeAndBw(idx) {
+        if (typeof App === 'undefined') return;
+        const mode = App.currentMode;
+        if (mode) {
+            this._sendControlVfo(idx, { type: "mode", mode: String(mode).toUpperCase() });
+        }
+        const bw = parseInt(App._channelBw, 10);
+        if (!isNaN(bw) && bw > 0) {
+            this._sendControlVfo(idx, { type: "bandwidth", bandwidth: bw });
+        }
+    },
     setSquelch(levelDb) { return this.sendControlAll({ type: "squelch", level: Number(levelDb) }); },
     setAutoSquelch(enabled) { return this.sendControlAll({ type: "auto_squelch", enabled: Boolean(enabled) }); },
     setAutoRecord(enabled, squelchDb) {
@@ -543,6 +565,14 @@ const LiveAudio = {
                     if (center > 0) {
                         this._sendControlVfo(idx, { type: "vfo", frequency: Math.round(center + off) });
                     }
+                    // === Push this tab's MODE and BANDWIDTH ===
+                    // A brand-new server-side listener starts with the SDR's
+                    // GLOBAL mode/bandwidth. Without these two messages the
+                    // dashboard could show "25k / USB" while the listener was
+                    // actually demodulating 12k / FM (e.g. after a refresh, a
+                    // reconnect, or when adding VFO B-D), so BW buttons looked
+                    // dead until the user pressed one.
+                    this._pushModeAndBw(idx);
                     // Push THIS user's pending squelch so the listener starts
                     // with the user's own SQL (independent of the global value
                     // or what other users have set). Falls back to the current
@@ -649,7 +679,7 @@ const LiveAudio = {
                     // flash the VFO row green so the operator can see which
                     // frequency is active at a glance.
                     if (typeof App !== 'undefined' && App._onVfoSig) {
-                        App._onVfoSig(idx, obj.db, !!obj.sq_open);
+                        App._onVfoSig(idx, obj.db, !!obj.sq_open, obj.thr, obj.auto);
                     }
                 } else if (obj.type === "vfo_ack") {
                     if (typeof App !== 'undefined' && App._onVfoAck) App._onVfoAck(idx, obj);
@@ -666,6 +696,15 @@ const LiveAudio = {
                     const v = this._vfos[idx];
                     if (v) v.squelch = obj.level;
                     if (typeof App !== 'undefined' && App._onSquelchAck) App._onSquelchAck(idx, obj);
+                } else if (obj.type === "bandwidth_ack") {
+                    // Server confirmed this listener's channel bandwidth (it
+                    // clamps out-of-range values), so the UI can trust that the
+                    // DSP and the BW buttons agree.
+                    const v = this._vfos[idx];
+                    if (v) v.channelBw = obj.bandwidth;
+                } else if (obj.type === "mode_ack") {
+                    const v = this._vfos[idx];
+                    if (v) v.mode = obj.mode;
                 }
             } catch {
                 // non-JSON (e.g. "pong") — ignore
