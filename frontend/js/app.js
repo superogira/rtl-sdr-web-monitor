@@ -2,14 +2,12 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.11-2026.10.29',  // Squelch + BW audit fixes: per-chunk level
-                               // measurement (was 4% of the chunk / one reading
-                               // per 400 ms batch), fast-attack EMA + 200 ms
-                               // hang + 5 ms fades, AUTO squelch no longer cuts
-                               // long transmissions, record gate follows AUTO,
-                               // BW-aware Weaver SSB (was fixed 2.5 kHz and
-                               // +1.5 kHz off-pitch), FM IF floor, per-mode BW
-                               // choices, and mode/BW pushed on WS connect.
+    VERSION: 'v1.12-2026.10.29',  // Signal TAG now appends the bookmark name
+                               // ("168.4700 · วิทยุตำรวจ") and re-resolves it when
+                               // a bookmark is added/renamed/deleted. Earlier:
+                               // squelch + BW audit (per-chunk level, fast-attack
+                               // EMA, AUTO long-TX fix, Weaver SSB, per-mode BW)
+                               // and the shared VFO passband limit.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
@@ -2554,9 +2552,77 @@ const App = {
     _waterfallZoomMax: 20,          // max zoom factor
 
     // === Signal Tag (frequency annotations on strong signals) ===
-    _signalAnnotations: [],         // active annotation objects {freq, rightFreq, y, ...}
+    _signalAnnotations: [],         // active annotation objects {freq, leftFreq, rightFreq, y, bmName, ...}
     _sigTagLastShown: {},           // freqKey → timestamp of last shown annotation
     _sigTagColorIdx: 0,             // color cycle counter for annotations
+
+    /**
+     * Find the bookmark that belongs to a detected signal, if any.
+     *
+     * The peak frequency TAG reports is not exactly the frequency the operator
+     * bookmarked: the FFT resolves the spectrum into bins of sample_rate/bins
+     * (≈2 kHz at 2.048 MSPS / 1024 bins) and the peak of a modulated signal
+     * wanders inside its own bandwidth, so an exact match would almost never
+     * happen. A bookmark counts as "this signal" when either:
+     *   - it lies inside the signal's measured band [leftHz, rightHz], or
+     *   - it is within `tolerance` of the peak, where tolerance is
+     *     max(MIN_MATCH_HZ, two bins) so narrow signals are still matched.
+     * When several bookmarks qualify (e.g. two channels 12.5 kHz apart) the
+     * closest one to the peak wins.
+     *
+     * Returns the bookmark object or null.
+     */
+    _bookmarkForSignal(peakHz, leftHz, rightHz) {
+        if (!Array.isArray(this.bookmarks) || this.bookmarks.length === 0) return null;
+        const sr = this._sampleRate || 2048000;
+        // Bin width from the spectrum actually being drawn (falls back to the
+        // default 1024 bins) so the tolerance tracks the FFT size setting.
+        const bins = this._fftBins || 1024;
+        const binHz = sr / bins;
+        const tolerance = Math.max(6250, binHz * 2);   // ≥ 6.25 kHz, ≥ 2 bins
+        const lo = Math.min(leftHz, peakHz) - tolerance;
+        const hi = Math.max(rightHz, peakHz) + tolerance;
+        let best = null;
+        let bestDist = Infinity;
+        for (const bm of this.bookmarks) {
+            const f = Number(bm && bm.freqHz);
+            if (!isFinite(f)) continue;
+            if (f < lo || f > hi) continue;
+            const dist = Math.abs(f - peakHz);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = bm;
+            }
+        }
+        return best;
+    },
+
+    /** The name to draw after a TAG frequency ('' when there is no bookmark). */
+    _bookmarkLabelFor(ann) {
+        if (!ann || !ann.bmName) return '';
+        const nm = String(ann.bmName).trim();
+        if (!nm) return '';
+        // Keep the vertical label readable: long names would run down the whole
+        // waterfall. 18 chars fits a typical channel name (Thai or English).
+        return nm.length > 18 ? nm.slice(0, 17) + '…' : nm;
+    },
+
+    /**
+     * Re-resolve the bookmark name of every TAG currently on screen.
+     *
+     * Called after a bookmark is added / edited / deleted: annotations live for
+     * ~10 s while they scroll down, so without this a rename would only show up
+     * on the NEXT tag (and a deleted bookmark would keep its old name on screen).
+     */
+    _refreshAnnotationNames() {
+        if (!this._signalAnnotations.length) return;
+        for (const ann of this._signalAnnotations) {
+            const bm = this._bookmarkForSignal(ann.freq, ann.leftFreq, ann.rightFreq);
+            const name = bm ? bm.name : '';
+            if (name !== ann.bmName) ann.bmName = name;
+        }
+        this._waterfallDirty = true;
+    },
 
     // === Zoom & Pan state ===
     // _wfZoom: 1 = full passband visible; >1 = zoomed in.
@@ -3453,7 +3519,7 @@ const App = {
         const colors = ['#22d3ee', '#c084fc', '#f472b6', '#fb923c', '#4ade80', '#facc15'];
 
         ctx.save();
-        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        ctx.font = "bold 10px 'JetBrains Mono', 'Sarabun', monospace";
 
         for (const ann of this._signalAnnotations) {
             if (!ann.visible) continue;
@@ -3464,6 +3530,14 @@ const App = {
             const rightX = this._wfFreqToX(ann.rightFreq, w);
             // Skip if signal peak is outside the visible window
             if (signalX < -20 || signalX > w + 20) continue;
+
+            // Label = frequency, plus the bookmark name when this signal has one
+            // ("168.4700 · วิทยุตำรวจ"). Rendered vertically, so the stick is
+            // grown to cover the text instead of a fixed 36 px.
+            const freqLabel = (ann.freq / 1e6).toFixed(4);
+            const bmLabel = this._bookmarkLabelFor(ann);
+            const label = bmLabel ? `${freqLabel} · ${bmLabel}` : freqLabel;
+            const labelHalf = Math.max(18, ctx.measureText(label).width / 2 + 4);
 
             // Position stick to the RIGHT of the signal with padding (flip left if no room)
             const padding = 12;
@@ -3496,16 +3570,16 @@ const App = {
             ctx.arc(signalX, y, 2.5, 0, Math.PI * 2);
             ctx.fill();
 
-            // Vertical stick
+            // Vertical stick (length follows the label)
             ctx.globalAlpha = 0.9;
             ctx.strokeStyle = color;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.moveTo(stickX, y - 18);
-            ctx.lineTo(stickX, y + 18);
+            ctx.moveTo(stickX, y - labelHalf);
+            ctx.lineTo(stickX, y + labelHalf);
             ctx.stroke();
 
-            // Frequency text rotated (reading bottom-to-top)
+            // Frequency (+ bookmark name) rotated, reading bottom-to-top
             ctx.save();
             ctx.translate(stickX, y);
             ctx.rotate(-Math.PI / 2);
@@ -3513,7 +3587,6 @@ const App = {
             ctx.textBaseline = 'middle';
             ctx.globalAlpha = 1.0;
             ctx.fillStyle = color;
-            const label = (ann.freq / 1e6).toFixed(4);
             ctx.shadowColor = 'rgba(0,0,0,0.95)';
             ctx.shadowBlur = 4;
             ctx.fillText(label, 0, 0);
@@ -3750,6 +3823,11 @@ const App = {
         // Accept both typed arrays (Int16Array, Float32Array) and regular arrays
         if (!spectrumData || !spectrumData.length) return;
 
+        // Remember the bin count of the frames actually being drawn: the TAG ↔
+        // bookmark match tolerance is expressed in bins, so it must follow the
+        // FFT-size setting instead of assuming 1024.
+        this._fftBins = spectrumData.length;
+
         // === Auto Range (3 modes: off / once / cont) ===
         // off:  manual — read from localStorage
         // once: average ~1.5 s of frames, apply, then switch back to 'off'
@@ -3869,7 +3947,6 @@ const App = {
         if (!isFinite(squelchLevel)) return [];
         // Convert the SQL (channel-power domain) into the waterfall domain.
         const threshold = this._wfSqlThreshold(squelchLevel);
-
         const numBins = spectrum.length;
         if (numBins <= 0) return [];
         const sr = this._sampleRate || 2048000;
@@ -3900,6 +3977,9 @@ const App = {
                 if (width >= minWidth) {
                     signals.push({
                         freq: Math.round(lowHz + regionPeak * binHz),
+                        // Band edges: used to decide whether a bookmark belongs
+                        // to this signal (see _bookmarkForSignal).
+                        leftFreq: Math.round(lowHz + regionStart * binHz),
                         rightFreq: Math.round(lowHz + i * binHz),
                     });
                 }
@@ -3974,12 +4054,21 @@ const App = {
             this._signalAnnotations.push({
                 freqKey: freqKey,
                 freq: sig.freq,
+                leftFreq: sig.leftFreq,
                 rightFreq: sig.rightFreq,
                 y: 0,
                 showAtTime: showAt,
                 visible: (showAt === now),
                 shownTime: (showAt === now) ? now : 0,
                 colorIdx: this._sigTagColorIdx++,
+                // Bookmark name shown after the frequency ("168.4700 · วิทยุตำรวจ").
+                // Resolved once here (not per frame): the operator can rename a
+                // bookmark while a tag is on screen, which _refreshAnnotationNames()
+                // handles explicitly.
+                bmName: (() => {
+                    const bm = this._bookmarkForSignal(sig.freq, sig.leftFreq, sig.rightFreq);
+                    return bm ? bm.name : '';
+                })(),
             });
 
             if (showAt === now) {
@@ -4363,6 +4452,8 @@ const App = {
         this._saveBookmarks();
         this.renderBookmarks();
         this.renderFreqList();
+        // A deleted bookmark must stop naming the signal still on screen.
+        this._refreshAnnotationNames();
         console.log('🔖 Deleted bookmark:', bm.name);
     },
 
@@ -4424,6 +4515,10 @@ const App = {
             this._saveBookmarks();
             this.renderBookmarks();
             this.renderFreqList();
+            // Keep the TAG labels on the waterfall in sync with the new/renamed
+            // bookmark (annotations live ~10 s, so they would otherwise keep the
+            // old name until the next signal is tagged).
+            this._refreshAnnotationNames();
             close();
             console.log(`🔖 ${isEdit ? 'Updated' : 'Added'} bookmark:`, record.name);
         };
