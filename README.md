@@ -70,7 +70,8 @@ Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
 
 ### 🎧 Multi-Listener Audio
 - **Independent VFO per listener** — Each user can listen to a different frequency within the passband
-- **Per-Listener Squelch** — Auto (adaptive) or manual squelch with hysteresis, a 200 ms hang time (bridges word gaps) and 5 ms fade ramps (no clicks). The gate opens within ~50 ms so the first syllable is never clipped
+- **Up to 4 VFOs per user (A–D)** — Listen to several frequencies at once, each routed to the left / right / both speakers
+- **Per-Listener Squelch** — Auto (adaptive) or manual squelch with hysteresis, a 200 ms hang time (bridges word gaps) and 5 ms fade ramps (no clicks). The gate opens within ~50 ms so the first syllable is never clipped, and AUTO squelch tracks the noise floor without cutting off long transmissions. The threshold in force is shown next to each VFO's signal bars
 - **Per-mode channel bandwidth** — FM: 6k/12k/25k/50k/200k · AM: 3k/6k/12k · SSB: 1.8k/2.4k/3k. The selection is applied per listener and reaches the DSP on every (re)connect
 - **Solo / Priority Mode** — Long-press mute button to set a listener as SOLO (only that VFO) or PRIORITY (dims others)
 - **G.711 µ-law Audio** — Efficient bandwidth usage for live streaming
@@ -105,20 +106,24 @@ Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
 - **CLI user management** — create superusers and regular users from the terminal
 
 ### 🔖 Bookmarks
-- **Personal Bookmarks** — Save frequencies with name, mode per user
+- **Personal Bookmarks** — Save frequencies with name, mode per user (stored in the browser, per account)
 - **Quick Navigation** — Click a bookmark to instantly tune to that frequency
+- **Activity indicator** — A bookmark chip/row flashes when a signal above SQL is present on its frequency
+- **Named Signal TAG** — When **📡 TAG** is on, strong signals on the waterfall are labelled with their frequency; if a bookmark matches, its name is appended (e.g. `168.4700 · Police Radio`)
 
 ### 🖥️ Dashboard
 - **Real-time Clock** — Live frequency display with 7-segment style
 - **Signal Meter (S-Meter)** — Real-time signal strength indicator
 - **Spectrum + Waterfall** — 2D spectrum with configurable overlap
 - **3D Waterfall** — Three.js-powered 3D spectrum visualization
+- **Signal TAG** — Vertical frequency labels on signals stronger than SQL (with bookmark names)
 - **Active Recordings** — Live status of all manual/auto/scheduled recordings
 - **Status Bar** — Connection status, SDR status, listener count
+- **Build versions** — The **⋮ More** menu shows the App / Audio / Prefs versions the browser loaded (handy to spot a stale cache after a deploy)
 
 ### ⚙️ Settings & Configuration
 - **Web-based Settings UI** — Tabs for General, Display (Waterfall), SDR, Recording, STT, Telegram, Keywords, Users
-- **VFO Passband Margin** — Configurable tuning range limit
+- **VFO Passband Margin** — How far a VFO may tune from the center: `max_offset = min(sample_rate × ratio, sample_rate/2 − channel_bw/2)` (ratio 0.40–0.49). The second term keeps wide channels below Nyquist. The same limit is used by the backend, the dashboard warning and recording jobs; a click past the edge moves the VFO to the edge and shows a notice
 - **Max Listeners Cap** — Limit concurrent listeners
 - **Server Timezone** — Configurable timezone for job scheduler
 - **Waterfall Display** — Configurable dB range, colors, FFT size
@@ -141,7 +146,7 @@ Try it live at **[https://sdr.e25wop.com](https://sdr.e25wop.com)**
                                │  FastAPI     │ ◄─────► │   SQLite     │
                                │  (Backend)   │         │  rtl_sdr.db  │
                                │  uvicorn:8000│         └──────────────┘
-							   └──────────────┘
+                               └──────────────┘
 ```
 
 ### Tech Stack
@@ -252,7 +257,7 @@ All settings are controlled via environment variables (see `.env.example`). The 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite+aiosqlite:///./app.db` | Database connection string |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/rtl_sdr.db` | Database connection string |
 | `SERVER_HOST` | `0.0.0.0` | Bind host |
 | `SERVER_PORT` | `8000` | Bind port |
 | `JWT_SECRET_KEY` | _(required)_ | Secret used to sign JWT tokens — **set this to a strong random value** |
@@ -333,19 +338,28 @@ Then log in at the web UI with those credentials.
 ## 📡 API Highlights
 
 - `GET /api/health` — health check
-- `GET /api/sdr/status` — tuner state
-- `POST /api/sdr/connect|disconnect` — connect/disconnect tuner
-- `POST /api/sdr/frequency|sample-rate|gain|freq-correction|mode|channel-bw|squelch` — tuner control
-- `POST /api/sdr/start-streaming|stop-streaming` — start/stop live audio
-- `POST /api/sdr/start-recording|stop-recording` — manual recording (admin)
-- `WS /ws` — control channel (commands + spectrum)
-- `WS /ws/audio` — live audio stream
+- `GET /api/sdr/status` — tuner state (includes `vfo_margin_ratio` and `vfo_max_offset_hz`, the effective tuning limit)
+- `GET /api/sdr/capabilities` — supported sample rates / gains for the active device
+- `POST /api/sdr/connect|disconnect|connection` — connect/disconnect tuner, set rtl_tcp host/port
+- `POST /api/sdr/frequency|sample-rate|gain|freq-correction` — hardware tuner control (admin)
+- `POST /api/sdr/mode|bandwidth|squelch` — **global** defaults for the center channel and new listeners (admin). While listening live each user changes their own mode/BW/SQL over `WS /ws/audio`
+- `POST /api/sdr/vfo` — move the VFO (clamped to the passband; the response reports `clamped` and `max_offset_hz`)
+- `POST /api/sdr/vfo-margin` — set the VFO passband margin ratio 0.40–0.49 (admin)
+- `POST /api/sdr/fft-size` — waterfall FFT size
+- `POST /api/sdr/stream/start|stop` — start/stop the IQ stream
+- `POST /api/sdr/record/start|stop` — manual recording of the center channel
+- `GET|POST /api/sdr/recording-config`, `/api/sdr/recording-enabled` — recording policy (admin)
+- `GET|PUT /api/sdr/max-listeners` — concurrent listener cap (admin)
+- `/api/sdr/devices*` — SDR device registry (admin)
+- `WS /ws` — control channel (status + spectrum)
+- `WS /ws/audio` — per-listener live audio. Control messages: `vfo`, `mode`, `bandwidth`, `squelch`, `auto_squelch`, `record_start|stop`, `auto_record`; acks include `vfo_ack` (with `clamped`), `mode_ack`, `bandwidth_ack`, `squelch_ack` and `sig` frames (`db`, `sq_open`, `thr`, `auto`)
 - `/api/recordings*` — recordings CRUD + transcripts
 - `/api/recording-jobs*` — scheduled recording jobs
-- `/api/devices*` — SDR device management
+- `/api/settings/stt*` — STT provider settings (admin)
 - `/api/alert-rules*`, `/api/alerts*`, `/api/alert-stats*` — alerting
-- `/api/keyword-groups*`, `/api/keywords*`, `/api/channels*`, `/api/notif-groups*` — alert configuration
-- `/api/auth/login|refresh|me` — authentication
+- `/api/keyword-groups*`, `/api/keywords*`, `/api/channels*`, `/api/notification-groups*` — alert configuration
+- `/api/auth/login|register|refresh|me|change-password`, `/api/auth/users*` — authentication & user management
+- `GET /api/audio/stats|diag` — live audio diagnostics
 
 ## 🗂 Project Structure
 
@@ -356,19 +370,22 @@ Then log in at the web UI with those credentials.
 │   ├── config.py            # Settings (env vars)
 │   ├── database.py          # DB init + migrations
 │   ├── cli.py               # User management CLI
-│   ├── sdr/                 # Tuner control, rtl_tcp client, capture, job scheduler
-│   ├── audio/               # Demodulation (FM/AM/SSB/CW/RAW), conversion, broadcaster
+│   ├── sdr/                 # Tuner control, rtl_tcp client, capture, job scheduler,
+│   │                        #   vfo_limit.py (single VFO passband-limit formula)
+│   ├── audio/               # Demodulation (FM/AM/USB/LSB), squelch, conversion, broadcaster
 │   ├── alerts/              # Rule engine, worker, providers, router
 │   ├── auth/                # JWT, dependencies, router
 │   ├── models/              # SQLAlchemy models
 │   ├── services/            # STT, Telegram, recording jobs, app settings
-│   └── migrations/versions/ # Alembic-style migrations
+│   ├── migrations/versions/ # Alembic-style migrations
+│   └── tests/               # unittest suite (DSP, squelch, bandwidth, VFO limit, rtl_tcp)
 ├── frontend/
 │   ├── index.html
 │   ├── pages/               # dashboard, recordings, alerts, settings, ...
 │   ├── css/  js/  assets/
 ├── docs/
-│   └── WHISPER_LOCAL_STT.md
+│   ├── WHISPER_LOCAL_STT.md
+│   └── USB_RTL_SDR_SETUP.md
 ├── scripts/
 │   └── reset_stuck_alerts.py
 ├── docker-compose.yml
@@ -401,12 +418,15 @@ Then log in at the web UI with those credentials.
 
 ### Dashboard Controls
 - **Mode Buttons** — FM / AM / USB / LSB
-- **Bandwidth Buttons** — 1.8k / 2.4k / 3k / 6k / 12k / 25k / 50k / 200k
-- **Frequency Control** — Click waterfall to set VFO, use input box for center frequency
-- **Gain / PPM Sliders** — Adjust tuner parameters
+- **Bandwidth Buttons** — only the choices that make sense for the current mode are shown (FM 6k–200k, AM 3k/6k/12k, SSB 1.8k/2.4k/3k); switching mode picks that mode's default when needed
+- **Frequency Control** — Click the waterfall to set the active VFO (a click past the usable passband edge moves the VFO to the edge and shows a notice); the CENTER button (admin) sets the hardware center frequency
+- **SQL slider + 🎚️ AUTO** — Manual or adaptive squelch for your own listener; the threshold in force is shown next to the VFO signal bars (`SQL -83` / `AUTO -83`)
+- **Gain / PPM Sliders** — Adjust tuner parameters (admin)
 - **Listen Button** — Toggle live audio
-- **Record Button** — Manual recording per VFO
+- **Record Button** — Manual recording per VFO (long-press: auto-record)
+- **📡 TAG** — Label strong signals on the waterfall with their frequency (+ bookmark name)
 - **3D Toggle** — Switch between 2D and 3D waterfall views
+- **⋮ More** — Language, theme, navigation and the loaded App / Audio / Prefs versions. After a deploy, press **Ctrl+F5** once if the versions look old
 
 ### Recordings Page
 - View all recordings with filters (frequency, mode, date, source)
@@ -415,21 +435,28 @@ Then log in at the web UI with those credentials.
 - Delete individual recordings
 
 ### Settings Page
-- **General** — User timezone
-- **Display** — Waterfall dB range, FFT size, colors
-- **SDR** — Connection settings, device registry
+- **General** — User timezone, system policy (VFO Passband Margin, Max Listeners)
+- **Devices & Settings** — rtl_tcp / USB device registry, connection, per-device defaults
 - **Recording** — Auto-record, squelch, retention policies
-- **STT** — Provider selection, API keys, language, audio format
+- **Transcription** — STT provider selection, API keys, language, audio format
 - **Telegram** — Bot token, chat ID
 - **Keywords** — Alert keywords management
+- **Display** — Waterfall dB range, FFT size, colors
 - **Users** — User management (admin only)
 
 ### Recording Jobs
 Admin users can set up scheduled recording jobs:
 - **Always-on** — Continuous recording of specified frequencies
 - **Scheduled** — Time-window based recording with day-of-week rules
-- Each job supports multiple frequencies within a passband
+- Each job supports multiple frequencies within a passband (frequencies outside the usable passband — same VFO margin rule as live listening — are flagged in the editor)
+- Per-frequency manual or AUTO squelch
 - Jobs run independently from live listening
+
+### Running the Tests
+```bash
+./venv/bin/python -m unittest discover -s backend/tests -q
+```
+No SDR hardware is needed — the DSP, squelch, bandwidth and VFO-limit tests use synthetic IQ.
 
 ---
 
@@ -438,6 +465,7 @@ Admin users can set up scheduled recording jobs:
 - [`OPERATIONS.md`](./OPERATIONS.md) — Full operations guide (install, start/stop, migration, troubleshooting)
 - [`HOW_TO_RESTART.md`](./HOW_TO_RESTART.md) — Quick restart reference
 - [`docs/WHISPER_LOCAL_STT.md`](./docs/WHISPER_LOCAL_STT.md) — Setup guide for local Whisper STT
+- [`docs/USB_RTL_SDR_SETUP.md`](./docs/USB_RTL_SDR_SETUP.md) — Using a USB RTL-SDR directly (no rtl_tcp)
 
 ---
 
@@ -448,8 +476,10 @@ Admin users can set up scheduled recording jobs:
 | Can't connect to RTL-TCP | Check `rtl_tcp` is running: `ss -tlnp \| grep 1234` |
 | No audio / waterfall | Ensure `AUTO_START_STREAMING=true` or click Connect + Stream |
 | Audio stuttering | Check network latency to rtl_tcp; reduce sample rate |
-| STT not working | Verify API keys in Settings → STT |
+| STT not working | Verify API keys in Settings → Transcription |
 | SQLite errors | Check `data/` directory is writable |
+| "Out of receive range" near the waterfall edge | The VFO is past the passband limit (`min(sample_rate × ratio, sample_rate/2 − BW/2)`). Raise the ratio in Settings → General (max 0.49), narrow the BW, or move the center frequency |
+| UI behaves like an old version after an update | Open **⋮ More** and check the App / Audio / Prefs versions; press **Ctrl+F5** to reload cached files |
 
 ## 🤝 Contributing
 
@@ -502,7 +532,8 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 ### 🎧 ระบบเสียงสำหรับผู้ฟังหลายคน
 
 * **VFO อิสระสำหรับผู้ใช้แต่ละคน** — ผู้ใช้แต่ละคนสามารถเลือกฟังความถี่ที่แตกต่างกันได้ภายในย่านความถี่ (passband) ที่รับได้
-* **Squelch แยกตามผู้ฟัง** — ระบบตัดเสียงรบกวน (Squelch) แบบอัตโนมัติ (ปรับตามสภาพ) หรือแบบกำหนดเอง พร้อม hysteresis, hang time 200 ms (ไม่ขาดตอนระหว่างช่วงเว้นคำ) และ fade 5 ms (ไม่มีเสียงคลิก) เปิดประตูเสียงภายใน ~50 ms คำแรกจึงไม่หาย
+* **สูงสุด 4 VFO ต่อผู้ใช้ (A–D)** — ฟังหลายความถี่พร้อมกัน แต่ละ VFO เลือกลำโพงซ้าย / ขวา / ทั้งคู่ได้
+* **Squelch แยกตามผู้ฟัง** — ระบบตัดเสียงรบกวน (Squelch) แบบอัตโนมัติ (ปรับตามสภาพ) หรือแบบกำหนดเอง พร้อม hysteresis, hang time 200 ms (ไม่ขาดตอนระหว่างช่วงเว้นคำ) และ fade 5 ms (ไม่มีเสียงคลิก) เปิดประตูเสียงภายใน ~50 ms คำแรกจึงไม่หาย และ AUTO squelch ไม่ตัดการส่งที่ยาว ค่า threshold ที่ใช้จริงแสดงข้างแถบสัญญาณของแต่ละ VFO
 * **เลือก Bandwidth ตามโหมด** — FM: 6k/12k/25k/50k/200k · AM: 3k/6k/12k · SSB: 1.8k/2.4k/3k โดยค่าที่เลือกมีผลกับ DSP ของผู้ฟังแต่ละคน และถูกส่งไปทุกครั้งที่เชื่อมต่อใหม่
 * **โหมดเดี่ยว (Solo) / โหมดให้ความสำคัญ (Priority)** — กดปุ่มปิดเสียงค้างไว้เพื่อตั้งให้ผู้ฟังเป็นแบบ SOLO (ฟังเฉพาะ VFO นั้น) หรือ PRIORITY (หรี่เสียง VFO อื่นลง)
 * **เสียงรูปแบบ G.711 µ-law** — ใช้แบนด์วิดท์อย่างมีประสิทธิภาพสำหรับการสตรีมสด
@@ -520,6 +551,8 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 
 * **Speechmatics** — บริการถอดเสียงคุณภาพสูงบนคลาวด์
 * **Azure Cognitive Services** — บริการ STT บนคลาวด์ของ Microsoft
+* **Groq Whisper** — บริการถอดเสียงบนคลาวด์ แบบ OpenAI-compatible
+* **MaxPlus AI** — บริการถอดเสียงบนคลาวด์แบบ OpenAI-compatible ([api.maxplus-ai.cc](https://maxplus-ai.cc/docs/api)) ดึงรายชื่อโมเดลสดจาก `GET /v1/models` (เช่น `whisper-large-v3`, `grok-stt`)
 * **Whisper Local** — เซิร์ฟเวอร์ faster-whisper สำหรับโฮสต์ใช้งานเอง
 * **ถอดเสียงอัตโนมัติ** — แปลงเสียงที่บันทึกใหม่เป็นข้อความโดยอัตโนมัติ
 * **การประมวลผลเสียงล่วงหน้า** — มีตัวเลือกลดความละเอียด/บีบอัดเสียงก่อนส่งไปยัง STT เพื่อประหยัดแบนด์วิดท์
@@ -540,8 +573,10 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 
 ### 🔖 บุ๊กมาร์ก
 
-* **บุ๊กมาร์กส่วนตัว** — บันทึกความถี่พร้อมชื่อและโหมดการรับฟัง (แยกตามผู้ใช้)
+* **บุ๊กมาร์กส่วนตัว** — บันทึกความถี่พร้อมชื่อและโหมดการรับฟัง (แยกตามผู้ใช้ เก็บในเบราว์เซอร์)
 * **นำทางอย่างรวดเร็ว** — คลิกที่บุ๊กมาร์กเพื่อเปลี่ยนความถี่ไปยังจุดนั้นทันที
+* **แสดงสถานะสัญญาณ** — ปุ่ม/แถวบุ๊กมาร์กกะพริบเมื่อมีสัญญาณแรงกว่า SQL ที่ความถี่นั้น
+* **ชื่อบน Signal TAG** — เมื่อเปิด **📡 TAG** สัญญาณแรงบน waterfall จะแสดงความถี่ และถ้าตรงกับบุ๊กมาร์กจะต่อชื่อท้าย (เช่น `168.4700 · วิทยุตำรวจ`)
 
 ### 🖥️ แดชบอร์ด
 
@@ -549,13 +584,15 @@ This project is open source. Released under the **MIT License**. See [LICENSE](L
 * **Signal Meter (S-Meter)** — ตัวแสดงความแรงของสัญญาณแบบเรียลไทม์
 * **สเปกตรัม + Waterfall** — สเปกตรัม 2D พร้อมระบบซ้อนทับที่ปรับตั้งค่าได้
 * **3D Waterfall** — การแสดงผลสเปกตรัมแบบ 3D ขับเคลื่อนด้วย Three.js
+* **Signal TAG** — ป้ายความถี่แนวตั้งบนสัญญาณที่แรงกว่า SQL (พร้อมชื่อบุ๊กมาร์ก)
 * **สถานะการบันทึก** — แสดงสถานะสดของการบันทึกทั้งหมด (แมนนวล/อัตโนมัติ/ตั้งเวลา)
 * **แถบสถานะ** — สถานะการเชื่อมต่อ, สถานะ SDR, จำนวนผู้ฟัง
+* **เวอร์ชันไฟล์** — เมนู **⋮ More** แสดงเวอร์ชัน App / Audio / Prefs ที่เบราว์เซอร์โหลดอยู่ (ใช้ตรวจว่าติด cache เก่าหลัง deploy หรือไม่)
 
 ### ⚙️ การตั้งค่าและคอนฟิกูเรชัน
 
 * **Web UI สำหรับการตั้งค่า** — แบ่งเป็นแท็บต่างๆ: ทั่วไป, การแสดงผล (Waterfall), SDR, การบันทึก, STT, Telegram, คีย์เวิร์ด, ผู้ใช้
-* **VFO Passband Margin** — กำหนดขีดจำกัดช่วงการจูนความถี่ได้
+* **VFO Passband Margin** — กำหนดว่า VFO จูนห่างจากความถี่กลางได้เท่าไร: `max_offset = min(sample_rate × ratio, sample_rate/2 − channel_bw/2)` (ratio 0.40–0.49) พจน์หลังกันไม่ให้ช่องกว้างล้นขอบ Nyquist ใช้ limit เดียวกันทั้ง backend, การเตือนบนแดชบอร์ด และงานบันทึกเสียง คลิกเลยขอบจะย้าย VFO ไปที่ขอบพร้อมแจ้งเตือน
 * **จำกัดจำนวนผู้ฟังสูงสุด** — จำกัดจำนวนผู้ฟังที่เข้าใช้งานพร้อมกัน
 * **เขตเวลาเซิร์ฟเวอร์ (Server Timezone)** — ตั้งค่าเขตเวลาสำหรับระบบตั้งเวลางาน
 * **การแสดงผล Waterfall** — ปรับตั้งช่วงค่า dB, สี, และขนาด FFT
@@ -698,7 +735,7 @@ docker compose up -d
 
 | ตัวแปร | ค่าเริ่มต้น | คำอธิบาย |
 | --- | --- | --- |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./app.db` | สตริงเชื่อมต่อฐานข้อมูล |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/rtl_sdr.db` | สตริงเชื่อมต่อฐานข้อมูล |
 | `SERVER_HOST` | `0.0.0.0` | Bind host |
 | `SERVER_PORT` | `8000` | Bind port |
 | `JWT_SECRET_KEY` | *(จำเป็น)* | รหัสลับที่ใช้เซ็นโทเค็น JWT — **โปรดตั้งค่านี้เป็นสุ่มที่คาดเดายาก** |
@@ -781,19 +818,28 @@ python -m backend.cli createuser <username> <password> admin
 ## 📡 จุดเด่นของ API
 
 * `GET /api/health` — ตรวจสอบสถานะระบบ
-* `GET /api/sdr/status` — สถานะของจูนเนอร์
-* `POST /api/sdr/connect|disconnect` — เชื่อมต่อ/ตัดการเชื่อมต่อจูนเนอร์
-* `POST /api/sdr/frequency|sample-rate|gain|freq-correction|mode|channel-bw|squelch` — ควบคุมการทำงานของจูนเนอร์
-* `POST /api/sdr/start-streaming|stop-streaming` — เริ่ม/หยุด เสียงสด
-* `POST /api/sdr/start-recording|stop-recording` — การบันทึกเสียงแบบแมนนวล (แอดมิน)
-* `WS /ws` — ช่องควบคุม (คำสั่ง + สเปกตรัม)
-* `WS /ws/audio` — สตรีมเสียงสด
+* `GET /api/sdr/status` — สถานะของจูนเนอร์ (มี `vfo_margin_ratio` และ `vfo_max_offset_hz` คือขอบการจูนที่ใช้จริง)
+* `GET /api/sdr/capabilities` — sample rate / gain ที่อุปกรณ์รองรับ
+* `POST /api/sdr/connect|disconnect|connection` — เชื่อมต่อ/ตัดการเชื่อมต่อจูนเนอร์, ตั้ง host/port ของ rtl_tcp
+* `POST /api/sdr/frequency|sample-rate|gain|freq-correction` — ควบคุมฮาร์ดแวร์จูนเนอร์ (แอดมิน)
+* `POST /api/sdr/mode|bandwidth|squelch` — ค่าเริ่มต้น **global** ของช่องกลางและผู้ฟังใหม่ (แอดมิน) ขณะฟังสดผู้ใช้แต่ละคนเปลี่ยน mode/BW/SQL ของตัวเองผ่าน `WS /ws/audio`
+* `POST /api/sdr/vfo` — ย้าย VFO (บีบให้อยู่ใน passband คำตอบมี `clamped` และ `max_offset_hz`)
+* `POST /api/sdr/vfo-margin` — ตั้ง VFO passband margin ratio 0.40–0.49 (แอดมิน)
+* `POST /api/sdr/fft-size` — ขนาด FFT ของ waterfall
+* `POST /api/sdr/stream/start|stop` — เริ่ม/หยุด สตรีม IQ
+* `POST /api/sdr/record/start|stop` — บันทึกเสียงช่องกลางแบบแมนนวล
+* `GET|POST /api/sdr/recording-config`, `/api/sdr/recording-enabled` — นโยบายการบันทึก (แอดมิน)
+* `GET|PUT /api/sdr/max-listeners` — จำกัดจำนวนผู้ฟังพร้อมกัน (แอดมิน)
+* `/api/sdr/devices*` — ระบบจัดการอุปกรณ์ SDR (แอดมิน)
+* `WS /ws` — ช่องควบคุม (สถานะ + สเปกตรัม)
+* `WS /ws/audio` — เสียงสดแยกตามผู้ฟัง คำสั่ง: `vfo`, `mode`, `bandwidth`, `squelch`, `auto_squelch`, `record_start|stop`, `auto_record` ตอบกลับด้วย `vfo_ack` (มี `clamped`), `mode_ack`, `bandwidth_ack`, `squelch_ack` และเฟรม `sig` (`db`, `sq_open`, `thr`, `auto`)
 * `/api/recordings*` — การจัดการข้อมูลบันทึก (CRUD) + ข้อความ STT
 * `/api/recording-jobs*` — งานตั้งเวลาบันทึกเสียง
-* `/api/devices*` — ระบบจัดการอุปกรณ์ SDR
+* `/api/settings/stt*` — ตั้งค่าผู้ให้บริการ STT (แอดมิน)
 * `/api/alert-rules*`, `/api/alerts*`, `/api/alert-stats*` — ระบบแจ้งเตือน
-* `/api/keyword-groups*`, `/api/keywords*`, `/api/channels*`, `/api/notif-groups*` — การตั้งค่าแจ้งเตือน
-* `/api/auth/login|refresh|me` — ระบบยืนยันตัวตน
+* `/api/keyword-groups*`, `/api/keywords*`, `/api/channels*`, `/api/notification-groups*` — การตั้งค่าแจ้งเตือน
+* `/api/auth/login|register|refresh|me|change-password`, `/api/auth/users*` — ระบบยืนยันตัวตนและจัดการผู้ใช้
+* `GET /api/audio/stats|diag` — ข้อมูลวินิจฉัยเสียงสด
 
 ## 🗂 โครงสร้างโปรเจกต์
 
@@ -804,19 +850,22 @@ python -m backend.cli createuser <username> <password> admin
 │   ├── config.py            # การตั้งค่า (ตัวแปร env)
 │   ├── database.py          # ตั้งค่าฐานข้อมูล + migrations
 │   ├── cli.py               # CLI จัดการผู้ใช้งาน
-│   ├── sdr/                 # ควบคุมจูนเนอร์, rtl_tcp client, ดักจับข้อมูล, ระบบตั้งเวลางาน
-│   ├── audio/               # ถอดรหัสสัญญาณ (FM/AM/SSB/CW/RAW), แปลงข้อมูล, บรอดคาสเตอร์
+│   ├── sdr/                 # ควบคุมจูนเนอร์, rtl_tcp client, ดักจับข้อมูล, ระบบตั้งเวลางาน,
+│   │                        #   vfo_limit.py (สูตรขอบ passband ของ VFO ชุดเดียว)
+│   ├── audio/               # ถอดรหัสสัญญาณ (FM/AM/USB/LSB), squelch, แปลงข้อมูล, บรอดคาสเตอร์
 │   ├── alerts/              # Rule engine, worker, providers, router
 │   ├── auth/                # JWT, dependencies, router
 │   ├── models/              # โมเดล SQLAlchemy
 │   ├── services/            # STT, Telegram, งานบันทึกเสียง, การตั้งค่าแอป
-│   └── migrations/versions/ # Migrations สไตล์ Alembic
+│   ├── migrations/versions/ # Migrations สไตล์ Alembic
+│   └── tests/               # ชุดทดสอบ unittest (DSP, squelch, bandwidth, VFO limit, rtl_tcp)
 ├── frontend/
 │   ├── index.html
 │   ├── pages/               # dashboard, recordings, alerts, settings, ...
 │   ├── css/  js/  assets/
 ├── docs/
-│   └── WHISPER_LOCAL_STT.md
+│   ├── WHISPER_LOCAL_STT.md
+│   └── USB_RTL_SDR_SETUP.md
 ├── scripts/
 │   └── reset_stuck_alerts.py
 ├── docker-compose.yml
@@ -855,12 +904,15 @@ python -m backend.cli createuser <username> <password> admin
 ### การควบคุมบนแดชบอร์ด
 
 * **ปุ่มโหมด (Mode)** — FM / AM / USB / LSB
-* **ปุ่มแบนด์วิดท์** — 1.8k / 2.4k / 3k / 6k / 12k / 25k / 50k / 200k
-* **ควบคุมความถี่** — คลิกบนหน้าจอ waterfall เพื่อตั้งค่า VFO, ใช้ช่องกรอกข้อมูลเพื่อตั้งความถี่กลาง
-* **สไลเดอร์ อัตราขยาย (Gain) / PPM** — ปรับตั้งค่าจูนเนอร์
+* **ปุ่มแบนด์วิดท์** — แสดงเฉพาะค่าที่เหมาะกับโหมดปัจจุบัน (FM 6k–200k, AM 3k/6k/12k, SSB 1.8k/2.4k/3k) เปลี่ยนโหมดแล้วจะเลือกค่าเริ่มต้นของโหมดนั้นให้เมื่อจำเป็น
+* **ควบคุมความถี่** — คลิกบน waterfall เพื่อตั้ง VFO ที่เลือกอยู่ (คลิกเลยขอบ passband จะย้าย VFO ไปที่ขอบพร้อมแจ้งเตือน) ปุ่ม CENTER (แอดมิน) ใช้ตั้งความถี่กลางของฮาร์ดแวร์
+* **สไลเดอร์ SQL + 🎚️ AUTO** — squelch แบบกำหนดเองหรืออัตโนมัติของผู้ฟังแต่ละคน ค่าที่ใช้จริงแสดงข้างแถบสัญญาณ VFO (`SQL -83` / `AUTO -83`)
+* **สไลเดอร์ อัตราขยาย (Gain) / PPM** — ปรับตั้งค่าจูนเนอร์ (แอดมิน)
 * **ปุ่ม Listen** — เปิด/ปิด เสียงสด
-* **ปุ่ม Record** — บันทึกเสียงแบบแมนนวลต่อหนึ่ง VFO
+* **ปุ่ม Record** — บันทึกเสียงแบบแมนนวลต่อหนึ่ง VFO (กดค้าง = บันทึกอัตโนมัติ)
+* **📡 TAG** — แสดงความถี่ (+ ชื่อบุ๊กมาร์ก) บนสัญญาณที่แรงบน waterfall
 * **ปุ่มเปิด/ปิด 3D** — สลับมุมมอง waterfall ระหว่าง 2D และ 3D
+* **⋮ More** — ภาษา, ธีม, เมนูนำทาง และเวอร์ชัน App / Audio / Prefs ที่โหลดอยู่ หลัง deploy ถ้าเวอร์ชันดูเก่าให้กด **Ctrl+F5** หนึ่งครั้ง
 
 ### หน้าบันทึกเสียง (Recordings)
 
@@ -871,13 +923,13 @@ python -m backend.cli createuser <username> <password> admin
 
 ### หน้าการตั้งค่า (Settings)
 
-* **ทั่วไป (General)** — เขตเวลาของผู้ใช้
-* **การแสดงผล (Display)** — ช่วงค่า dB สำหรับ Waterfall, ขนาด FFT, สีสัน
-* **SDR** — การตั้งค่าการเชื่อมต่อ, ลงทะเบียนอุปกรณ์
+* **ทั่วไป (General)** — เขตเวลาของผู้ใช้, นโยบายระบบ (VFO Passband Margin, จำนวนผู้ฟังสูงสุด)
+* **อุปกรณ์และการตั้งค่า (Devices & Settings)** — ลงทะเบียนอุปกรณ์ rtl_tcp / USB, การเชื่อมต่อ, ค่าเริ่มต้นต่ออุปกรณ์
 * **การบันทึก (Recording)** — บันทึกอัตโนมัติ, squelch, นโยบายเก็บรักษาข้อมูล
-* **STT** — เลือกผู้ให้บริการ, คีย์ API, ภาษา, รูปแบบไฟล์เสียง
+* **ถอดเสียง (Transcription)** — เลือกผู้ให้บริการ STT, คีย์ API, ภาษา, รูปแบบไฟล์เสียง
 * **Telegram** — โทเค็น Bot, รหัสแชท (Chat ID)
 * **คีย์เวิร์ด (Keywords)** — จัดการคีย์เวิร์ดสำหรับการแจ้งเตือน
+* **แสดงผล (Display)** — ช่วงค่า dB สำหรับ Waterfall, ขนาด FFT, สีสัน
 * **ผู้ใช้งาน (Users)** — จัดการผู้ใช้งาน (เฉพาะแอดมิน)
 
 ### งานบันทึกเสียง (Recording Jobs)
@@ -886,16 +938,23 @@ python -m backend.cli createuser <username> <password> admin
 
 * **เปิดตลอดเวลา (Always-on)** — บันทึกเสียงที่ความถี่ที่กำหนดไว้อย่างต่อเนื่อง
 * **ตามกำหนดเวลา (Scheduled)** — บันทึกตามช่วงเวลาที่กำหนด พร้อมระบุกฎของวันในสัปดาห์ได้
-* แต่ละงานรองรับการบันทึกหลายความถี่พร้อมกันภายในย่านความถี่ (passband)
+* แต่ละงานรองรับการบันทึกหลายความถี่พร้อมกันภายในย่านความถี่ (passband) ความถี่ที่อยู่นอกช่วงที่รับได้จริง (กฎ VFO margin เดียวกับการฟังสด) จะถูกเตือนในหน้าแก้ไข
+* ตั้ง squelch แยกแต่ละความถี่ แบบกำหนดเองหรือ AUTO
 * งานจะทำงานแยกเป็นอิสระจากการฟังสดผ่านหน้าเว็บ
+
+### การรันชุดทดสอบ
+```bash
+./venv/bin/python -m unittest discover -s backend/tests -q
+```
+ไม่ต้องใช้ฮาร์ดแวร์ SDR — เทสต์ DSP, squelch, bandwidth และ VFO limit ใช้ IQ จำลอง
 
 ---
 
 ## 📖 เอกสารเพิ่มเติม
 
-* [`OPERATIONS.md`](https://www.google.com/search?q=./OPERATIONS.md) — คู่มือปฏิบัติการฉบับเต็ม (การติดตั้ง, เริ่ม/หยุด, การทำ migration, การแก้ไขปัญหา)
-* [`HOW_TO_RESTART.md`](https://www.google.com/search?q=./HOW_TO_RESTART.md) — การรีสตาร์ทระบบอย่างรวดเร็ว
-* [`docs/WHISPER_LOCAL_STT.md`](https://www.google.com/search?q=./docs/WHISPER_LOCAL_STT.md) — คู่มือการตั้งค่า Whisper STT สำหรับใช้งานในเครื่อง
+* [`OPERATIONS.md`](./OPERATIONS.md) — คู่มือปฏิบัติการฉบับเต็ม (การติดตั้ง, เริ่ม/หยุด, การทำ migration, การแก้ไขปัญหา)
+* [`HOW_TO_RESTART.md`](./HOW_TO_RESTART.md) — การรีสตาร์ทระบบอย่างรวดเร็ว
+* [`docs/WHISPER_LOCAL_STT.md`](./docs/WHISPER_LOCAL_STT.md) — คู่มือการตั้งค่า Whisper STT สำหรับใช้งานในเครื่อง
 * [`docs/USB_RTL_SDR_SETUP.md`](./docs/USB_RTL_SDR_SETUP.md) — คู่มือการตั้งค่า USB RTL-SDR อ่านโดยตรง (ไม่ต้องใช้ rtl_tcp)
 
 ---
@@ -904,11 +963,13 @@ python -m backend.cli createuser <username> <password> admin
 
 | ปัญหา | วิธีแก้ไข |
 | --- | --- |
-| เชื่อมต่อกับ RTL-TCP ไม่ได้ | ตรวจสอบว่า `rtl_tcp` ทำงานอยู่หรือไม่: `ss -tlnp | grep 1234` |
+| เชื่อมต่อกับ RTL-TCP ไม่ได้ | ตรวจสอบว่า `rtl_tcp` ทำงานอยู่หรือไม่: `ss -tlnp \| grep 1234` |
 | ไม่มีเสียง / หน้าจอ waterfall ไม่ขึ้น | ตรวจสอบว่า `AUTO_START_STREAMING=true` หรือกดปุ่ม Connect + Stream |
 | เสียงกระตุก | ตรวจสอบความหน่วง (latency) ของเครือข่ายไปยัง rtl_tcp; ลดค่า sample rate ลง |
-| STT ไม่ทำงาน | ตรวจสอบคีย์ API ในเมนู Settings → STT |
+| STT ไม่ทำงาน | ตรวจสอบคีย์ API ในเมนู Settings → ถอดเสียง (Transcription) |
 | เกิดข้อผิดพลาดของ SQLite | ตรวจสอบว่าโฟลเดอร์ `data/` สามารถเขียนข้อมูล (writable) ได้ |
+| ขึ้น "นอกช่วงรับสัญญาณ" ตรงขอบ waterfall | VFO เลยขอบ passband (`min(sample_rate × ratio, sample_rate/2 − BW/2)`) ให้เพิ่ม ratio ที่ Settings → ทั่วไป (สูงสุด 0.49), ลด BW หรือย้ายความถี่กลาง |
+| หน้าเว็บทำงานเหมือนเวอร์ชันเก่าหลังอัปเดต | เปิด **⋮ More** ตรวจเวอร์ชัน App / Audio / Prefs แล้วกด **Ctrl+F5** เพื่อโหลดไฟล์ใหม่ |
 
 ## 🤝 การมีส่วนร่วม (Contributing)
 
@@ -918,7 +979,7 @@ python -m backend.cli createuser <username> <password> admin
 
 ## 📄 ลิขสิทธิ์ (License)
 
-โปรเจกต์นี้เป็นโอเพ่นซอร์ส เผยแพร่ภายใต้ **MIT License** ดูรายละเอียดเพิ่มเติมที่ [LICENSE](https://www.google.com/search?q=LICENSE)
+โปรเจกต์นี้เป็นโอเพ่นซอร์ส เผยแพร่ภายใต้ **MIT License** ดูรายละเอียดเพิ่มเติมที่ [LICENSE](LICENSE)
 
 ---
 
