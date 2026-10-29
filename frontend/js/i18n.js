@@ -114,6 +114,7 @@ const I18n = {
             'dash.sourceAutoTitle': 'บันทึกอัตโนมัติเมื่อตรวจพบสัญญาณ',
             'dash.sourceAutoJobTitle': 'อัดตามกำหนดการอัตโนมัติ (Background Job)',
             'dash.outOfRange': '⚠ นอกช่วงรับสัญญาณ',
+            'dash.vfoClamped': (p) => `ย้ายไปขอบช่วงรับสัญญาณ: ${p.freq} MHz (รับได้สูงสุด ±${p.khz} kHz)`,
 
             /* ---- Dashboard: Radio controls ---- */
             'dash.freqDownCoarse': 'ลดความถี่ (coarse)',
@@ -1166,6 +1167,7 @@ const I18n = {
             'dash.sourceAutoTitle': 'Auto-recorded when signal detected',
             'dash.sourceAutoJobTitle': 'Scheduled automatic recording (Background Job)',
             'dash.outOfRange': '⚠ Out of receive range',
+            'dash.vfoClamped': (p) => `Moved to the edge of the receive range: ${p.freq} MHz (max ±${p.khz} kHz)`,
 
             /* ---- Dashboard: Radio controls ---- */
             'dash.freqDownCoarse': 'Decrease frequency (coarse)',

@@ -219,6 +219,19 @@ const App = {
     // Sync UI controls (sliders, selectors) from a status dict.
     // Called from syncState() and WS status updates.
     syncControlsFromStatus(data) {
+        // Authoritative VFO tuning limit from the server (see _vfoMaxOffsetHz).
+        // Applied before anything that uses it so the cursor clamp and the
+        // "out of receive range" warning agree with what the backend allows.
+        if (data.vfo_max_offset_hz !== undefined && data.vfo_max_offset_hz !== null) {
+            const lim = Number(data.vfo_max_offset_hz);
+            if (isFinite(lim) && lim > 0 && lim !== this._vfoMaxOffsetHzSrv) {
+                this._vfoMaxOffsetHzSrv = lim;
+                // The limit changed (sample rate, BW or the admin's margin
+                // setting) → re-render so a stale warning clears/appears now.
+                this.updateFreqDisplay();
+                this._waterfallDirty = true;
+            }
+        }
         // Sync sample rate (BW display + freq-low/high + SRATE button active state)
         if (data.sample_rate !== undefined) {
             this._sampleRate = data.sample_rate;
@@ -550,6 +563,9 @@ const App = {
     _stepSize: 1000,  // Default step: 1 kHz
     _sampleRate: 2048000,  // Default: 2.048 MSPS
     _channelBw: 12000,  // Default channel BW: 12 kHz (NBFM voice)
+    // Server-provided tuning limit (Hz) = min(margin_ratio * sample_rate,
+    // sample_rate/2 - channel_bw/2). null until the first status frame.
+    _vfoMaxOffsetHzSrv: null,
     // === Multi-VFO state (1-4 VFOs: A/B/C/D) ===
     // Each entry: { id, offsetHz }. Up to 4 independent listening cursors.
     // The number of ACTIVE VFOs is _vfoCount (1-4); only the first _vfoCount
@@ -1199,26 +1215,39 @@ const App = {
         //   - Not listening  → move ONLY this browser's cursor (client-side).
         this._vfoUserTouched = true;
         const idx = this._activeVfoIdx;
-        if (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(idx) && LiveAudio.setVfoVfo(idx, freq)) {
-            const offset = freq - this.currentFreq;
+        const maxOff = this._vfoMaxOffsetHz();
+        // Requested frequency may be outside the passband (e.g. a click on the
+        // very edge of the waterfall). Option (A): move the cursor to the
+        // nearest usable edge and tell the operator, instead of silently
+        // tuning somewhere else.
+        let wantOffset = freq - this.currentFreq;
+        let clampedLocal = false;
+        if (maxOff > 0 && Math.abs(wantOffset) > maxOff) {
+            wantOffset = wantOffset > 0 ? maxOff : -maxOff;
+            clampedLocal = true;
+        }
+        const targetFreq = Math.round(this.currentFreq + wantOffset);
+        if (typeof LiveAudio !== 'undefined' && LiveAudio.isVfoPlaying(idx) && LiveAudio.setVfoVfo(idx, targetFreq)) {
+            const offset = targetFreq - this.currentFreq;
             this._setVfoOffset(idx, offset);
             this._waterfallDirty = true;
             this.updateFreqDisplay();
             this._updateVfoRows();  // refresh the row's freq label
-            console.log(`🎯 VFO ${this._vfos[idx].id} (per-listener): ${(freq/1e6).toFixed(4)} MHz`);
+            if (clampedLocal) {
+                this._notifyVfoClamped(targetFreq, maxOff);
+            }
+            console.log(`🎯 VFO ${this._vfos[idx].id} (per-listener): ${(targetFreq/1e6).toFixed(4)} MHz`);
             return;
         }
-        // Client-side only: keep this user's cursor within its passband.
-        const sr = this._sampleRate || 0;
-        let offset = freq - this.currentFreq;
-        if (sr > 0) {
-            const maxOff = sr * 0.5 * 0.95;
-            offset = Math.max(-maxOff, Math.min(maxOff, offset));
-        }
+        // Client-side only: keep this user's cursor within the passband.
+        const offset = wantOffset;
         this._setVfoOffset(idx, offset);
         this._waterfallDirty = true;
         this.updateFreqDisplay();
         this._updateVfoRows();  // refresh the row's freq label
+        if (clampedLocal) {
+            this._notifyVfoClamped(targetFreq, maxOff);
+        }
         // Not listening live: tell the server our cursor offset so it can
         // compute the SIG under our cursor (not just the global center) and
         // send it back in the next status frame → VFO A bar reflects the freq
@@ -1227,7 +1256,52 @@ const App = {
         if (idx === 0 && typeof WS !== 'undefined') {
             WS.send({ type: "vfo_cursor", offset_hz: offset });
         }
-        console.log(`🎯 VFO ${this._vfos[idx].id} (local cursor): ${(freq/1e6).toFixed(4)} MHz`);
+        console.log(`🎯 VFO ${this._vfos[idx].id} (local cursor): ${(targetFreq/1e6).toFixed(4)} MHz`);
+    },
+
+    /**
+     * Tell the operator the VFO request was moved to the passband edge.
+     *
+     * Shown as a short toast rather than a blocking alert: clicking a signal
+     * that is visible on the waterfall but sits inside the anti-alias roll-off
+     * is a normal thing to do, and the important part is that they can SEE the
+     * frequency actually being used (otherwise the radio silently listens
+     * somewhere else than the click).
+     */
+    _notifyVfoClamped(freqHz, maxOffHz) {
+        const msg = I18n.t('dash.vfoClamped', {
+            freq: (freqHz / 1e6).toFixed(4),
+            khz: Math.round(maxOffHz / 1000),
+        });
+        console.warn(`🎯 ${msg}`);
+        try {
+            this._toast(msg);
+        } catch (e) {
+            console.log(`🎯 ${msg}`);
+        }
+    },
+
+    /**
+     * Minimal transient toast (bottom-center). Self-removing after ~3.5 s so it
+     * never accumulates. Used for non-blocking operator feedback (VFO clamped,
+     * etc.) where an alert() would interrupt tuning.
+     */
+    _toast(text, ms = 3500) {
+        if (!text) return;
+        let host = document.getElementById('app-toast-host');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'app-toast-host';
+            document.body.appendChild(host);
+        }
+        const el = document.createElement('div');
+        el.className = 'app-toast';
+        el.textContent = text;
+        host.appendChild(el);
+        setTimeout(() => {
+            el.classList.add('app-toast-hide');
+            setTimeout(() => { try { el.remove(); } catch (e) {} }, 300);
+        }, ms);
     },
 
     tuneFreq(delta) {
@@ -1675,6 +1749,21 @@ const App = {
             this._setVfoOffset(idx, obj.vfo_offset_hz);
             this.updateFreqDisplay();
             this._updateVfoRows();
+            // The server may have moved the request to the passband edge (it
+            // applies the same limit but with ITS sample rate / BW, which can
+            // be newer than this tab's copy). Say so instead of leaving the
+            // operator believing the click was honoured exactly.
+            if (obj.clamped) {
+                const maxOff = Number(obj.max_offset_hz) || this._vfoMaxOffsetHz();
+                this._notifyVfoClamped(
+                    (this.currentFreq || 0) + Number(obj.vfo_offset_hz || 0),
+                    maxOff,
+                );
+            }
+            if (obj.max_offset_hz !== undefined) {
+                const lim = Number(obj.max_offset_hz);
+                if (isFinite(lim) && lim > 0) this._vfoMaxOffsetHzSrv = lim;
+            }
         }
     },
 
@@ -3316,14 +3405,34 @@ const App = {
     },
 
     /**
+     * Maximum |VFO offset from center| (Hz) this user may tune to.
+     *
+     * Comes from the SERVER (`status.vfo_max_offset_hz`), which applies the
+     * admin's "VFO Passband Margin" ratio AND keeps the whole channel below
+     * Nyquist (see backend/sdr/vfo_limit.py). The dashboard used to guess this
+     * with a hardcoded `sampleRate/2 * 0.95` (== 0.475 × sr), which disagreed
+     * with the backend near the band edges: on production (0.49 ratio at
+     * 2.048 MSPS) the warning appeared from ±972.8 kHz even though the backend
+     * still demodulated up to ±1003.5 kHz, and clicking a signal visible on the
+     * waterfall near the edge produced a false "out of receive range".
+     *
+     * Falls back to the old 0.475 × sampleRate estimate only until the first
+     * status frame arrives (or when the server is too old to send the field).
+     */
+    _vfoMaxOffsetHz() {
+        const fromServer = Number(this._vfoMaxOffsetHzSrv);
+        if (isFinite(fromServer) && fromServer > 0) return fromServer;
+        const sr = this._sampleRate || 0;
+        return sr > 0 ? sr * 0.475 : 0;
+    },
+
+    /**
      * Whether a given VFO offset places the listening frequency inside the
-     * usable passband (|offset| ≤ 0.95 × sampleRate/2). Used to flag an
-     * off-screen cursor and to warn in the frequency display.
+     * usable passband (the same limit the server enforces).
      */
     _isOffsetInPassband(offsetHz) {
-        const sr = this._sampleRate || 0;
-        if (sr <= 0) return true;
-        const maxOff = sr * 0.5 * 0.95;
+        const maxOff = this._vfoMaxOffsetHz();
+        if (maxOff <= 0) return true;
         return Math.abs(offsetHz || 0) <= maxOff;
     },
     /** Convenience: passband check for the ACTIVE VFO. */

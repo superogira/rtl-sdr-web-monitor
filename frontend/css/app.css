@@ -294,6 +294,46 @@ a:hover {
     white-space: nowrap;
 }
 
+/* === Transient toast (bottom-centre) === */
+/* Non-blocking operator feedback (e.g. "VFO moved to the edge of the receive
+   range"). Fixed to the viewport so it works regardless of scroll position;
+   the host is a flex column so several toasts stack instead of overlapping. */
+#app-toast-host {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    z-index: 5000;
+    pointer-events: none;
+}
+.app-toast {
+    max-width: min(90vw, 520px);
+    padding: 8px 14px;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    opacity: 1;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.app-toast-hide {
+    opacity: 0;
+    transform: translateY(6px);
+}
+@media (prefers-reduced-motion: reduce) {
+    .app-toast { transition: none; }
+    .app-toast-hide { transform: none; }
+}
+
 /* === Channel Bandwidth Selector (1.8k - 200k) === */
 .bw-selector {
     display: flex;

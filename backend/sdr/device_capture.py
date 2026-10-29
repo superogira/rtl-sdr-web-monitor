@@ -50,6 +50,9 @@ from backend.sdr.connection_pool import (
 # notify_live_tuner_changed is imported lazily inside _reclaim_tuner to avoid
 # a circular import (manager.py imports from this package's connection_pool).
 from backend.audio.demod import DemodMode, StreamingDemodulator, compute_signal_level
+from backend.sdr.vfo_limit import (
+    VFO_MARGIN_DEFAULT, VFO_MARGIN_MAX, VFO_MARGIN_MIN, max_vfo_offset_hz,
+)
 from backend.database import async_session
 from backend.models.recording import Recording, RecordingStatus
 from backend.models.recording_job import RecordingJob, RecordingJobWindow, RecordingJobFrequency
@@ -246,9 +249,10 @@ class _FrequencyChannel:
         self.bandwidth_hz = int(freq.bandwidth_hz)
         self.label = freq.label
         self.audio_rate = audio_rate
-        # VFO passband margin ratio (default 0.45; overridden by DeviceCapture
-        # from the System Policy "sdr_vfo_margin_ratio" app setting).
-        self._margin_ratio: float = 0.45
+        # VFO passband margin ratio. Defaults to the shared VFO_MARGIN_DEFAULT
+        # and is replaced by the System Policy "sdr_vfo_margin_ratio" setting
+        # when DeviceCapture starts (see start()).
+        self._margin_ratio: float = VFO_MARGIN_DEFAULT
         # Streaming demodulator carrying filter state across chunks
         self.demod = StreamingDemodulator()
         self.demod.set_vfo_offset(self.offset_hz)
@@ -286,13 +290,15 @@ class _FrequencyChannel:
         splicing audio from different frequencies.
         """
         # Use the same margin ratio as the System Policy (sdr_vfo_margin_ratio),
-        # defaulting to 0.45 only if the setting hasn't been loaded yet.
+        # defaulting to the shared VFO_MARGIN_DEFAULT until the setting loads.
         # This was previously hardcoded to 0.45, which was NARROWER than the
-        # System Policy value (e.g. 0.49) → channels near the passband edge
-        # were incorrectly marked "out of passband" and skipped → stuck at
-        # -120 dB in the dashboard.
-        ratio = getattr(self, '_margin_ratio', 0.45)
-        max_offset = sample_rate * ratio
+        # System Policy value (e.g. 0.49) → channels near the passband edge were
+        # incorrectly marked "out of passband" and skipped → stuck at -120 dB in
+        # the dashboard.
+        ratio = getattr(self, '_margin_ratio', VFO_MARGIN_DEFAULT)
+        # Shared limit: ratio * sample_rate, capped so the whole channel stays
+        # below Nyquist (see backend/sdr/vfo_limit.py).
+        max_offset = max_vfo_offset_hz(sample_rate, ratio, self.bandwidth_hz)
         new_offset = float(self.frequency_hz - actual_center_hz)
         if abs(new_offset) > max_offset:
             self.in_passband = False
@@ -476,12 +482,19 @@ class DeviceCapture:
         # incorrectly marked "out of passband" and skipped → stuck at -120 dB.
         try:
             from backend.services.app_settings import get_setting
-            raw_ratio = await get_setting("sdr_vfo_margin_ratio", "0.49")
+            raw_ratio = await get_setting("sdr_vfo_margin_ratio",
+                                          f"{VFO_MARGIN_DEFAULT:.2f}")
             ratio = float(raw_ratio)
-            if 0.40 <= ratio <= 0.49:
+            if VFO_MARGIN_MIN <= ratio <= VFO_MARGIN_MAX:
                 for ch in self.channels:
                     ch._margin_ratio = ratio
                 logger.info(f"📐 [job={self.job_id}] VFO margin ratio: {ratio}")
+            else:
+                logger.warning(
+                    f"📐 [job={self.job_id}] ignoring out-of-range VFO margin "
+                    f"ratio {ratio} (allowed {VFO_MARGIN_MIN:.2f}–{VFO_MARGIN_MAX:.2f}); "
+                    f"using {VFO_MARGIN_DEFAULT:.2f}"
+                )
         except Exception as e:
             logger.warning(f"Failed to load VFO margin ratio: {e}")
 

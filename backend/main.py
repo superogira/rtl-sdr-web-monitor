@@ -17,6 +17,7 @@ from backend.sdr.router import (
     devices_router,
 )
 from backend.sdr.recording_jobs_router import recording_jobs_router
+from backend.sdr.vfo_limit import clamp_vfo_offset_hz
 
 
 @asynccontextmanager
@@ -541,17 +542,33 @@ async def audio_websocket_endpoint(websocket: WebSocket):
             try:
                 freq = int(msg["frequency"])
                 offset = float(freq) - float(sdr_manager.client._frequency)
-                max_off = sdr_manager.client._sample_rate * sdr_manager._vfo_margin_ratio
-                offset = max(-max_off, min(max_off, offset))
+                # Clamp with the SHARED passband limit (ratio * sample_rate, and
+                # the whole channel kept below Nyquist). This is the path a
+                # waterfall click takes while listening live: previously it
+                # clamped to ratio * sample_rate only, and the ack did not say
+                # the request had been moved — so the UI believed it was
+                # listening to the frequency it clicked.
+                offset, clamped, max_off = clamp_vfo_offset_hz(
+                    offset,
+                    sdr_manager.client._sample_rate,
+                    sdr_manager._vfo_margin_ratio,
+                    listener.channel_bw,
+                )
                 listener.set_vfo_offset(offset)
                 await websocket.send_text(json.dumps({
                     "type": "vfo_ack",
                     "frequency": int(round(sdr_manager.client._frequency + offset)),
                     "vfo_offset_hz": offset,
+                    # `clamped` lets the dashboard tell the operator that the
+                    # cursor was moved to the edge instead of silently tuning
+                    # somewhere else than requested.
+                    "clamped": bool(clamped),
+                    "max_offset_hz": max_off,
                 }))
                 logger_aud.info(
                     f"🎯 Listener {listener.id[:8]} VFO → "
                     f"{(sdr_manager.client._frequency + offset)/1e6:.4f} MHz"
+                    + (f" (clamped to ±{max_off/1e3:.1f} kHz)" if clamped else "")
                 )
             except (KeyError, ValueError, TypeError) as e:
                 logger_aud.warning(f"🔊 Bad vfo control: {e}")

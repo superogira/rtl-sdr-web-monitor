@@ -55,6 +55,9 @@ from backend.audio.demod import (
     DemodMode, StreamingDemodulator, compute_channel_power, iq_to_complex,
 )
 from backend.sdr.device_capture import AutoSquelchEstimator
+# NOTE: backend.sdr.manager imports THIS module, so import the passband helper
+# from a module that does not import either of them (no circular import).
+from backend.sdr.vfo_limit import max_vfo_offset_hz
 
 logger = logging.getLogger(__name__)
 
@@ -929,12 +932,16 @@ class AudioBroadcaster:
         """
         empty = (np.zeros(0, dtype=np.float32), [])
         # Track global sample-rate changes (admin changed SDR) and clamp the
-        # offset into the valid passband so the shift never aliases.
+        # offset into the valid passband so the shift never aliases. Uses the
+        # shared max_vfo_offset_hz() limit (ratio * sample_rate, further capped
+        # so the whole channel stays below Nyquist) — the same one the tuning
+        # endpoints and the UI use.
         if listener.sample_rate != sample_rate or listener.audio_rate != audio_rate:
             listener.sample_rate = int(sample_rate)
             listener.audio_rate = int(audio_rate)
-            max_off = sample_rate * self.vfo_margin_ratio
-            if abs(listener.vfo_offset_hz) > max_off:
+            max_off = max_vfo_offset_hz(sample_rate, self.vfo_margin_ratio,
+                                        listener.channel_bw)
+            if max_off > 0 and abs(listener.vfo_offset_hz) > max_off:
                 listener.vfo_offset_hz = max(-max_off, min(max_off, listener.vfo_offset_hz))
 
         listener.demod.set_vfo_offset(listener.vfo_offset_hz)

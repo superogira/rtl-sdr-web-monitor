@@ -7,6 +7,9 @@
  * server-timezone setting.
  */
 const RecordingJobsUI = {
+    // Admin's VFO passband margin ratio (from SDR status). Used to flag a
+    // recording frequency that falls outside the capture's usable passband.
+    _marginRatio: 0.40,
     _jobs: [],
     _devices: [],
     _usedDeviceIds: [],
@@ -25,7 +28,21 @@ const RecordingJobsUI = {
 
     async init() {
         await this.loadServerTimezone();
+        await this.loadMarginRatio();
         await this.refresh();
+    },
+
+    /** Load the admin's VFO passband margin ratio so the job editor's
+     *  "out of range" check matches what DeviceCapture actually accepts. */
+    async loadMarginRatio() {
+        try {
+            const status = await API.sdr.status();
+            const r = Number(status && status.vfo_margin_ratio);
+            if (isFinite(r) && r > 0) this._marginRatio = r;
+        } catch (e) {
+            // Keep the 0.40 default; the warning is only advisory.
+            console.warn('RecordingJobs: could not load VFO margin ratio:', e);
+        }
     },
 
     // ---- helpers ----
@@ -532,6 +549,15 @@ const RecordingJobsUI = {
         const hi = lo + w.sample_rate;
         const center = lo + Math.floor(w.sample_rate / 2);
 
+        // Give each frequency the window's centre + the configured margin ratio
+        // so _renderFreq can apply the same passband limit the capture uses.
+        (w.frequencies || []).forEach(f => {
+            f._winCenter = center;
+            f._winMarginRatio = (typeof this._marginRatio === 'number')
+                ? this._marginRatio
+                : 0.40;
+        });
+
         const dayLabels = I18n.t('rje.dayLabels');
         const timeBlock = (mode === 'scheduled') ? `
             <div class="form-row">
@@ -603,7 +629,19 @@ const RecordingJobsUI = {
     },
 
     _renderFreq(f, winTempId, lo, hi) {
-        const inBand = (f.frequency_hz >= lo && f.frequency_hz <= hi);
+        // "In range" must use the SAME passband limit the capture actually
+        // honours: the admin's VFO margin ratio, further capped so the whole
+        // channel stays below Nyquist (backend/sdr/vfo_limit.py). This used to
+        // be the raw window edges (start .. start+sample_rate), which is wider
+        // than what DeviceCapture accepts near the edges, so a frequency could
+        // be flagged as OK yet never be recorded.
+        const center = (typeof f._winCenter === 'number') ? f._winCenter : ((lo + hi) / 2);
+        const ratio = (typeof f._winMarginRatio === 'number') ? f._winMarginRatio : 0.40;
+        const maxOff = Math.max(0, Math.min(
+            ratio * (hi - lo),
+            (hi - lo) / 2 - (Number(f.bandwidth_hz) || 0) / 2,
+        ));
+        const inBand = Math.abs(f.frequency_hz - center) <= maxOff;
         const warn = inBand ? '' : `<div style="font-size:0.72rem; color:var(--accent-red);">${I18n.t('rje.outOfRangeWarn')}</div>`;
         return `
         <div style="background:var(--surface-1); border:1px solid var(--border); border-radius:4px; padding:8px; margin-top:6px;">

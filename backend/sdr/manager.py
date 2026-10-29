@@ -32,6 +32,14 @@ from sqlalchemy import select, func, delete
 
 logger = logging.getLogger(__name__)
 
+# VFO passband limit lives in backend/sdr/vfo_limit.py (no imports of its own, so
+# both this module and backend/audio/broadcaster.py can use it without a
+# circular import). Re-exported here for callers that already import manager.
+from backend.sdr.vfo_limit import (  # noqa: E402  (kept next to its users)
+    VFO_MARGIN_DEFAULT, VFO_MARGIN_MAX, VFO_MARGIN_MIN,
+    clamp_vfo_offset_hz, max_vfo_offset_hz, vfo_limit_info,
+)
+
 # Persisted SDR settings (host/port/freq/etc.) so UI changes survive restarts.
 SDR_SETTINGS_FILE = Path("data/sdr_settings.json")
 # Default values mirroring settings.* so a missing file still works.
@@ -241,6 +249,16 @@ class SDRManager:
             "vfo_offset_hz": round(self._vfo_offset_hz, 1),
             "vfo_frequency": self.vfo_frequency,
             "vfo_margin_ratio": round(self._vfo_margin_ratio, 2),
+            # The single authoritative tuning limit (Hz) for THIS runtime's
+            # sample rate + channel BW. The dashboard uses it for the cursor
+            # clamp and the "out of receive range" warning instead of its own
+            # hardcoded 0.475 * sample_rate guess, which disagreed with the
+            # backend near the band edges.
+            "vfo_max_offset_hz": round(max_vfo_offset_hz(
+                self.client._sample_rate or 0,
+                self._vfo_margin_ratio,
+                self._channel_bw,
+            ), 1),
             "listeners": self._broadcaster.listener_count,
             "max_listeners": self._broadcaster.max_listeners,
             "device_id": self._active_device_id,
@@ -784,11 +802,15 @@ class SDRManager:
         out from under us. If the offset still fits in the new passband
         we keep it (preserve the user's listening position); otherwise we
         reset to 0 (center).
+
+        Uses the shared max_vfo_offset_hz() limit so the tuning range matches
+        what the WS/REST tuning paths accept and what the UI shows.
         """
         sr = self.client._sample_rate or 0
         if sr <= 0:
             return False
-        max_offset = sr * self._vfo_margin_ratio
+        max_offset = max_vfo_offset_hz(sr, self._vfo_margin_ratio,
+                                       self._channel_bw)
         off = self._vfo_offset_hz
         if abs(off) > max_offset + 0.5:
             # No longer fits → reset to center.
@@ -852,17 +874,25 @@ class SDRManager:
 
         This lets non-admin users move the listening cursor within the SDR
         passband without retuning the hardware. The offset must stay within
-        ±(margin_ratio) * sample_rate (default 0.4) to remain inside the
-        visible passband (otherwise the signal would alias / be outside the
-        waterfall). The margin_ratio is configurable via app settings
-        ("sdr_vfo_margin_ratio", 0.40–0.49).
+        max_vfo_offset_hz() — i.e. inside ±(margin_ratio * sample_rate) AND
+        with the whole channel inside the passband (see that function; the
+        margin_ratio is configurable via the "sdr_vfo_margin_ratio" app
+        setting, 0.40–0.49).
         """
-        offset_hz = float(offset_hz)
-        max_offset = self.client._sample_rate * self._vfo_margin_ratio
-        if abs(offset_hz) > max_offset:
-            raise ValueError(
-                f"VFO offset {offset_hz:.0f} Hz outside passband "
-                f"(±{max_offset:.0f} Hz)"
+        offset_hz, clamped, limit = clamp_vfo_offset_hz(
+            float(offset_hz), self.client._sample_rate,
+            self._vfo_margin_ratio, self._channel_bw,
+        )
+        if limit <= 0:
+            raise ValueError("VFO tuning is unavailable until the SDR reports a sample rate")
+        if clamped:
+            # Report rather than raise: callers (WS/REST) already clamp too, and
+            # silently ignoring an over-range request made the UI believe it was
+            # listening somewhere it was not.
+            logger.info(
+                f"🎯 VFO offset {float(offset_hz):.0f} Hz clamped to "
+                f"±{limit:.0f} Hz (BW {self._channel_bw} Hz, ratio "
+                f"{self._vfo_margin_ratio:.2f})"
             )
         self._vfo_offset_hz = offset_hz
         self._demod.set_vfo_offset(offset_hz)
@@ -870,7 +900,12 @@ class SDRManager:
             f"🎯 VFO offset set to {offset_hz:.0f} Hz "
             f"(listening at {(self.client._frequency + offset_hz)/1e6:.4f} MHz)"
         )
-        return {"vfo_offset_hz": self._vfo_offset_hz, "vfo_frequency": self.vfo_frequency}
+        return {
+            "vfo_offset_hz": self._vfo_offset_hz,
+            "vfo_frequency": self.vfo_frequency,
+            "clamped": clamped,
+            "max_offset_hz": limit,
+        }
 
     def set_vfo_frequency(self, freq_hz: int) -> dict:
         """Set VFO by absolute frequency. Computes offset from center freq."""
@@ -881,15 +916,16 @@ class SDRManager:
         """Load VFO passband margin ratio from app settings (startup).
 
         Stored under key "sdr_vfo_margin_ratio" as a float string (0.40–0.49).
-        Defaults to 0.40 if unset.
+        Defaults to VFO_MARGIN_DEFAULT if unset.
         """
         try:
-            raw = await get_setting("sdr_vfo_margin_ratio", "0.40")
+            raw = await get_setting("sdr_vfo_margin_ratio", f"{VFO_MARGIN_DEFAULT:.2f}")
             self._vfo_margin_ratio = self._validate_margin_ratio(float(raw))
             logger.info(f"VFO margin ratio loaded: {self._vfo_margin_ratio:.2f}")
         except Exception as e:
-            logger.warning(f"Failed to load VFO margin ratio, using 0.40: {e}")
-            self._vfo_margin_ratio = 0.40
+            logger.warning(f"Failed to load VFO margin ratio, using "
+                           f"{VFO_MARGIN_DEFAULT:.2f}: {e}")
+            self._vfo_margin_ratio = VFO_MARGIN_DEFAULT
         # Keep the per-listener broadcaster in sync so listener VFO clamping
         # uses the same ratio.
         self._broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
@@ -899,24 +935,40 @@ class SDRManager:
         ratio = self._validate_margin_ratio(ratio)
         self._vfo_margin_ratio = ratio
         await set_setting("sdr_vfo_margin_ratio", f"{ratio:.2f}")
-        # If current VFO offset exceeds the new limit, clamp it to the edge
-        max_offset = self.client._sample_rate * self._vfo_margin_ratio
-        if abs(self._vfo_offset_hz) > max_offset:
+        # If current VFO offset exceeds the new limit, clamp it to the edge.
+        max_offset = max_vfo_offset_hz(self.client._sample_rate, ratio,
+                                       self._channel_bw)
+        if max_offset > 0 and abs(self._vfo_offset_hz) > max_offset:
             clamped = max(-max_offset, min(max_offset, self._vfo_offset_hz))
             self._vfo_offset_hz = clamped
             self._demod.set_vfo_offset(clamped)
         # Propagate to the per-listener broadcaster (used for clamping each
-        # listener's VFO offset).
+        # listener's VFO offset) AND to every per-device runtime, so a tab that
+        # listens on another device gets the same tuning range (previously those
+        # runtimes kept their hardcoded 0.40 default).
         self._broadcaster.vfo_margin_ratio = self._vfo_margin_ratio
+        try:
+            from backend.sdr.live_runtime import live_runtimes
+            for other_mgr, other_bcast in live_runtimes.all_runtimes().values():
+                other_mgr._vfo_margin_ratio = self._vfo_margin_ratio
+                other_bcast.vfo_margin_ratio = self._vfo_margin_ratio
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not propagate VFO margin to runtimes: {e}")
         logger.info(f"VFO margin ratio set to {ratio:.2f} (max offset {max_offset:.0f} Hz)")
-        return {"vfo_margin_ratio": self._vfo_margin_ratio}
+        return {
+            "vfo_margin_ratio": self._vfo_margin_ratio,
+            "max_offset_hz": max_offset,
+        }
 
     @staticmethod
     def _validate_margin_ratio(ratio: float) -> float:
-        """Validate margin ratio is in [0.40, 0.49]."""
+        """Validate margin ratio is in [VFO_MARGIN_MIN, VFO_MARGIN_MAX]."""
         ratio = float(ratio)
-        if not (0.40 <= ratio <= 0.49):
-            raise ValueError(f"VFO margin ratio must be 0.40–0.49, got {ratio}")
+        if not (VFO_MARGIN_MIN <= ratio <= VFO_MARGIN_MAX):
+            raise ValueError(
+                f"VFO margin ratio must be {VFO_MARGIN_MIN:.2f}–{VFO_MARGIN_MAX:.2f}, "
+                f"got {ratio}"
+            )
         return round(ratio, 2)
 
     # ------------------------------------------------------------------
