@@ -206,6 +206,74 @@ a:hover {
     box-shadow: 0 0 8px var(--accent-blue)40;
 }
 
+/* === Digital mode dropdown (keeps the header to one row) === */
+.mode-dropdown {
+    position: relative;
+    display: flex;
+}
+
+/* The trigger doubles as the "a digital mode is active" indicator: it keeps
+   the accent colour while one of its entries is selected, so the user can see
+   at a glance that the radio is decoding digital voice. */
+.mode-digital-trigger.has-digital {
+    background: var(--accent-green, #22c55e);
+    color: #fff;
+}
+
+.mode-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 1000;
+    min-width: 210px;
+    padding: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    flex-direction: column;
+    gap: 1px;
+}
+
+.mode-dropdown-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-align: left;
+    white-space: nowrap;
+    background: transparent;
+    color: var(--text-primary);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.mode-dropdown-item small {
+    font-size: 0.62rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.mode-dropdown-item:hover {
+    background: var(--bg-input);
+}
+
+.mode-dropdown-item.active {
+    background: var(--accent-blue);
+    color: #fff;
+}
+
+.mode-dropdown-item.active small {
+    color: rgba(255, 255, 255, 0.8);
+}
+
 /* === BW Trigger Button + Popover === */
 .bw-trigger-btn {
     padding: 4px 12px;

@@ -209,7 +209,7 @@ const App = {
         this.updateSignalMeter(this.currentSignal);
         
         // Update mode selector
-        document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === this.currentMode));
+        this._syncModeSelector(this.currentMode);
         const rm = document.getElementById('radio-mode');
         if (rm) rm.textContent = this.currentMode;
     },
@@ -460,15 +460,27 @@ const App = {
     //   FM  : NBFM needs >= ~13 kHz of IF (Carson) up to WBFM 200 kHz.
     //   AM  : ~6 kHz is the widest useful AM channel; 3k/12k give selectivity.
     //   SSB : sideband width — 1.8k (narrow), 2.4k (voice), 3k (wide).
+    //   Digital: the occupied channel of the protocol. P25 P1 / DMR / NXDN96
+    //            are 12.5 kHz 4FSK; D-STAR and dPMR are 6.25 kHz. The decoder
+    //            needs the whole channel, so there is nothing to tune here.
+    _DIGITAL_MODES: ['P25P1', 'DMR', 'NXDN', 'DSTAR', 'DPMR'],
     _BW_CHOICES: {
         FM: [6000, 12000, 25000, 50000, 200000],
         AM: [3000, 6000, 12000],
         USB: [1800, 2400, 3000],
         LSB: [1800, 2400, 3000],
+        P25P1: [12500],
+        DMR: [12500],
+        NXDN: [12500],
+        DSTAR: [6250],
+        DPMR: [6250],
     },
     // Default channel BW applied when the user switches to a mode whose
     // current BW is not in that mode's list.
-    _BW_DEFAULT: { FM: 12000, AM: 6000, USB: 2400, LSB: 2400 },
+    _BW_DEFAULT: {
+        FM: 12000, AM: 6000, USB: 2400, LSB: 2400,
+        P25P1: 12500, DMR: 12500, NXDN: 12500, DSTAR: 6250, DPMR: 6250,
+    },
 
     /** Rebuild the BW popover for the given mode (hide buttons that do not
      *  belong to it) and highlight the active one. */
@@ -516,15 +528,79 @@ const App = {
     setupModeSelector() {
         const selector = document.getElementById('mode-selector');
         if (!selector) return;
+        // A page-level handler (not per-button) so it also covers the digital
+        // dropdown entries added after this runs.
         selector.addEventListener('click', async (e) => {
+            // --- Digital dropdown trigger / entries ---
+            const trigger = e.target.closest('#mode-digital-trigger');
+            if (trigger) {
+                e.stopPropagation();
+                this.toggleDigitalMenu();
+                return;
+            }
+            const item = e.target.closest('.mode-dropdown-item');
+            if (item) {
+                this.closeDigitalMenu();
+                const m = item.dataset.mode;
+                if (m === this.currentMode) return;
+                this.setMode(m);
+                return;
+            }
             const btn = e.target.closest('.mode-btn');
             if (!btn) return;
             const mode = btn.dataset.mode;
             if (mode === this.currentMode) return;
+            this.closeDigitalMenu();
             selector.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             this.setMode(mode);
         });
+        // Any click elsewhere closes the dropdown (standard menu behaviour).
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.mode-dropdown')) this.closeDigitalMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') this.closeDigitalMenu();
+        });
+    },
+
+    /** Show/hide the digital mode menu. */
+    toggleDigitalMenu() {
+        const menu = document.getElementById('mode-digital-menu');
+        if (!menu) return;
+        menu.style.display = (menu.style.display === 'none' || !menu.style.display)
+            ? 'flex' : 'none';
+    },
+
+    closeDigitalMenu() {
+        const menu = document.getElementById('mode-digital-menu');
+        if (menu) menu.style.display = 'none';
+    },
+
+    /** True when `mode` is one of the digital voice modes. */
+    isDigitalMode(mode) {
+        return this._DIGITAL_MODES.includes(String(mode || '').toUpperCase());
+    },
+
+    /** Paint the mode selector to match `mode` (used instead of toggling
+     *  `.active` by hand, because digital entries live in a dropdown). */
+    _syncModeSelector(mode) {
+        mode = String(mode || '').toUpperCase();
+        const selector = document.getElementById('mode-selector');
+        if (selector) {
+            selector.querySelectorAll('.mode-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.mode === mode));
+            selector.querySelectorAll('.mode-dropdown-item').forEach(b =>
+                b.classList.toggle('active', b.dataset.mode === mode));
+        }
+        // The trigger carries the "digital is active" state (and the mode name,
+        // so the user is not left staring at a generic "Digital" label).
+        const trigger = document.getElementById('mode-digital-trigger');
+        if (trigger) {
+            const digital = this.isDigitalMode(mode);
+            trigger.classList.toggle('has-digital', digital);
+            trigger.textContent = digital ? `${mode} ▾` : 'Digital ▾';
+        }
     },
 
     /** Change the demodulation mode (also called by DashboardPrefs restore).
@@ -533,11 +609,7 @@ const App = {
         mode = String(mode).toUpperCase();
         this.currentMode = mode;
         if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('mode', mode);
-        const selector = document.getElementById('mode-selector');
-        if (selector) {
-            selector.querySelectorAll('.mode-btn').forEach(b =>
-                b.classList.toggle('active', b.dataset.mode === mode));
-        }
+        this._syncModeSelector(mode);
         const radioMode = document.getElementById('radio-mode');
         if (radioMode) radioMode.textContent = mode;
         // Only offer BW choices that make sense for this mode, and pick the
@@ -2449,7 +2521,7 @@ const App = {
                 const listeningMode = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
                 if (!listeningMode) {
                     this.currentMode = data.mode;
-                    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === data.mode));
+                    this._syncModeSelector(data.mode);
                     const rm = document.getElementById('radio-mode');
                     if (rm) rm.textContent = data.mode;
                 }
@@ -3325,11 +3397,12 @@ const App = {
         const cx = this._wfFreqToX(this.currentFreq + (offsetHz || 0), w);
 
         // Bandwidth rectangle depends on the demodulation mode:
-        //  - FM / AM : symmetrical around the carrier (full double-sideband)
+        //  - FM / AM / digital : symmetrical around the carrier (full channel)
         //  - USB     : upper sideband only → rectangle extends to the RIGHT of cx
         //  - LSB     : lower sideband only → rectangle extends to the LEFT of cx
         // This matches the backend SSB phasing demodulator, which shifts up
-        // (USB) or down (LSB) and keeps only one sideband.
+        // (USB) or down (LSB) and keeps only one sideband. Digital modes are
+        // real carrier channels, so they belong on the symmetrical branch.
         let left, right;
         const mode = (this.currentMode || '').toUpperCase();
         if (mode === 'USB') {
@@ -4414,9 +4487,10 @@ const App = {
         if (!bm) return;
         this.setVFO(bm.freqHz);
         // Switch demod mode if the bookmark carries one and it differs.
+        // Use setMode() rather than clicking a button: digital modes live in a
+        // dropdown and have no `.mode-btn[data-mode]` to click.
         if (bm.mode && bm.mode !== this.currentMode) {
-            const btn = document.querySelector(`.mode-btn[data-mode="${bm.mode}"]`);
-            if (btn) btn.click();
+            this.setMode(bm.mode);
         }
         console.log(`🔖 → ${bm.name} @ ${(bm.freqHz/1e6).toFixed(4)} MHz`);
     },

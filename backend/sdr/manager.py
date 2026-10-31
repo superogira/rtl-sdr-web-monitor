@@ -20,7 +20,8 @@ from backend.sdr.connection_pool import (
     pool as connection_pool, PRIORITY_LIVE, PRIORITY_IDLE,
 )
 from backend.audio.demod import (
-    DemodMode, demodulate, compute_signal_level, StreamingDemodulator,
+    DIGITAL_MODES, DemodMode, demodulate, compute_signal_level,
+    StreamingDemodulator,
 )
 from backend.audio.broadcaster import audio_broadcaster
 from backend.database import async_session, commit_with_retry
@@ -1388,6 +1389,22 @@ class SDRManager:
                     )
                     signal_level, audio = await asyncio.gather(sig_task, demod_task)
                     self._signal_level = signal_level
+
+                    # The GLOBAL channel has no decoder subprocess, so a digital
+                    # mode here would put raw discriminator baseband into the
+                    # center-channel recording — noise, not voice. Drop it and
+                    # say so once, rather than silently recording garbage.
+                    # Per-listener listening still decodes normally.
+                    if self.mode in DIGITAL_MODES and len(audio) > 0:
+                        if not getattr(self, "_digital_global_warned", False):
+                            self._digital_global_warned = True
+                            logger.warning(
+                                "🎧 Global mode %s has no decoder: the center-"
+                                "channel recording stays silent. Digital voice "
+                                "is decoded per listener (press ฟังสด).",
+                                self.mode.value,
+                            )
+                        audio = np.zeros(0, dtype=np.float32)
                     # Cache the raw IQ for per-cursor SIG lookups (non-live
                     # clients on /ws). Cheap: just keep a reference.
                     self._last_iq_bytes = iq_data
@@ -1873,6 +1890,12 @@ class SDRManager:
         # Normalize float32 [-1,1] → int16 PCM and write WAV.
         # The write runs in a thread: soundfile is synchronous and a long
         # recording would otherwise freeze the event loop (audio/status stalls).
+        #
+        # Digital voice arrives at 8 kHz (the vocoder's native rate). Writing it
+        # at that rate is correct but makes every downstream consumer deal with
+        # two rates: STT resamples to 16 kHz anyway, and the player/波形 UI
+        # assumes the file's own header rate, which is fine. Keep the true rate
+        # rather than upsampling — no information is gained by interpolation.
         audio_f32 = np.asarray(audio_data, dtype=np.float32)
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: sf.write(str(filepath), audio_f32, int(sample_rate),

@@ -37,8 +37,13 @@ class RecordingJobMode(str, enum.Enum):
     SCHEDULED = "scheduled"
 
 
-# All supported demod modes mirror DemodMode in demod.py / recording.py
-_VALID_DEMOD_MODES = ("FM", "AM", "USB", "LSB")
+# All supported demod modes mirror DemodMode in demod.py / recording.py.
+# The digital entries name the decoder preset (see DIGITAL_MODE_FLAGS in
+# backend/audio/demod.py); the recording JOB path still demodulates them as
+# narrow FM, so a scheduled recording of a digital channel captures the raw
+# discriminator, not decoded voice. Live listening is what decodes.
+_VALID_DEMOD_MODES = ("FM", "AM", "USB", "LSB",
+                      "P25P1", "DMR", "NXDN", "DSTAR", "DPMR")
 
 
 class RecordingJob(Base):

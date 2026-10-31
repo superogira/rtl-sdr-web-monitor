@@ -308,7 +308,11 @@ async def set_mode(
     try:
         await mgr.set_mode(req.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {req.mode}. Use FM, AM, USB, LSB")
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Invalid mode: {req.mode}. Use FM, AM, USB, LSB or a "
+                    "digital mode (P25P1, DMR, NXDN, DSTAR, DPMR)"),
+        )
     return {"mode": req.mode.upper()}
 
 

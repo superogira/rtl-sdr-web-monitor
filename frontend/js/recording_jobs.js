@@ -17,7 +17,12 @@ const RecordingJobsUI = {
     _serverTimezone: 'Asia/Bangkok',
 
     DAY_LABELS: ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'], // 0=Mon..6=Sun (Thai short) — replaced by I18n.t('rje.dayLabels') at render time
-    DEMOD_MODES: ['FM', 'AM', 'USB', 'LSB'],
+    // Demod modes offered for a scheduled frequency.
+    // The digital entries are accepted by the backend (they label the channel
+    // with its protocol), but the JOB capture path still demodulates them with
+    // the narrow-FM chain: it records the discriminator baseband, not decoded
+    // voice. See docs/DIGITAL_MODES.md.
+    DEMOD_MODES: ['FM', 'AM', 'USB', 'LSB', 'P25P1', 'DMR', 'NXDN', 'DSTAR', 'DPMR'],
     BW_PRESETS: [
         { v: 6000, label: '6 kHz' },
         { v: 12000, label: '12 kHz' },

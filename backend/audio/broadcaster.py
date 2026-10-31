@@ -52,8 +52,11 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from backend.audio.demod import (
-    DemodMode, StreamingDemodulator, compute_channel_power, iq_to_complex,
+    DIGITAL_AUDIO_RATE, DIGITAL_MODES, DemodMode, StreamingDemodulator,
+    compute_channel_power, iq_to_complex,
 )
+from backend.audio.decoder import DigitalDecoder, add_lifecycle_hook
+from backend.config import settings
 from backend.sdr.device_capture import AutoSquelchEstimator
 # NOTE: backend.sdr.manager imports THIS module, so import the passband helper
 # from a module that does not import either of them (no circular import).
@@ -194,6 +197,20 @@ class Listener:
         self.mode = mode if isinstance(mode, DemodMode) else DemodMode(mode)
         self.channel_bw = int(channel_bw)
         self.vfo_offset_hz = float(vfo_offset_hz)
+        # Digital voice: the external dsd-neo process serving THIS listener.
+        # None while in an analog mode. Created/started by set_mode(); the
+        # worker owns feed()/read(). Kept per listener because dsd-neo carries
+        # per-stream state (symbol timing, FEC history, vocoder memory).
+        self.decoder: Optional[DigitalDecoder] = None
+        # Rate of the audio this listener currently produces. It is NOT always
+        # `audio_rate`: in a digital mode the decoder emits 8 kHz, and durations
+        # and WAV headers must use the real one (see stop_listener_recording).
+        # A listener is CONSTRUCTED straight into its mode (subscribe() passes
+        # the client's current mode), so derive it here as well as in set_mode —
+        # otherwise the first recording of a digital listener would be written
+        # as 32 kHz and play back 4x too slow.
+        self.out_audio_rate = (DIGITAL_AUDIO_RATE if self.mode in DIGITAL_MODES
+                               else int(audio_rate))
         # Auth context (for per-user manual recording)
         self.user_id = user_id      # str UUID or None
         self.user_role = user_role  # "admin" / "user" / None
@@ -289,10 +306,107 @@ class Listener:
         self.demod.set_vfo_offset(self.vfo_offset_hz)
 
     def set_mode(self, mode) -> None:
+        """Switch demodulation mode.
+
+        Analog <-> digital transitions are handled by the worker, not here:
+        spawning and stopping a subprocess needs the event loop, and set_mode()
+        is called from sync contexts (the control-message handler, reset paths).
+        The worker calls `apply_mode_side_effects()` on its next packet, which
+        starts or stops the decoder as required.
+        """
         m = mode if isinstance(mode, DemodMode) else DemodMode(mode)
         self.mode = m
         # StreamingDemodulator auto-resets its filter state on mode change
         # inside process(), so no explicit reset is needed here.
+        # Digital modes produce 8 kHz audio; analog uses the SDR audio rate.
+        self.out_audio_rate = (DIGITAL_AUDIO_RATE if m in DIGITAL_MODES
+                               else self.audio_rate)
+
+    async def apply_mode_side_effects(self) -> None:
+        """Start/stop the decoder to match the current mode.
+
+        Async + idempotent so the worker can call it on every batch without
+        checking: a listener that stays in its digital mode re-enters, sees
+        `decoder is not None`, and returns immediately.
+
+        Called from the listener worker (event-loop thread).
+        """
+        if self.mode in DIGITAL_MODES:
+            if not settings.DIGITAL_DECODE_ENABLED:
+                return
+            if self.decoder is not None and self.decoder.mode is self.mode:
+                if not self.decoder.alive:
+                    await self.decoder.restart()
+                return
+            # Mode changed (or first entry): tear the old stream down before
+            # building the new one — two decoders on one listener would double
+            # both the CPU and the audio.
+            await self._stop_decoder()
+
+            # Respect the global process cap. The decoder is per-listener, so
+            # without this N listeners cost N processes and N x ~30 MB; the cap
+            # is the difference between "fine" and OOM on a small box.
+            used = Listener.decoder_process_count()
+            if settings.DIGITAL_DECODE_MAX_PROC > 0 \
+                    and used >= settings.DIGITAL_DECODE_MAX_PROC:
+                logger.warning(
+                    "listener %s: %s not started — dsd-neo process cap reached "
+                    "(%d/%d, see DIGITAL_DECODE_MAX_PROC)",
+                    self.id[:8], self.mode.value,
+                    used, settings.DIGITAL_DECODE_MAX_PROC,
+                )
+                return
+
+            dec = DigitalDecoder(
+                self.mode,
+                binary=settings.DSD_NEO_BIN,
+                max_restarts=settings.DIGITAL_DECODE_RESTART_MAX,
+            )
+            started = await dec.start()
+            # Keep the object even when the binary is missing: the worker can
+            # then report "decoder unavailable" instead of silently producing
+            # analog noise for a digital channel.
+            self.decoder = dec
+            if not started:
+                logger.warning(
+                    "listener %s: %s needs dsd-neo, which is not available; "
+                    "audio will be silent", self.id[:8], self.mode.value,
+                )
+        else:
+            await self._stop_decoder()
+
+    async def _stop_decoder(self) -> None:
+        dec, self.decoder = self.decoder, None
+        if dec is not None:
+            try:
+                await dec.stop()
+            except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                logger.debug("listener %s: decoder stop failed: %s",
+                             self.id[:8], exc)
+        self.out_audio_rate = self.audio_rate
+
+    # Registry of live decoder processes, so the global cap
+    # (settings.DIGITAL_DECODE_MAX_PROC) can be enforced. Weak references are
+    # unnecessary: entries are added on start and removed on stop, both driven
+    # by the listener lifecycle.
+    _live_decoders: "set" = set()
+
+    @classmethod
+    def register_decoder(cls, dec) -> None:
+        cls._live_decoders.add(id(dec))
+
+    @classmethod
+    def unregister_decoder(cls, dec) -> None:
+        cls._live_decoders.discard(id(dec))
+
+    @classmethod
+    def decoder_process_count(cls) -> int:
+        """How many dsd-neo processes this process has started."""
+        return len(cls._live_decoders)
+
+    def digital_ready(self) -> bool:
+        """True when this listener can actually produce decoded audio."""
+        return self.mode in DIGITAL_MODES and self.decoder is not None
 
     def set_bandwidth(self, bw_hz: int) -> None:
         """Set this listener's channel bandwidth (Hz).
@@ -374,6 +488,21 @@ class Listener:
             # Force-finish an in-flight recording immediately so it is not left
             # dangling when the user disables auto-record.
             self._ar_silence_start = -1.0  # sentinel: finish on next tick
+
+
+def _decoder_lifecycle(dec, started: bool) -> None:
+    """Track live dsd-neo processes for the global cap.
+
+    Registered as a hook on backend.audio.decoder so that module does not have
+    to import this one (it would be a cycle: broadcaster imports decoder).
+    """
+    if started:
+        Listener.register_decoder(dec)
+    else:
+        Listener.unregister_decoder(dec)
+
+
+add_lifecycle_hook(_decoder_lifecycle)
 
 
 class AudioBroadcaster:
@@ -501,6 +630,22 @@ class AudioBroadcaster:
     def has_listeners(self) -> bool:
         return len(self._listeners) > 0
 
+    @staticmethod
+    def decoder_process_count() -> int:
+        """Number of live dsd-neo processes (for status/telemetry and the cap).
+
+        Exposed here because this is the object the rest of the app already
+        talks to; the registry itself lives on Listener.
+        """
+        return Listener.decoder_process_count()
+
+    @staticmethod
+    def digital_available() -> bool:
+        """True when digital decoding can run on this host."""
+        from backend.audio.decoder import unavailable_reason
+        return (settings.DIGITAL_DECODE_ENABLED
+                and unavailable_reason(settings.DSD_NEO_BIN) is None)
+
     async def subscribe(self, sample_rate: int, audio_rate: int,
                         mode, channel_bw: int,
                         vfo_offset_hz: float = 0.0,
@@ -584,6 +729,14 @@ class AudioBroadcaster:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Kill the dsd-neo process AFTER the worker stops (the worker is the
+        # only thing that feeds it). Leaving it would leak one process — and
+        # ~30 MB — per disconnected digital listener.
+        try:
+            await listener._stop_decoder()
+        except Exception as e:
+            logger.warning("🔊 Listener %s decoder teardown failed: %s",
+                           listener.id[:8], e)
         logger.info("🔊 Audio listener removed (total: %d)", len(self._listeners))
         # Notify SDRManager so it can demote its pool consumer to IDLE (which
         # yields the tuner to background jobs when the last listener leaves).
@@ -719,7 +872,20 @@ class AudioBroadcaster:
                         continue
                     last_sample_rate = sample_rate
                     last_audio_rate = audio_rate
-                    if self._matches_global(
+                    if ln.mode in DIGITAL_MODES:
+                        # Digital voice: ALWAYS own-demod, never reuse the
+                        # global audio. The global channel is demodulated as the
+                        # analog mode with de-emphasis + a 300-3400 Hz voice
+                        # band-pass, which destroys the symbol stream. (The mode
+                        # also has to match, so this is belt-and-braces.)
+                        #
+                        # NOTE: NOT added to demod_pkts. The digital path builds
+                        # its own baseband in _process_digital_packet, so putting
+                        # the chunk in the analog batch as well would run the
+                        # whole analog chain (~10 ms/chunk) just to throw the
+                        # result away.
+                        plan.append(("digital", iq_bytes))
+                    elif self._matches_global(
                         ln, sample_rate, audio_rate,
                         global_audio, g_mode, g_channel_bw, g_vfo,
                     ):
@@ -761,6 +927,10 @@ class AudioBroadcaster:
                 di = 0  # index into demod_audios
                 for step in plan:
                     try:
+                        if step[0] == "digital":
+                            await self._process_digital_packet(
+                                ln, step[1], last_sample_rate)
+                            continue
                         if step[0] == "reuse":
                             _, audio, gsig = step
                             # Update the squelch signal level from the global value.
@@ -990,6 +1160,127 @@ class AudioBroadcaster:
             channel_bw=listener.channel_bw,
         )
         return audio, levels
+
+    # ------------------------------------------------------------------
+    # Digital voice (external dsd-neo process)
+    # ------------------------------------------------------------------
+    async def _process_digital_packet(self, ln: "Listener", iq_bytes: bytes,
+                                      sample_rate: int) -> None:
+        """Feed one IQ chunk to this listener's decoder and emit its audio.
+
+        Two halves, and the split matters:
+
+          1. CPU: IQ -> flat discriminator baseband (48 kHz), in the executor.
+             This is the same numpy work the analog path does, minus
+             de-emphasis and the voice band-pass, so it is actually cheaper.
+
+          2. dsd-neo: baseband -> 8 kHz decoded voice. The process does symbol
+             timing, frame sync, FEC and the vocoder, and only emits audio for
+             frames that pass their CRC — so silence between transmissions is
+             normal and must not be treated as an error.
+
+        The decoded audio bypasses `_apply_squelch`: digital has no carrier to
+        gate on, and dsd-neo already drops frames it cannot decode. Muting on
+        the analog squelch meter would clip the first syllable of every call
+        (the level meter lags the frame it belongs to).
+        """
+        await ln.apply_mode_side_effects()
+        dec = ln.decoder
+        if dec is None:
+            return
+
+        # --- 1. baseband (executor: numpy releases the GIL) ---
+        levels = []
+        try:
+            iq = iq_to_complex(iq_bytes)
+        except Exception:
+            return
+        if len(iq) < 64:
+            return
+
+        # Channel power still drives the SIG meter / auto-record gating. Digital
+        # has no audio squelch, but the user still wants to see the carrier.
+        try:
+            levels.append(float(compute_channel_power(
+                iq, sample_rate, ln.mode,
+                channel_bw=ln.channel_bw,
+                vfo_offset_hz=ln.vfo_offset_hz,
+            )))
+        except Exception:
+            pass
+        for lv in levels:
+            ln._smooth_level(lv)
+
+        loop = asyncio.get_running_loop()
+        ln.demod.set_vfo_offset(ln.vfo_offset_hz)
+        try:
+            baseband = await loop.run_in_executor(
+                self._executor,
+                ln.demod.process,
+                iq, ln.mode, float(sample_rate), float(ln.audio_rate), ln.channel_bw,
+            )
+        except Exception as e:
+            logger.warning("🔊 Listener %s digital baseband error: %s",
+                           ln.id[:8], e)
+            return
+
+        # --- 2. decoder ---
+        if len(baseband) > 0:
+            await dec.feed(baseband)
+
+        audio = dec.read()
+        if len(audio) == 0:
+            # No completed voice frame this tick: still push a SIG frame so the
+            # meter and the RX indicator stay live while the user waits.
+            self._emit_sig_frame(ln)
+            return
+
+        rate = dec.audio_rate
+        ln.out_audio_rate = rate
+        ln._sq_audio_rate = rate
+
+        # Auto-record uses PRE-squelch audio (see the analog path): digital has
+        # no squelch to apply, so this is simply the decoded voice.
+        if ln.auto_record or ln._ar_recording:
+            self._process_auto_record(ln, audio, rate)
+
+        self._emit_sig_frame(ln)
+
+        frame = self._batch_listener(ln, audio, rate)
+        if frame:
+            self._enqueue_frame(ln, frame)
+
+        # Manual-recording bookkeeping: the max-duration cap and the
+        # channel-change split both need the worker's async context.
+        if getattr(ln, "_mr_timeout_pending", False):
+            rec_data = self.check_manual_record_timeout(ln)
+            if rec_data is not None:
+                rec_data["source"] = "manual"
+                self._fire_auto_recording(ln, rec_data)
+
+        if ln.is_recording:
+            split = self._recording_split_reason(
+                ln, ln.record_freq_hz, ln.record_mode)
+            if split:
+                seg = self.split_listener_recording(ln)
+                if seg is not None:
+                    self._fire_auto_recording(ln, seg)
+
+    def _emit_sig_frame(self, ln: "Listener") -> None:
+        """Throttled per-listener SIG frame (shared by analog and digital)."""
+        now_sig = time.monotonic()
+        if now_sig - ln._last_sig_send < _SIG_FRAME_INTERVAL:
+            return
+        ln._last_sig_send = now_sig
+        self._enqueue_frame(ln, ("sig", {
+            "db": round(ln._sig_smoothed, 1),
+            "sq_open": bool(ln._sq_open),
+            "thr": round(ln._sq_threshold_db, 1),
+            "auto": bool(ln.auto_squelch),
+            # Tells the UI the audio is vocoder output, not a carrier: it can
+            # label the mode as "digital" and explain an empty burst.
+            "digital": bool(ln.mode in DIGITAL_MODES),
+        }))
 
     @staticmethod
     def _apply_squelch(listener: Listener, audio: np.ndarray) -> np.ndarray:
@@ -1470,12 +1761,17 @@ class AudioBroadcaster:
             return None
 
         audio_data = np.concatenate(listener.record_buffer)
-        duration = len(audio_data) / max(1, listener.audio_rate)
+        # Use the rate the audio was ACTUALLY produced at. In a digital mode
+        # that is 8 kHz (dsd-neo's vocoder output), not the SDR's 32 kHz
+        # audio_rate — using the wrong one wrote a WAV that played 4x too slow
+        # and reported a quarter of the real duration.
+        rec_rate = int(getattr(listener, "out_audio_rate", listener.audio_rate))
+        duration = len(audio_data) / max(1, rec_rate)
 
         result = {
             "audio_data": audio_data,
             "duration": duration,
-            "sample_rate": listener.audio_rate,
+            "sample_rate": rec_rate,
             "mode": listener.record_mode or listener.mode.value,
             "vfo_offset_hz": listener.vfo_offset_hz,
             "freq_hz": listener.record_freq_hz,

@@ -41,6 +41,19 @@ class DemodMode(str, enum.Enum):
     AM = "AM"
     USB = "USB"
     LSB = "LSB"
+    # Digital voice. Keep in sync with backend.audio.demod.DemodMode — that
+    # module owns the decoding behaviour; this copy exists because the ORM
+    # column must not import the DSP stack.
+    #
+    # NOTE: stored in a VARCHAR(3) column inside an Enum(). SQLite neither
+    # enforces the length nor emits a CHECK constraint (SQLAlchemy defaults to
+    # create_constraint=False), so the longer values persist unchanged. A
+    # future move to PostgreSQL needs `ALTER COLUMN mode TYPE VARCHAR(16)`.
+    P25P1 = "P25P1"
+    DMR = "DMR"
+    NXDN = "NXDN"
+    DSTAR = "DSTAR"
+    DPMR = "DPMR"
 
 
 class Recording(Base):

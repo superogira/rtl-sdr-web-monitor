@@ -466,6 +466,7 @@ No SDR hardware is needed — the DSP, squelch, bandwidth and VFO-limit tests us
 - [`HOW_TO_RESTART.md`](./HOW_TO_RESTART.md) — Quick restart reference
 - [`docs/WHISPER_LOCAL_STT.md`](./docs/WHISPER_LOCAL_STT.md) — Setup guide for local Whisper STT
 - [`docs/USB_RTL_SDR_SETUP.md`](./docs/USB_RTL_SDR_SETUP.md) — Using a USB RTL-SDR directly (no rtl_tcp)
+- [`docs/DIGITAL_MODES.md`](./docs/DIGITAL_MODES.md) — Digital voice decoding (P25 P1 / DMR / NXDN / D-STAR / dPMR)
 
 ---
 

@@ -40,6 +40,20 @@ class Settings(BaseSettings):
     # actual tuner state, controller ownership, and per-channel signal/squelch.
     SDR_JOB_DEBUG: bool = False
 
+    # === Digital voice decoding (see docs/DIGITAL_MODES.md) ===
+    # Decoding runs in an external `dsd-neo` process: this app only produces the
+    # flat discriminator baseband and plays back the decoded 8 kHz audio.
+    DIGITAL_DECODE_ENABLED: bool = True
+    # Path to the dsd-neo executable. Empty = auto-detect (PATH, then the usual
+    # /opt/dsd-neo locations). Set it when using an AppImage extraction or a
+    # build outside PATH.
+    DSD_NEO_BIN: str = ""
+    # Hard ceiling on simultaneous dsd-neo processes. Each costs ~25-35 MB RSS
+    # and 2-5% of a core; the cap keeps one busy evening from exhausting RAM.
+    DIGITAL_DECODE_MAX_PROC: int = 8
+    # Restart budget before a listener's decoder is left stopped. 0 = unlimited.
+    DIGITAL_DECODE_RESTART_MAX: int = 5
+
     # Audio Settings
     # Audio output sample rate.
     # 32000 Hz chosen to support WBFM broadcast audio (up to 15 kHz music)

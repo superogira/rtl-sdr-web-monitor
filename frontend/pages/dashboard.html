@@ -31,6 +31,26 @@
                     <button class="mode-btn" data-mode="AM">AM</button>
                     <button class="mode-btn" data-mode="USB">USB</button>
                     <button class="mode-btn" data-mode="LSB">LSB</button>
+                    <!-- Digital voice: a dropdown, because nine buttons would
+                         overflow the header. Each entry maps to a dsd-neo
+                         preset (see DIGITAL_MODE_FLAGS in demod.py). -->
+                    <div class="mode-dropdown">
+                        <button class="mode-btn mode-digital-trigger" id="mode-digital-trigger"
+                                data-i18n-title="dash.digitalTitle"
+                                title="Digital voice (decoded by dsd-neo)">Digital ▾</button>
+                        <div class="mode-dropdown-menu" id="mode-digital-menu" style="display:none;">
+                            <button class="mode-dropdown-item" data-mode="P25P1">
+                                P25 Phase 1 <small>IMBE · 12.5k</small></button>
+                            <button class="mode-dropdown-item" data-mode="DMR">
+                                DMR <small>AMBE+2 · 12.5k</small></button>
+                            <button class="mode-dropdown-item" data-mode="NXDN">
+                                NXDN <small>AMBE+2 · 12.5k</small></button>
+                            <button class="mode-dropdown-item" data-mode="DSTAR">
+                                D-STAR <small>AMBE · 6.25k</small></button>
+                            <button class="mode-dropdown-item" data-mode="DPMR">
+                                dPMR <small>AMBE+2 · 6.25k</small></button>
+                        </div>
+                    </div>
                 </div>
                 <button class="bw-trigger-btn" id="bw-trigger" onclick="App.toggleBwPopover(event)">
                     BW <span id="bw-trigger-label">12k</span> ▾

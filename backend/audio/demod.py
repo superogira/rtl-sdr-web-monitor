@@ -1,9 +1,21 @@
 """
-Demodulation module for FM, AM, USB, LSB.
+Demodulation module for FM, AM, USB, LSB and the digital voice baseband tap.
 Converts raw IQ data to audio.
 
 Optimized with scipy.signal.lfilter (C vectorized) instead of pure-Python loops.
 This dramatically reduces CPU usage in the stream loop, fixing audio stutter.
+
+Digital voice
+-------------
+The digital modes (P25 Phase 1, DMR, NXDN, D-STAR, dPMR) do NOT produce audio
+here. This module only turns the IQ into the FLAT discriminator baseband those
+decoders expect; the symbol timing, frame sync, FEC and the vocoder all live in
+the external `dsd-neo` process (see backend/audio/decoder.py).
+
+The distinction matters: the analog FM path deliberately applies de-emphasis
+and a 300-3400 Hz voice band-pass, both of which destroy an FSK/C4FM symbol
+stream. `_process_digital()` therefore shares the discriminator arithmetic with
+`_process_fm()` but skips every filter that would smear the symbols.
 """
 import numpy as np
 import logging
@@ -67,6 +79,57 @@ class DemodMode(str, Enum):
     AM = "AM"
     USB = "USB"
     LSB = "LSB"
+    # --- Digital voice (decoded by the external dsd-neo process) ---
+    P25P1 = "P25P1"    # P25 Phase 1, IMBE 7200x4400, 12.5 kHz C4FM
+    DMR = "DMR"        # DMR / MOTOTRBO, AMBE+2, 2-slot TDMA, 12.5 kHz 4FSK
+    NXDN = "NXDN"      # NXDN96, AMBE+2, 12.5 kHz 4FSK
+    DSTAR = "DSTAR"    # D-STAR DV, AMBE 3600x2400, 6.25 kHz GMSK
+    DPMR = "DPMR"      # dPMR, AMBE+2, 6.25 kHz 4FSK
+
+
+# DemodMode -> dsd-neo `-f` preset. Single source of truth: the UI choices, the
+# listener plumbing and the subprocess launcher all read this map, so adding a
+# mode is a one-line change here plus the enum value above.
+#
+# Preset reference (dsd-neo 2.11, `dsd-neo -h`):
+#   -f1 P25 Phase 1   -fs DMR (dual slot)   -fn NXDN96
+#   -fd D-STAR        -fm dPMR
+DIGITAL_MODE_FLAGS: dict = {
+    DemodMode.P25P1: "-f1",
+    DemodMode.DMR: "-fs",
+    DemodMode.NXDN: "-fn",
+    DemodMode.DSTAR: "-fd",
+    DemodMode.DPMR: "-fm",
+}
+
+# Membership set — used for cheap `mode in DIGITAL_MODES` checks on the hot
+# per-chunk path (a frozenset of the enum members, not of their names).
+DIGITAL_MODES = frozenset(DIGITAL_MODE_FLAGS)
+
+# dsd-neo always emits COMPLETED 20 ms voice frames at 8 kHz (its presets pin
+# `pulse_digi_rate_out = 8000`). The rate is reported to the browser in the
+# AUD2 header, so the client resamples it — nothing downstream may assume the
+# SDR's AUDIO_SAMPLE_RATE here.
+DIGITAL_AUDIO_RATE = 8000
+
+# Baseband rate we hand to the decoder. dsd-neo reads PCM16LE at whatever `-s`
+# says and expects the rtl_fm convention: the FM discriminator output scaled so
+# ±5 kHz of deviation is full scale. 48 kHz is dsd-neo's documented default for
+# stdin and comfortably covers a 12.5 kHz channel (±6.25 kHz).
+DIGITAL_INPUT_RATE = 48000
+
+# Deviation that maps to full scale on the discriminator output (rtl_fm's
+# convention, which is what dsd-neo's input stage is calibrated for).
+_DIGITAL_DEV_HZ = 5000.0
+
+# Input samples of the 32 kHz baseband kept between chunks and re-fed to the
+# 32k->48k upsampler. scipy's resample_poly is STATELESS: called once per 50 ms
+# chunk it zero-pads both edges, so the first/last handful of output samples of
+# every chunk are wrong. That is a small discontinuity ~20 times a second going
+# into a symbol-timing loop, which is exactly the kind of thing that makes a
+# decoder lose sync. Re-feeding the previous chunk's tail and dropping the
+# duplicated output makes the boundaries continuous.
+_DIGITAL_UPSAMPLE_OVERLAP = 32
 
 
 def iq_to_complex(iq_bytes: bytes) -> np.ndarray:
@@ -240,6 +303,12 @@ def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
         audio = demod_ssb(iq, sample_rate, audio_rate, "usb")
     elif mode == DemodMode.LSB:
         audio = demod_ssb(iq, sample_rate, audio_rate, "lsb")
+    elif mode in DIGITAL_MODES:
+        # Stateless path: no decoder subprocess, so there is no audio to
+        # produce. Returning the flat baseband here would be played as noise.
+        # Live decoding always goes through StreamingDemodulator; this branch
+        # only exists so a stray caller gets silence instead of an exception.
+        return np.zeros(0, dtype=np.float32)
     else:
         audio = demod_fm(iq, sample_rate, audio_rate, channel_bw=channel_bw)
 
@@ -261,11 +330,19 @@ def demodulate(iq_bytes: bytes, mode: DemodMode, sample_rate: float,
 # and real receivers report S-meter / squelch signal strength.
 
 # Channel bandwidth (Hz) per demodulation mode.
+# The first four are the analog defaults used for the S-meter/squelch window;
+# the digital entries are the occupied channel the decoder needs (12.5 kHz
+# 4FSK for P25 P1/DMR/NXDN96, 6.25 kHz for D-STAR/dPMR).
 _CHANNEL_BW = {
     "FM": 12000,   # NBFM ±6 kHz
     "AM": 10000,   # AM ±5 kHz
     "USB": 6000,   # USB 300-3300 Hz (one sideband)
     "LSB": 6000,   # LSB 300-3300 Hz (one sideband)
+    "P25P1": 12500,
+    "DMR": 12500,
+    "NXDN": 12500,
+    "DSTAR": 6250,
+    "DPMR": 6250,
 }
 
 
@@ -495,6 +572,26 @@ def _am_if_cutoff(channel_bw: int) -> float:
     return max(1500.0, min(half * 0.95, 10_000.0))
 
 
+def _digital_if_cutoff(channel_bw: int) -> float:
+    """One-sided IF low-pass cutoff (Hz) for the digital voice baseband.
+
+    Deliberately NOT the NBFM rule: NBFM is floored at 6.5 kHz because analog
+    FM carries ±5 kHz deviation plus 3 kHz of audio. A digital carrier is
+    FSK/GMSK with a much smaller deviation (P25 C4FM ±1.8 kHz, DMR 4FSK
+    ±1.9 kHz), so a narrower filter already rejects the adjacent channel
+    without clipping the symbols — and a wider one would only add noise for
+    the slicer.
+
+      6250 Hz channel (D-STAR, dPMR)        → 3.6 kHz  (need ≥ ~2.8 kHz)
+     12500 Hz channel (P25 P1, DMR, NXDN96) → 6.0 kHz  (need ≥ ~5.6 kHz)
+
+    The 0.95 factor and the 3.0–7.0 kHz clamp mirror `_channel_lpf_cutoff`'s
+    style so both paths behave predictably at the filter design limits.
+    """
+    half = (channel_bw or 12500) / 2.0
+    return max(3000.0, min(half * 0.95, 7000.0))
+
+
 def _design_channel_lpf(sample_rate: float, cutoff: float, order: int = 8):
     """Design a Butterworth low-pass for IQ channel selection (returns sos).
 
@@ -592,6 +689,13 @@ class StreamingDemodulator:
         self._ssb_zi_imag: Optional[np.ndarray] = None
         self._ssb_bw: Optional[float] = None
         self._ssb_sample_rate: Optional[float] = None
+        # Digital voice: cache key for the digital IF + decimation filters.
+        # The digital tap reuses _chan_* / _decim_* but never builds the
+        # de-emphasis or voice-band filters, so it needs its own cache key.
+        self._dig_key = None
+        # Tail of the previous 32 kHz baseband chunk, kept so the upsampler can
+        # treat chunk boundaries as continuous (see _upsample_digital).
+        self._dig_up_tail: Optional[np.ndarray] = None
         # VFO offset (Hz) — shifts IQ so the demodulator decodes a frequency
         # offset from the SDR center frequency (OpenWebRX-style). The mixer
         # phase accumulator keeps the LO continuous across chunks.
@@ -862,6 +966,12 @@ class StreamingDemodulator:
         iq = self._apply_vfo_shift(iq, sample_rate)
 
         try:
+            if mode in DIGITAL_MODES:
+                # Flat discriminator baseband for the dsd-neo subprocess. The
+                # caller (AudioBroadcaster) feeds this to the decoder instead
+                # of playing it, so `audio_rate` is unused here on purpose:
+                # the output is always DIGITAL_INPUT_RATE (48 kHz).
+                return self._process_digital(iq, sample_rate, channel_bw)
             if mode == DemodMode.FM:
                 return self._process_fm(iq, sample_rate, audio_rate, channel_bw)
             elif mode == DemodMode.AM:
@@ -876,6 +986,145 @@ class StreamingDemodulator:
             # Too few samples for the filters this round — degrade gracefully
             # (equivalent to the old stateless behaviour for tiny blocks).
             return np.array([], dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # Digital voice baseband (P25 P1 / DMR / NXDN / D-STAR / dPMR)
+    # ------------------------------------------------------------------
+    def _ensure_digital_state(self, sample_rate: float, base_rate: float,
+                              channel_bw: int) -> None:
+        """Build ONLY the channel-select and anti-alias filters.
+
+        Deliberately does NOT build the de-emphasis filter or the voice
+        band-pass: de-emphasis is a low-pass that smears FSK/C4FM symbols and
+        the 300-3400 Hz band-pass deletes the sidelobes the symbol slicer
+        needs. Those two are the whole reason the analog FM path cannot be
+        reused for digital voice.
+
+        `base_rate` is the rate the discriminator output is decimated to
+        (32 kHz). It is chosen so sample_rate/base_rate is an exact integer,
+        which lets `_decimate_audio` take its fast stride path instead of
+        running a ~2560-tap polyphase resampler on every 50 ms chunk.
+        """
+        key = (float(sample_rate), float(base_rate), int(channel_bw))
+        if self._dig_key == key:
+            return
+        self._dig_key = key
+        self._chan_sos = _design_channel_lpf(
+            sample_rate, _digital_if_cutoff(channel_bw))
+        self._chan_zi = sosfilt_zi(self._chan_sos).astype(np.float32)
+        self._chan_zi_imag = sosfilt_zi(self._chan_sos).astype(np.float32)
+        self._decim_sos, self._decim_zi = _design_decim_lpf(sample_rate, base_rate)
+        # Restart FM phase continuity: the previous chunk's phase belongs to
+        # another filter state, and np.diff across the boundary would inject a
+        # spurious frequency step.
+        self._last_phase = None
+        # Drop the upsampler overlap too: it came from the previous chunk of a
+        # different stream, so prepending it would splice two unrelated signals.
+        self._dig_up_tail = None
+
+    def _upsample_digital(self, audio: np.ndarray, base_rate: float) -> np.ndarray:
+        """Band-limited integer upsample of the discriminator output.
+
+        The decoder wants 48 kHz but decimating the 2.048 MSPS IQ straight to
+        48 kHz is a trap: 2048000/48000 = 42.67 is not an integer, so scipy
+        would design a ~20 x 128 = 2560-tap filter and run it on a 3x
+        upsampled 307k-sample block — hundreds of milliseconds per 50 ms
+        chunk, i.e. slower than real time.
+
+        Instead the hot path decimates 2048000 -> 32000 (stride 64, exact) and
+        this method does the short 32k -> 48k step (ratio 3/2, ~60 taps on
+        1600 samples). The intermediate 32 kHz baseband covers ±16 kHz, which
+        is more than the widest channel we decode (12.5 kHz).
+        """
+        if base_rate <= 0:
+            return audio
+        if abs(base_rate - DIGITAL_INPUT_RATE) < 1.0:
+            return audio
+        if base_rate > DIGITAL_INPUT_RATE:
+            # Down-converting here would alias the symbol sidelobes; the
+            # caller must pass a base_rate at or below DIGITAL_INPUT_RATE.
+            logger.warning(
+                "digital baseband rate %.0f Hz > decoder rate %d Hz; not resampling",
+                base_rate, DIGITAL_INPUT_RATE,
+            )
+            return audio
+        from math import gcd
+        up = int(round(DIGITAL_INPUT_RATE))
+        down = int(round(base_rate))
+        g = gcd(up, down)
+        up //= g
+        down //= g
+
+        # resample_poly zero-pads both ends of every block it is given, so
+        # calling it once per chunk leaves a glitch at every seam (~20/s) right
+        # in the stream the decoder's symbol-timing loop reads. Prepend the
+        # previous chunk's tail so the filter has real history, then throw away
+        # the part that came from the overlap.
+        tail = self._dig_up_tail
+        ov = 0
+        if tail is not None and len(tail) and len(audio):
+            ov = min(_DIGITAL_UPSAMPLE_OVERLAP, len(tail), len(audio))
+            audio = np.concatenate((tail[-ov:], audio))
+        self._dig_up_tail = (
+            np.array(audio[-_DIGITAL_UPSAMPLE_OVERLAP:], copy=True)
+            if len(audio) else None
+        )
+
+        out = resample_poly(audio, up, down).astype(np.float32)
+        # Each input sample yields up/down output samples; drop the prologue
+        # that belongs to the overlap we prepended.
+        skip = ov * up // down
+        return out[skip:] if skip else out
+
+    def _process_digital(self, iq: np.ndarray, sample_rate: float,
+                         channel_bw: int) -> np.ndarray:
+        """Flat FM discriminator tap for the digital voice decoder.
+
+        Returns float32 at DIGITAL_INPUT_RATE (48 kHz), scaled so ±5 kHz of
+        deviation maps to full scale — the rtl_fm convention dsd-neo's input
+        stage is calibrated for.
+
+        Differences from `_process_fm` (on purpose, do not "fix"):
+          * no de-emphasis low-pass  → would smear the FSK/C4FM symbols
+          * no 300-3400 Hz voice band-pass → would delete the symbol sidelobes
+          * no WBFM/NBFM branching   → digital carriers are always narrow
+          * narrower IF filter       → `_digital_if_cutoff`, not the 6.5 kHz
+                                       NBFM floor
+        """
+        # Decimate to 32 kHz when the SDR rate divides by it exactly (the
+        # normal 2.048/2.4 MSPS cases); otherwise fall back to 48 kHz and let
+        # _decimate_audio's rational path handle it.
+        base_rate = 32000.0
+        if abs(sample_rate / base_rate - round(sample_rate / base_rate)) > 1e-6:
+            base_rate = float(DIGITAL_INPUT_RATE)
+
+        self._ensure_digital_state(sample_rate, base_rate, channel_bw)
+
+        # Channel-select BEFORE the discriminator so an adjacent transmitter
+        # cannot capture the limiter (same reason as the NBFM path).
+        iq = self._filter_iq_channel(iq)
+
+        phase = np.angle(iq).astype(np.float64)
+        if self._last_phase is not None:
+            full = np.empty(len(phase) + 1, dtype=np.float64)
+            full[0] = self._last_phase
+            full[1:] = phase
+            demod = np.diff(full)
+        else:
+            demod = np.diff(phase)
+        self._last_phase = float(phase[-1])
+
+        # Wrap into [-pi, pi]: np.diff of principal-value angles produces a
+        # 2*pi step at every roll-over, which would be a full-scale click.
+        demod = np.where(demod > np.pi, demod - 2 * np.pi, demod)
+        demod = np.where(demod < -np.pi, demod + 2 * np.pi, demod)
+        demod = demod.astype(np.float32)
+
+        # NO de-emphasis lfilter here — that is the point of this path.
+        audio = self._decimate_audio(demod, sample_rate, base_rate)
+        audio = audio * (sample_rate / (2.0 * np.pi * _DIGITAL_DEV_HZ))
+        audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
+        return self._upsample_digital(audio, base_rate)
 
     # ------------------------------------------------------------------
     # FM

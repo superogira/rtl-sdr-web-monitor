@@ -21,8 +21,15 @@ from backend.models.recording_job import (
 )
 from backend.models.sdr_device import SdrDevice
 
-# Valid demod modes (mirror DemodMode enum)
-_DEMOD_MODES = {"FM", "AM", "USB", "LSB"}
+# Valid demod modes (mirror DemodMode enum).
+# Digital entries exist so a scheduled job can be LABELLED with the channel's
+# protocol, but note the JOB capture path (DeviceCapture) still demodulates
+# them with the narrow-FM chain: it records the discriminator baseband, not
+# decoded voice. Live listening goes through the dsd-neo decoder instead.
+# Recorded digital audio therefore needs external decoding until the JOB path
+# grows a decoder of its own.
+_DEMOD_MODES = {"FM", "AM", "USB", "LSB",
+                "P25P1", "DMR", "NXDN", "DSTAR", "DPMR"}
 
 # Sample-rate limits (RTL-SDR practical range)
 _MIN_SAMPLE_RATE = 250000      # 250 kHz
