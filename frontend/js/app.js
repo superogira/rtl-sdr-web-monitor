@@ -1658,6 +1658,9 @@ const App = {
      *  lived on that listener, so clear that VFO's state (other VFOs keep
      *  recording). */
     _onVfoClosed(idx, code) {
+        // A closed socket sends no more sig frames, so clear the digital chip
+        // here rather than leaving it on a dead row.
+        this._clearDigitalState(idx);
         if (this._recordingVfoIdxs.includes(idx)) {
             this._setVfoRecordingState(idx, false);
             this._showStreamStoppedToast(I18n.t('dash.recLostConnSaved'));
@@ -1769,6 +1772,10 @@ const App = {
 
     /** A VFO's listener became "ready" on the server. */
     _onVfoReady(idx, obj) {
+        // A brand-new listener: whatever digital state the previous one had is
+        // gone with it, so start clean. The next sig frame (analog or digital)
+        // will paint the correct chip.
+        this._clearDigitalState(idx);
         // Adopt the server's per-listener default offset only if THIS VFO's
         // cursor hasn't been user-touched yet.
         if (obj.vfo_offset_hz !== undefined && this._vfos[idx]) {
@@ -1804,12 +1811,30 @@ const App = {
         this._renderVfoSig();
         // Apply/remove the green "RX active" flash on the VFO row.
         this._updateVfoRxActive(idx);
-        if (digital) this._renderDigitalStatus(idx);
+        // ALWAYS re-render, not only when digital. Leaving a digital mode has to
+        // HIDE the chip, and the only code that hides it is
+        // _renderDigitalStatus() with digital=false — calling it conditionally
+        // on `digital` left "waiting for signal" stuck on screen after
+        // switching back to FM.
+        this._renderDigitalStatus(idx);
     },
 
     /** Per-VFO digital decoder state (see the digital branch in demod.py). */
     _vfoDigital: [false, false, false, false],
     _vfoDec: [null, null, null, null],
+
+    /** Drop a VFO's digital chip.
+     *
+     *  The normal path is a sig frame with digital=false, but that requires the
+     *  stream to be flowing. When the WebSocket closes (or the listener is torn
+     *  down) no further sig frames arrive, so the chip would survive the
+     *  disconnect on a dead row. Called from _onVfoClosed / _onVfoReady. */
+    _clearDigitalState(idx) {
+        if (idx < 0 || idx >= this._vfoDigital.length) return;
+        this._vfoDigital[idx] = false;
+        this._vfoDec[idx] = null;
+        this._renderDigitalStatus(idx);
+    },
 
     /** Show WHY a digital VFO is silent.
      *
@@ -1827,8 +1852,14 @@ const App = {
         if (!el) return;
         const dec = this._vfoDec[idx];
         if (!this._vfoDigital[idx] || !dec) {
+            // Back in an analog mode (or the decoder state is unknown): the chip
+            // must disappear completely. Clear the title too — leaving it set
+            // kept the old "the decoder is running but no burst…" tooltip alive
+            // on a hidden element.
             el.style.display = 'none';
             el.textContent = '';
+            el.title = '';
+            el.className = 'vfo-digital-status';
             return;
         }
         el.style.display = '';

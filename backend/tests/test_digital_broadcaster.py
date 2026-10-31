@@ -32,6 +32,61 @@ SDR_RATE = 2048000
 AUDIO_RATE = 32000
 
 
+def _iq_bytes(n_chunks: int = 1) -> bytes:
+    """Deterministic fake IQ (uint8 interleaved) for one 50 ms chunk."""
+    n = int(SDR_RATE * 0.05) * n_chunks
+    rng = np.random.default_rng(11)
+    i = (rng.standard_normal(n) * 20 + 128).clip(1, 254).astype(np.uint8)
+    q = (rng.standard_normal(n) * 20 + 128).clip(1, 254).astype(np.uint8)
+    inter = np.empty(n * 2, dtype=np.uint8)
+    inter[0::2] = i
+    inter[1::2] = q
+    return inter.tobytes()
+
+
+def _drain(ln) -> None:
+    """Empty a listener's output queue (frames already consumed)."""
+    while True:
+        try:
+            ln.queue.get_nowait()
+        except Exception:
+            break
+
+
+async def _wait_for_sig(b, ln, timeout: float = 8.0, mode=None, bw=None,
+                        keep_feeding: bool = False):
+    """Wait for a ('sig', payload) frame from a listener's worker.
+
+    `keep_feeding` re-sends an IQ chunk every 100 ms: the worker only produces a
+    sig frame while it has IQ to process, so a single feed followed by a long
+    wait can legitimately time out on a loaded machine.
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    last_feed = 0.0
+    while _t.monotonic() < deadline:
+        if keep_feeding and (_t.monotonic() - last_feed) > 0.10:
+            last_feed = _t.monotonic()
+            b.feed_iq(_iq_bytes(), SDR_RATE, AUDIO_RATE, None,
+                      mode or ln.mode, bw or ln.channel_bw, ln.vfo_offset_hz, -50.0)
+        await asyncio.sleep(0.02)
+        while True:
+            try:
+                item = ln.queue.get_nowait()
+            except Exception:
+                break
+            if isinstance(item, tuple) and item[0] == "sig":
+                return item[1]
+    raise AssertionError("no sig frame produced within timeout")
+
+
+async def _make_listener(b, mode, bw, connection_id: str):
+    """Subscribe a real listener (worker task started) at a fixed VFO."""
+    ln = await b.subscribe(float(SDR_RATE), AUDIO_RATE, mode, bw, 0.0,
+                           connection_id=connection_id)
+    return ln
+
+
 class DigitalModeRateTests(unittest.TestCase):
     """`out_audio_rate` is what recordings and the AUD2 header trust."""
 
@@ -269,6 +324,65 @@ class DecoderLifecycleTests(unittest.IsolatedAsyncioTestCase):
         _magic, payload = ln.queue.get_nowait()
         self.assertFalse(payload["digital"])
         self.assertNotIn("dec", payload)
+
+    async def test_analog_sig_frame_signals_not_digital(self):
+        """Leaving a digital mode must be able to clear the UI chip.
+
+        REGRESSION: the analog branch of the worker emitted its own inline sig
+        frame WITHOUT a `digital` key, while only the digital branch's frame
+        carried it. After switching digital -> FM the client therefore received
+        `obj.digital === undefined` and never learned the mode had changed, so
+        "waiting for signal" stayed on screen forever.
+
+        Asserted through the REAL worker (subscribe + feed_iq), not by calling
+        _emit_sig_frame directly: the earlier test passed while the actual path
+        was still broken.
+        """
+        b = AudioBroadcaster()
+        ln = await _make_listener(b, DemodMode.FM, 12000, "sigcheck")
+        try:
+            payload = await _wait_for_sig(b, ln, keep_feeding=True,
+                                          mode=DemodMode.FM, bw=12000)
+            self.assertIn("digital", payload,
+                          "every sig frame must carry the flag, analog included")
+            self.assertFalse(payload["digital"])
+            self.assertNotIn("dec", payload)
+        finally:
+            await b.unsubscribe(ln)
+
+    async def test_digital_sig_frame_flags_digital(self):
+        """The same worker path must report True while a digital mode is active."""
+        b = AudioBroadcaster()
+        ln = await _make_listener(b, DemodMode.P25P1, 12500, "sigcheck2")
+        try:
+            payload = await _wait_for_sig(b, ln, keep_feeding=True,
+                                          mode=DemodMode.P25P1, bw=12500)
+            self.assertTrue(payload["digital"])
+            self.assertIn("dec", payload)
+            self.assertEqual(payload["dec"]["state"], "ok")
+        finally:
+            await b.unsubscribe(ln)
+
+    async def test_switching_back_to_analog_clears_the_flag(self):
+        """digital -> FM on ONE listener must flip the flag back to False."""
+        b = AudioBroadcaster()
+        ln = await _make_listener(b, DemodMode.P25P1, 12500, "sigcheck3")
+        try:
+            first = await _wait_for_sig(b, ln, keep_feeding=True,
+                                        mode=DemodMode.P25P1, bw=12500)
+            self.assertTrue(first["digital"])
+
+            # Switch this listener back to FM, exactly like the UI does.
+            ln.set_mode(DemodMode.FM)
+            ln.set_bandwidth(12000)
+            second = await _wait_for_sig(b, ln, keep_feeding=True,
+                                         mode=DemodMode.FM, bw=12000)
+            self.assertIn("digital", second)
+            self.assertFalse(second["digital"],
+                             "the flag must clear so the dashboard hides the chip")
+            self.assertNotIn("dec", second)
+        finally:
+            await b.unsubscribe(ln)
 
 
 if __name__ == "__main__":

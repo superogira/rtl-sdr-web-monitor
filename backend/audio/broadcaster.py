@@ -968,22 +968,14 @@ class AudioBroadcaster:
                         audio = self._apply_squelch(ln, audio)
 
                         # === Per-listener SIG meter (live listening) ===
-                        # Throttled to ~10 FPS. Carries the smoothed signal
-                        # level AND the current squelch-gate state so the client
-                        # can show a "RX active" indicator (flashing green) on
-                        # the VFO row when audio is passing.
-                        now_sig = time.monotonic()
-                        if now_sig - ln._last_sig_send >= _SIG_FRAME_INTERVAL:
-                            ln._last_sig_send = now_sig
-                            self._enqueue_frame(ln, ("sig", {
-                                "db": round(ln._sig_smoothed, 1),
-                                "sq_open": bool(ln._sq_open),
-                                # Effective threshold in use right now (manual
-                                # SQL, or what AUTO picked from the noise floor)
-                                # so the UI can show it next to the SIG bars.
-                                "thr": round(ln._sq_threshold_db, 1),
-                                "auto": bool(ln.auto_squelch),
-                            }))
+                        # ONE producer for both analog and digital. This used to
+                        # be an inline dict here and a separate one in
+                        # _emit_sig_frame(), and only the digital one carried the
+                        # `digital` flag. Switching digital -> FM therefore sent
+                        # sig frames WITHOUT that key, so the client never learned
+                        # the mode changed back and the "waiting for signal" chip
+                        # stayed on screen forever.
+                        self._emit_sig_frame(ln)
 
                         frame = self._batch_listener(ln, audio, audio_rate)
                         if frame:
