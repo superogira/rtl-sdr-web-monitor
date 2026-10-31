@@ -18,6 +18,8 @@
 7. [ข้อจำกัดที่สำคัญ](#7-ข้อจำกัดที่สำคัญ)
 8. [การแก้ปัญหา](#8-การแก้ปัญหา)
 9. [License และสิทธิบัตร](#9-license-และสิทธิบัตร)
+10. [การติดตั้งบน production](#10-การติดตั้งบน-production-บันทึกจากการ-deploy-จริง)
+11. [อ้างอิง](#11-อ้างอิง)
 
 ---
 
@@ -239,6 +241,17 @@ ls -l "$DSD_NEO_BIN" || ls -l /opt/dsd-neo/squashfs-root/AppRun
 journalctl -u rtl-sdr-web -n 100 --no-pager | grep -i 'digital decode'
 ```
 
+### Dashboard ขึ้น "⚠ dsd-neo not installed" / "decoder stopped"
+
+VFO row แสดงสถานะของ decoder โดยตรง (ชิปเล็ก ๆ ข้างมิเตอร์ SIG):
+
+| ที่เห็น | ความหมาย | ต้องทำ |
+|---|---|---|
+| `ดิจิทัล · รอสัญญาณ` (จาง) | decoder ทำงานดี แค่ยังไม่มี burst | **ปกติ** — รอสัญญาณ |
+| `⚠ dsd-neo not installed` | หาโปรแกรมไม่เจอ | ติดตั้ง หรือแก้ `DSD_NEO_BIN` |
+| `⚠ dsd-neo not executable at …` | ตั้ง path ผิด | แก้ path ใน `.env` แล้ว restart |
+| `⚠ decoder stopped` | เคยรันแล้วตาย | ดู log (บรรทัด `digital decode: ... exited`) |
+
 ### เจอ "dsd-neo not found"
 
 ระบบ log ว่า:
@@ -261,6 +274,28 @@ digital decode: P25P1 exited (rc=1): ...
 - **PPM คลาด** → ตั้ง Frequency correction (digital ทน ppm น้อยกว่า analog มาก)
 - **สัญญาณอ่อน** → ต้องการ SNR ~10 dB
 - **คนละ protocol** → ลองเปลี่ยนโหมด (เช่น NXDN96 vs NXDN48 ยังไม่แยก)
+
+### ⚠ rtl_tcp รับ client ได้ครั้งละ 1 ตัว (สำคัญมาก)
+
+`rtl_tcp` (โดยเฉพาะรุ่น `.exe` บน Windows) **รับ client พร้อมกันได้แค่ 1 ราย**
+และไมส่ง FIN กลับตอน client ตัดการเชื่อมต่อ ทำให้ socket ของเราค้างที่
+`FIN-WAIT-2` และ **ยึด slot เดียวไว้ตลอด** อาการที่เห็น:
+
+```
+TCP connected ... but no rtl_tcp header arrived within 10s
+```
+
+แก้โดยลด FIN timeout (ตั้งเป็นไฟล์ถาวรแล้วบน production):
+
+```bash
+cat /etc/sysctl.d/99-rtl-sdr-web.conf
+# net.ipv4.tcp_fin_timeout = 15
+sysctl -w net.ipv4.tcp_fin_timeout=15
+```
+
+**ข้อควรระวังตอนทดสอบ**: อย่าต่อ rtl_tcp ตรงจากสคริปต์อื่น (เช่น `python -c`
+ที่เปิด `RtlTcpClient` เอง) ขณะที่ service รันอยู่ — มันจะแย่ง slot และทำให้
+service เชื่อมต่อไม่ได้จนกว่า socket จะหมดอายุ ใช้วิธีทดสอบที่ไม่แตะ tuner แทน
 
 ### เสียงช้า / เร็วผิดปกติ
 
@@ -293,8 +328,61 @@ IMBE/AMBE/AMBE+2 เป็นเทคโนโลยีของ **DVSI** แ�
 
 ---
 
-## 10. อ้างอิง
+## 10. การติดตั้งบน production (บันทึกจากการ deploy จริง)
 
+ขั้นตอนที่ใช้จริงบน `192.168.1.219` (`/opt/rtl-sdr-web`, systemd, User=root):
+
+```bash
+# 1) decoder
+mkdir -p /opt/dsd-neo && cd /opt/dsd-neo
+curl -L -o dsd-neo.AppImage <release-url>
+chmod +x dsd-neo.AppImage && ./dsd-neo.AppImage --appimage-extract
+/opt/dsd-neo/squashfs-root/AppRun -h | head -2      # ต้องผ่านก่อนไปต่อ
+
+# 2) config
+cd /opt/rtl-sdr-web
+cp .env .env.bak.$(date +%Y%m%d_%H%M%S)
+# เพิ่ม DIGITAL_DECODE_* / DSD_NEO_BIN (ดูหัวข้อ 4)
+
+# 3) code + tests ก่อน restart เสมอ
+git pull --ff-only
+./venv/bin/python -m unittest discover -s backend/tests -q   # ต้อง OK
+
+# 4) restart
+systemctl restart rtl-sdr-web && systemctl is-active rtl-sdr-web
+
+# 5) ตรวจ
+journalctl -u rtl-sdr-web --since "2 min ago" --no-pager | grep -i "digital\|error"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/dashboard
+```
+
+### สิ่งที่ตรวจแล้วบน production (2026-10-31)
+
+| การตรวจ | ผล |
+|---|---|
+| test suite (รวม digital) | **148 tests OK** |
+| dsd-neo decode IMBE จริง | 320 bytes → 160 samples @ 8 kHz, 201/320 ไบต์มีเสียง |
+| spawn ครบ 5 โหมด | ✅ ~236 ms/โหมด |
+| baseband → decoder (20 chunks) | 48,000 samples ป้อนเข้า, decoder ไม่ตาย |
+| API `/sdr/mode` ทุกโหมด | 200 OK; `TETRA` → 400 พร้อมข้อความถูกต้อง |
+| global digital guard | log เตือนครั้งเดียว, ไม่บันทึก noise |
+| process leak หลังทดสอบ | 0 |
+| memory / restarts | ~134 MB, NRestarts=0 |
+
+### กับดักที่เจอตอน deploy
+
+1. **การทดสอบของเราเองแย่ง rtl_tcp** — สคริปต์ที่เปิด `RtlTcpClient` ตรง
+   ขณะ service รันอยู่ จะยึด single-client slot และทิ้ง socket ค้าง FIN-WAIT-2
+   ทำให้ service เชื่อมไม่ได้ชั่วคราว → ใช้การทดสอบที่ไม่แตะ tuner
+   (ป้อน IQ สังเคราะห์ / `-r` MBE file) และตั้ง `tcp_fin_timeout=15` ถาวร
+2. **`tcp_fin_timeout` ไม่รอด reboot** — ต้องมีไฟล์ใน `/etc/sysctl.d/`
+   ไม่ใช่แค่ `sysctl -w`
+3. **remote rtl_tcp ที่บ้านล่ม** (connection refused) — แอปยัง retry ถูกต้อง
+   ไม่ตาย แต่ decode จะไม่มีเสียงจนกว่า upstream จะกลับมา
+
+---
+
+## 11. อ้างอิง
 - mbelib-neo: <https://github.com/arancormonk/mbelib-neo>
 - dsd-neo: <https://github.com/arancormonk/dsd-neo>
 - dsd-neo CLI reference: `docs/cli.md` ใน repo นั้น
