@@ -219,9 +219,21 @@ Bandwidth ถูกตั้งอัตโนมัติตามโหมด 
 | 4 | **Recording JOB ยังไม่ decode** | ไฟล์ที่ได้เป็น baseband ต้องถอดภายหลัง (`dsd-neo -i file.wav`) |
 | 5 | **Squelch ใช้ระดับสัญญาณเท่านั้น** | ดิจิทัลไม่มี carrier; บางช่วงสัญญาณอ่อนจะเงียบ |
 | 6 | **ต้องมี SNR ~10 dB ขึ้นไป** | dsd-neo เป็น heuristic decoder — สัญญาณอ่อน = เงียบ/robot |
-| 7 | **DMR เล่นช่องเดียว (slot A)** | dsd-neo ส่ง 2 slot แบบ stereo, ระบบเลือก left; per-slot selector ยังไม่มี |
+| 7 | **DMR เล่นช่องเดียว (slot 1 = left)** | dsd-neo ส่ง 2 slot แบบ stereo, ระบบเลือก left; per-slot selector ยังไม่มี |
 | 8 | **`mode` column เป็น VARCHAR(3)** | SQLite ไม่ enforce (ใช้งานได้); ถ้าย้ายไป PostgreSQL ต้อง `ALTER COLUMN ... VARCHAR(16)` |
 | 9 | **Latency เพิ่ม 150–250 ms** | เป็นธรรมชาติของ frame buffer + FEC + vocoder |
+| 10 | **1 process ต่อ 1 listener** | ~25–35 MB/ตัว; เพดานที่ `DIGITAL_DECODE_MAX_PROC` (default 8) |
+
+### เปลี่ยนความถี่กลางขณะฟัง digital
+
+| พฤติกรรม | ผล |
+|---|---|
+| โหมด (analog/digital) | **คงอยู่** — ย้ายความถี่ไม่เปลี่ยนโหมดที่ผู้ใช้เลือก |
+| VFO offset | reset เป็น 0 (offset เดิมอ้างจาก center เก่า) |
+| decoder | **restart** อัตโนมัติ — state (symbol timing/FEC/vocoder) ผูกกับสัญญาณเดิม |
+| recording ที่กำลังอัด | แบ่งไฟล์ตามความถี่ที่ freeze ไว้ (ไม่ relabel) |
+
+> หลังย้ายความถี่ ให้เวลาสังเกต 1–2 burst แรกเสมอ: dsd-neo ต้อง sync ใหม่
 
 ---
 
@@ -301,6 +313,31 @@ service เชื่อมต่อไม่ได้จนกว่า socket �
 
 ตรวจว่า AUD2 frame รายงาน 8000 Hz — ถ้าเห็น 32000 Hz
 แปลว่า listener ไม่ได้เข้าสาขาดิจิทัล (ดู `out_audio_rate`)
+
+### DMR เสียงช้า/ยืด (สาเหตุที่เคยเกิด — แก้แล้ว)
+
+**อาการ**: เฉพาะ DMR เสียงพูดช้ากว่าปกติ ~2 เท่า (เหมือนเล่นเทปช้า) และได้ยิน
+สองช่องสัญญาณปนกัน
+
+**สาเหตุ**: dsd-neo preset `-fs` (DMR dual-slot) ส่งออกเป็น **stereo**
+(2 TDMA slot interleave). โค้ดเดิมเดาจำนวน channel จากขนาดที่อ่านได้จาก pipe
+ซึ่งไม่น่าเชื่อถือ:
+
+```
+1 block DMR = 160 frames × 2 ch × 2 bytes = 640 bytes = 20 ms @ 8 kHz
+ถ้า pipe ส่งมาแค่ครึ่ง (320 bytes = 160 int16)
+  -> แยกไม่ออกจาก mono block เต็ม (160 int16)  → ล็อกเป็น mono
+  -> 2 slot ถูก interleave เป็น stream เดียว → 20 ms ยืดเป็น 40 ms
+```
+
+**แก้**: กำหนด channel จาก **preset** (`_STEREO_MODES`) ไม่ใช่จากขนาด read,
+และเพิ่ม `_leftover` buffer กันการตัดกลาง frame/sample
+
+ถ้าเจออาการคล้ายกันอีก ให้ดู log:
+```bash
+journalctl -u rtl-sdr-web | grep -i "output rate changed"
+```
+(บรรทัดนี้เกิดเมื่อขนาด block เปลี่ยนระหว่าง stream — 8 kHz ↔ 48 kHz)
 
 ---
 

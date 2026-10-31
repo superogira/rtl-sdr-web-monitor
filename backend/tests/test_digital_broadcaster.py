@@ -385,5 +385,53 @@ class DecoderLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await b.unsubscribe(ln)
 
 
+    async def test_out_audio_rate_survives_decoder_stop(self):
+        """Stopping the decoder must not force the analog rate back on a
+        listener that is still digital.
+
+        REGRESSION: _stop_decoder() used to set out_audio_rate = audio_rate
+        (32 kHz). Any decoder recycle (restart budget exhausted, retune) then
+        relabelled the next recording as 32 kHz while the audio was still
+        8 kHz — the WAV played 4x too slow.
+        """
+        from backend.config import settings
+        settings.DSD_NEO_BIN = "/nonexistent/dsd-neo-xyz"   # never starts
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.P25P1, 12500, 0.0)
+        self.assertEqual(ln.out_audio_rate, 8000)
+        await ln._stop_decoder()
+        self.assertEqual(ln.out_audio_rate, 8000,
+                         "a digital listener must keep its 8 kHz label")
+
+    async def test_retune_keeps_mode_and_requests_decoder_restart(self):
+        """Moving the tuner must not change the mode, but must recycle dsd-neo.
+
+        dsd-neo's symbol timing / FEC / vocoder state belongs to the signal it
+        was hearing, so it has to be rebuilt after a retune — otherwise the
+        first bursts on the new frequency fail to decode.
+        """
+        b = AudioBroadcaster()
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.DMR, 12500, 0.0,
+                      connection_id="retune")
+        b._listeners[id(ln)] = ln
+        ln.set_vfo_offset(120000.0)
+        self.assertFalse(ln._decoder_restart_pending)
+
+        b.reset_all_vfo()          # what SDRManager does on a retune
+
+        self.assertEqual(ln.mode, DemodMode.DMR, "mode must survive a retune")
+        self.assertEqual(ln.vfo_offset_hz, 0.0, "offset resets to the center")
+        self.assertTrue(ln._decoder_restart_pending,
+                        "the decoder must be recycled for the new frequency")
+
+    async def test_retune_does_not_affect_analog_listeners(self):
+        b = AudioBroadcaster()
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.FM, 12000, 0.0)
+        b._listeners[id(ln)] = ln
+        ln.set_vfo_offset(50000.0)
+        b.reset_all_vfo()
+        self.assertEqual(ln.mode, DemodMode.FM)
+        self.assertEqual(ln.vfo_offset_hz, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

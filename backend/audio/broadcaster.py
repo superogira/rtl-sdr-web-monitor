@@ -202,6 +202,10 @@ class Listener:
         # worker owns feed()/read(). Kept per listener because dsd-neo carries
         # per-stream state (symbol timing, FEC history, vocoder memory).
         self.decoder: Optional[DigitalDecoder] = None
+        # Set when the tuner moves (reset_all_vfo): the decoder must be rebuilt
+        # on the next worker tick, because its internal state belongs to the
+        # signal heard at the OLD frequency.
+        self._decoder_restart_pending = False
         # Rate of the audio this listener currently produces. It is NOT always
         # `audio_rate`: in a digital mode the decoder emits 8 kHz, and durations
         # and WAV headers must use the real one (see stop_listener_recording).
@@ -334,7 +338,15 @@ class Listener:
         if self.mode in DIGITAL_MODES:
             if not settings.DIGITAL_DECODE_ENABLED:
                 return
-            if self.decoder is not None and self.decoder.mode is self.mode:
+            # A retune must rebuild the decoder: dsd-neo keeps symbol timing,
+            # FEC history and vocoder state belonging to the OLD signal, so the
+            # first bursts on the new frequency fail to decode. Only the offset
+            # changes on a retune (the mode does not), so without this flag the
+            # process would never be recycled.
+            if self._decoder_restart_pending:
+                self._decoder_restart_pending = False
+                await self._stop_decoder()
+            elif self.decoder is not None and self.decoder.mode is self.mode:
                 if not self.decoder.alive:
                     await self.decoder.restart()
                 return
@@ -383,7 +395,11 @@ class Listener:
             except Exception as exc:  # noqa: BLE001 - teardown must not raise
                 logger.debug("listener %s: decoder stop failed: %s",
                              self.id[:8], exc)
-        self.out_audio_rate = self.audio_rate
+        # NOTE: out_audio_rate is NOT touched here. It is owned by set_mode()
+        # (analog -> audio_rate, digital -> the decoder's rate). Resetting it
+        # here forced 32 kHz onto a listener that was still digital — e.g. when
+        # a decoder hit its restart budget or a retune restarted it — so the
+        # next recording was written with the wrong header and played 4x slow.
 
     # Registry of live decoder processes, so the global cap
     # (settings.DIGITAL_DECODE_MAX_PROC) can be enforced. Weak references are
@@ -757,6 +773,11 @@ class AudioBroadcaster:
         """
         for ln in self._listeners.values():
             ln.set_vfo_offset(0.0)
+            # The listener keeps its MODE across a retune (that is intentional —
+            # moving the tuner must not silently switch the user back to FM),
+            # but dsd-neo's state still belongs to the old signal, so ask for a
+            # decoder restart on the next worker tick.
+            ln._decoder_restart_pending = True
 
     def feed_iq(self, iq_bytes: bytes, sample_rate: int,
                 audio_rate: int,

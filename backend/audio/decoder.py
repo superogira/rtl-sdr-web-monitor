@@ -60,6 +60,33 @@ _READ_CHUNK = 4096
 # How long stop() waits for dsd-neo to flush and exit before killing it.
 _STOP_TIMEOUT = 2.0
 
+# Output layout PER PRESET, taken from dsd-neo's own decode_mode.c:
+#
+#   decode_mode_apply_dmr()        -> pulse_digi_out_channels = 2  (stereo)
+#   decode_mode_apply_p25p1()      -> pulse_digi_out_channels = 1  (mono)
+#   decode_mode_apply_nxdn48/96()  -> 1
+#   decode_mode_apply_dstar()      -> 1
+#   decode_mode_apply_dpmr()       -> 1
+#
+# This is a CONTRACT of the preset, so it must be the source of truth for how
+# we de-interleave. Deriving it from the size of a pipe read is unsound:
+# asyncio's StreamReader.read() returns whatever is available, so a stereo
+# block can arrive cut in half — and half of a 160-frame stereo block is
+# 160 int16, which is byte-for-byte identical to a full mono block. Guessing
+# from that made DMR latch to MONO, which interleaves the two TDMA slots into
+# one stream and stretches the speech to 2x its real duration ("slow/dragged").
+_STEREO_MODES = frozenset({DemodMode.DMR})
+
+# Samples per dsd-neo voice block: 160 at the native 8 kHz, or 960 when its
+# 6x upsampler is engaged (pulse_digi_rate_out > 8000 -> 48 kHz).
+_FRAMES_NATIVE = 160
+_FRAMES_UPSAMPLED = 960
+
+
+def _mode_channels(mode: DemodMode) -> int:
+    """Output channels dsd-neo uses for this preset's digital voice stream."""
+    return 2 if mode in _STEREO_MODES else 1
+
 # Lifecycle observers. The AudioBroadcaster registers one so it can enforce the
 # global process cap (settings.DIGITAL_DECODE_MAX_PROC) and report counts,
 # without decoder.py importing broadcaster.py (which imports this module).
@@ -135,9 +162,19 @@ class DigitalDecoder:
         self._stopping = False
         self._dropped_chunks = 0
         self._feed_failures = 0
-        # Filled in after the first block arrives: dsd-neo's interleaving
-        # depends on the preset, and the block size tells us which one it is.
-        self.channels: Optional[int] = None
+        # LOCKED at construction from the preset, never inferred from block
+        # size. dsd-neo's channel count is a property of the -f preset (see
+        # _STEREO_MODES); guessing it from a pipe read latches the wrong value
+        # permanently and makes DMR play at 2x its duration.
+        self.channels = _mode_channels(mode)
+        # Bytes of an incomplete sample frame carried over to the next read.
+        # StreamReader.read() may cut anywhere, including mid-int16 or between
+        # the L and R halves of a stereo frame; without this the de-interleave
+        # shifts by one sample and every later frame is swapped.
+        self._leftover = b""
+        # Sample rate of the stream we are actually producing (updated from the
+        # frame count, so the 8 kHz / 48 kHz upsample case is handled).
+        self._rate_known = False
 
     # ------------------------------------------------------------------
     # Process arguments
@@ -253,7 +290,10 @@ class DigitalDecoder:
                 self._out.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        self.channels = None
+        # Drop the partial frame too: it belongs to the dead process's stream,
+        # and prepending it to the restarted one would shift the de-interleave.
+        self._leftover = b""
+        self._rate_known = False
         _notify(self, False)
 
     async def restart(self) -> bool:
@@ -392,45 +432,72 @@ class DigitalDecoder:
     def _decode_pcm(self, data: bytes) -> Optional[np.ndarray]:
         """Bytes from dsd-neo -> mono float32.
 
-        dsd-neo's output channel count is a property of its preset, not of a
-        flag: P25 P1 / NXDN / D-STAR / dPMR write `pulse_digi_out_channels = 1`
-        (mono) while DMR's two TDMA slots are interleaved stereo.
+        Layout is decided by the PRESET (`self.channels`, see _STEREO_MODES),
+        never by the size of this read. dsd-neo writes whole sample frames, but
+        the pipe does not preserve them: a read can end between the two int16
+        of one sample, or between the L and R of a stereo frame. So:
 
-        Detection is exact rather than heuristic: every digital-voice block
-        dsd-neo writes is 160 frames, or 960 when its upsampler is engaged, so
-        the int16 count is one of 160/960 (mono) or 320/1920 (stereo). Anything
-        else means several blocks arrived in one read; we then fall back to the
-        preset's expected layout and clamp to whole frames.
+          1. prepend whatever was left over from the previous read,
+          2. hand on only WHOLE frames,
+          3. keep the remainder for the next call.
 
-        For stereo we keep the LEFT slot only. Summing L+R would add two
-        unrelated conversations together; a per-listener slot selector is a
-        future feature (see docs/DIGITAL_MODES.md).
+        Skipping step 3 was the DMR bug: half a stereo block (160 int16) is
+        indistinguishable from a full mono block, so DMR latched to mono and the
+        two TDMA slots were interleaved into one stream — speech stretched 2x.
+
+        `self.audio_rate` is derived from the frame count: 160 frames is the
+        native 8 kHz block, 960 is the 6x upsampled 48 kHz one.
         """
-        if len(data) < 2:
+        frame_bytes = self.channels * 2      # int16 per channel
+        buf = self._leftover + data if self._leftover else data
+        usable = len(buf) - (len(buf) % frame_bytes)
+        if usable <= 0:
+            # Not even one whole frame yet — keep every byte.
+            self._leftover = buf
             return None
-        usable = len(data) - (len(data) % 2)
-        pcm = np.frombuffer(data[:usable], dtype="<i2").astype(np.float32)
+        self._leftover = buf[usable:]
 
-        if self.channels is None:
-            mono_blocks = (160, 960)
-            stereo_blocks = (320, 1920)
-            n = len(pcm)
-            if n in mono_blocks:
-                self.channels = 1
-            elif n in stereo_blocks:
-                self.channels = 2
-            else:
-                # Several blocks in one read (or a block size we do not know):
-                # trust the preset. DMR is the only stereo one.
-                self.channels = 2 if self.mode is DemodMode.DMR else 1
+        pcm = np.frombuffer(buf[:usable], dtype="<i2").astype(np.float32)
 
         if self.channels == 2:
-            if len(pcm) % 2:
-                pcm = pcm[:-1]
-            if len(pcm) < 2:
-                return None
-            pcm = pcm.reshape(-1, 2)[:, 0]
-        return pcm / 32768.0
+            # Keep the LEFT slot: summing L+R would add two unrelated
+            # conversations together (a per-slot selector is a future feature).
+            frames = pcm.reshape(-1, 2)[:, 0]
+        else:
+            frames = pcm
+
+        # Rate follows the block size dsd-neo produced. Only trust a count that
+        # matches one whole block; a merged read tells us nothing.
+        self._update_rate(len(frames))
+
+        return frames / 32768.0
+
+    def _update_rate(self, n_frames: int) -> None:
+        """Set audio_rate from the frames in this block (8 kHz vs 48 kHz).
+
+        dsd-neo emits 160-frame blocks at its native 8 kHz, and 960-frame
+        blocks once its 6x upsampler is engaged (48 kHz). A read can merge
+        several blocks, so accept any multiple of either size; the largest size
+        that divides evenly wins, because 160 also divides 960.
+        """
+        if n_frames <= 0:
+            return
+        if n_frames % _FRAMES_UPSAMPLED == 0:
+            rate = 48000
+        elif n_frames % _FRAMES_NATIVE == 0:
+            rate = 8000
+        else:
+            # A partial block (we already trim to whole frames, so this only
+            # happens if dsd-neo changed size mid-stream): leave the rate.
+            return
+        if rate != self.audio_rate:
+            if self._rate_known:
+                logger.warning(
+                    "digital decode: %s output rate changed %d -> %d Hz",
+                    self.mode.value, self.audio_rate, rate,
+                )
+            self.audio_rate = rate
+            self._rate_known = True
 
     def health(self) -> dict:
         """Normalised decoder state for the UI / SIG frame.
