@@ -274,5 +274,52 @@ class FakeSubprocessTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(d.stats()["alive"])
 
 
+class DecoderHealthTests(unittest.IsolatedAsyncioTestCase):
+    """`health()` is what the dashboard uses to explain a silent digital VFO."""
+
+    def test_missing_binary_is_reported_as_missing(self):
+        d = DigitalDecoder(DemodMode.P25P1, binary="/nonexistent/dsd-neo-xyz")
+        h = d.health()
+        self.assertEqual(h["state"], "missing")
+        self.assertIn("/nonexistent/dsd-neo-xyz", h["reason"])
+
+    def test_auto_detect_failure_says_not_installed(self):
+        # binary="" and nothing on the host → the reason should tell the
+        # operator to install it, not blame their config.
+        import backend.audio.decoder as dec
+        saved = dec._DEFAULT_PATHS
+        dec._DEFAULT_PATHS = ("/nonexistent/a", "/nonexistent/b")
+        saved_which = dec.shutil.which
+        dec.shutil.which = lambda _n: None
+        try:
+            d = DigitalDecoder(DemodMode.DMR, binary="")
+            h = d.health()
+            self.assertEqual(h["state"], "missing")
+            self.assertIn("not installed", h["reason"])
+        finally:
+            dec._DEFAULT_PATHS = saved
+            dec.shutil.which = saved_which
+
+    async def test_running_decoder_reports_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = DigitalDecoder(DemodMode.NXDN, binary=write_fake(td))
+            await d.start()
+            try:
+                h = d.health()
+                self.assertEqual(h["state"], "ok")
+                self.assertNotIn("reason", h)
+            finally:
+                await d.stop()
+
+    async def test_dead_decoder_reports_stopped(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = DigitalDecoder(DemodMode.DSTAR, binary=write_fake(td))
+            await d.start()
+            await d.stop()
+            h = d.health()
+            self.assertEqual(h["state"], "stopped")
+            self.assertIn("reason", h)
+
+
 if __name__ == "__main__":
     unittest.main()

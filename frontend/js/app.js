@@ -1785,9 +1785,15 @@ const App = {
      *  Also carries `sq_open` (squelch gate open = audio is passing) which
      *  flashes the VFO row green so the operator can see which frequency is
      *  active at a glance. */
-    _onVfoSig(idx, db, sqOpen, thr, auto) {
+    _onVfoSig(idx, db, sqOpen, thr, auto, digital, dec) {
         if (idx >= 0 && idx < this._vfoSig.length) this._vfoSig[idx] = db;
         if (idx >= 0 && idx < this._vfoSqOpen.length) this._vfoSqOpen[idx] = !!sqOpen;
+        // Digital decoder health (only present on digital modes). Stored so the
+        // status line can distinguish "idle channel" from "decoder broken".
+        if (idx >= 0) {
+            this._vfoDigital[idx] = !!digital;
+            this._vfoDec[idx] = digital ? (dec || null) : null;
+        }
         // Effective squelch threshold in force (manual SQL, or what AUTO picked
         // from the noise floor). Shown next to the SIG bars as "SQL -83" so the
         // operator can see why audio is muted — with AUTO on, the manual slider
@@ -1798,6 +1804,51 @@ const App = {
         this._renderVfoSig();
         // Apply/remove the green "RX active" flash on the VFO row.
         this._updateVfoRxActive(idx);
+        if (digital) this._renderDigitalStatus(idx);
+    },
+
+    /** Per-VFO digital decoder state (see the digital branch in demod.py). */
+    _vfoDigital: [false, false, false, false],
+    _vfoDec: [null, null, null, null],
+
+    /** Show WHY a digital VFO is silent.
+     *
+     *  A digital listener has no audio in three different situations and the
+     *  SIG meter looks identical in all of them:
+     *    1. decoder missing/disabled  → will never be audible (action needed)
+     *    2. decoder died              → action needed, log has the reason
+     *    3. channel idle              → normal; dsd-neo emits nothing until a
+     *                                   burst passes its FEC
+     *  Only case 3 is "expected", so the status line says which one this is
+     *  instead of leaving a dead-looking RX indicator. */
+    _renderDigitalStatus(idx) {
+        const lo = this._vfoLower(idx);
+        const el = document.getElementById(`vfo-digital-${lo}`);
+        if (!el) return;
+        const dec = this._vfoDec[idx];
+        if (!this._vfoDigital[idx] || !dec) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        el.style.display = '';
+        if (dec.state === 'ok') {
+            // Alive but no frames yet: that is the normal idle state. Say so
+            // quietly (muted colour) rather than showing an error.
+            el.className = 'vfo-digital-status is-idle';
+            el.textContent = I18n.t('dash.digitalIdle');
+            el.title = I18n.t('dash.digitalIdleTitle');
+        } else {
+            // "missing" (never installed / wrong DSD_NEO_BIN) and "stopped"
+            // (died) both need the operator to look at the server, so they
+            // share the error styling but keep their own wording.
+            el.className = 'vfo-digital-status is-error';
+            const msg = dec.state === 'missing'
+                ? I18n.t('dash.digitalUnavailable')
+                : I18n.t('dash.digitalStopped');
+            el.textContent = `⚠ ${dec.reason || msg}`;
+            el.title = dec.reason || msg;
+        }
     },
 
     /** Toggle the "vfo-rx-active" class on a VFO row based on its squelch

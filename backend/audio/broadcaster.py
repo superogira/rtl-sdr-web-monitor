@@ -1272,7 +1272,7 @@ class AudioBroadcaster:
         if now_sig - ln._last_sig_send < _SIG_FRAME_INTERVAL:
             return
         ln._last_sig_send = now_sig
-        self._enqueue_frame(ln, ("sig", {
+        payload = {
             "db": round(ln._sig_smoothed, 1),
             "sq_open": bool(ln._sq_open),
             "thr": round(ln._sq_threshold_db, 1),
@@ -1280,7 +1280,29 @@ class AudioBroadcaster:
             # Tells the UI the audio is vocoder output, not a carrier: it can
             # label the mode as "digital" and explain an empty burst.
             "digital": bool(ln.mode in DIGITAL_MODES),
-        }))
+        }
+        if ln.mode in DIGITAL_MODES:
+            # WHY THIS EXISTS
+            # ---------------
+            # A digital listener is silent for three completely different
+            # reasons, and without this the UI cannot tell them apart:
+            #   * the decoder is not installed / disabled  → never audible
+            #   * the decoder died and restart budget is spent
+            #   * the decoder is fine, the channel is just idle (dsd-neo only
+            #     emits audio for frames that pass their FEC, so silence
+            #     between transmissions is the NORMAL state)
+            # Reporting them lets the dashboard say "no signal" instead of
+            # leaving the user staring at a dead RX indicator.
+            dec = ln.decoder
+            if dec is None:
+                payload["dec"] = {
+                    "state": "missing",
+                    "reason": "decoder not started (disabled?)",
+                    "channels": None, "restarts": 0, "dropped": 0,
+                }
+            else:
+                payload["dec"] = dec.health()
+        self._enqueue_frame(ln, ("sig", payload))
 
     @staticmethod
     def _apply_squelch(listener: Listener, audio: np.ndarray) -> np.ndarray:

@@ -122,6 +122,7 @@ class DigitalDecoder:
         if mode not in DIGITAL_MODE_FLAGS:
             raise ValueError(f"{mode!r} is not a digital mode")
         self.mode = mode
+        self.binary_configured = (binary or "").strip()
         self.binary = resolve_binary(binary)
         self.start_timeout = float(start_timeout)
         self.max_restarts = int(max_restarts)
@@ -430,6 +431,31 @@ class DigitalDecoder:
                 return None
             pcm = pcm.reshape(-1, 2)[:, 0]
         return pcm / 32768.0
+
+    def health(self) -> dict:
+        """Normalised decoder state for the UI / SIG frame.
+
+        Distinguishes the three ways a digital listener can be silent:
+          "ok"       — running; silence just means no burst passed FEC yet
+          "missing"  — the executable was never found (install it, or fix
+                       DSD_NEO_BIN); this will NOT fix itself
+          "stopped"  — it started before and died (log has dsd-neo's reason)
+        """
+        if self.binary is None:
+            if self.binary_configured:
+                reason = (f"dsd-neo not executable at {self.binary_configured}")
+            else:
+                reason = "dsd-neo not installed"
+            return {"state": "missing", "reason": reason,
+                    "channels": None, "restarts": self._restarts,
+                    "dropped": self._dropped_chunks}
+        if not self.alive:
+            return {"state": "stopped",
+                    "reason": "decoder stopped (see server log)",
+                    "channels": self.channels, "restarts": self._restarts,
+                    "dropped": self._dropped_chunks}
+        return {"state": "ok", "channels": self.channels,
+                "restarts": self._restarts, "dropped": self._dropped_chunks}
 
     # ------------------------------------------------------------------
     # Introspection (status/telemetry)

@@ -2489,6 +2489,29 @@ a:hover {
     min-width: 52px;
     text-align: right;
 }
+
+/* Digital decoder state on a VFO row. Two states on purpose:
+     .is-idle  — decoder running, no voice frame yet (the normal case between
+                 transmissions). Quiet, so it does not look like a fault.
+     .is-error — decoder missing/stopped; the operator has to act. */
+.vfo-digital-status {
+    font-size: 0.62rem;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.vfo-digital-status.is-idle {
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.04);
+}
+.vfo-digital-status.is-error {
+    color: #fff;
+    background: var(--accent-red, #dc2626);
+}
 .vfo-speaker {
     background: var(--bg-input, #1a1f2e);
     color: var(--text-primary);

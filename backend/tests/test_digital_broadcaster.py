@@ -237,5 +237,39 @@ class DecoderLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await b.unsubscribe(ln)
 
 
+    async def test_sig_frame_reports_decoder_health(self):
+        """The UI needs the decoder state to explain a silent digital VFO."""
+        b = AudioBroadcaster()
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.P25P1, 12500, 0.0)
+        await ln.apply_mode_side_effects()
+        ln._last_sig_send = 0
+        b._emit_sig_frame(ln)
+        _magic, payload = ln.queue.get_nowait()
+        self.assertTrue(payload["digital"])
+        self.assertEqual(payload["dec"]["state"], "ok")
+        await ln._stop_decoder()
+
+    async def test_sig_frame_flags_a_missing_decoder(self):
+        from backend.config import settings
+        settings.DSD_NEO_BIN = "/nonexistent/dsd-neo-xyz"
+        b = AudioBroadcaster()
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.DMR, 12500, 0.0)
+        await ln.apply_mode_side_effects()
+        ln._last_sig_send = 0
+        b._emit_sig_frame(ln)
+        _magic, payload = ln.queue.get_nowait()
+        self.assertEqual(payload["dec"]["state"], "missing")
+        self.assertIn("dsd-neo", payload["dec"]["reason"])
+
+    async def test_analog_sig_frame_has_no_decoder_block(self):
+        b = AudioBroadcaster()
+        ln = Listener(SDR_RATE, AUDIO_RATE, DemodMode.FM, 12000, 0.0)
+        ln._last_sig_send = 0
+        b._emit_sig_frame(ln)
+        _magic, payload = ln.queue.get_nowait()
+        self.assertFalse(payload["digital"])
+        self.assertNotIn("dec", payload)
+
+
 if __name__ == "__main__":
     unittest.main()
