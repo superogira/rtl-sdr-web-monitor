@@ -34,7 +34,10 @@ const LiveAudio = {
     // Version of this file. Bumped on every change (same convention as App's
     // VERSION) so the dashboard can show which build the browser actually
     // loaded — useful to confirm a hard refresh picked up new code.
-    VERSION: 'v1.1-2026.10.29',
+    VERSION: 'v1.2-2026.11.01',
+    // v1.2: _audioEverStarted is raised by start() and toggle(), so App can
+    // tell "no listener yet" (per-user preference, do not touch global SDR
+    // settings) from "listening" (per-listener overrides are safe).
     // === Shared audio graph (one output device for all VFOs) ===
     ctx: null,
     masterGain: null,    // master volume → destination

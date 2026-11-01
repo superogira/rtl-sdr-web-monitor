@@ -192,5 +192,58 @@ class PrefsStoreTests(unittest.TestCase):
         self.assertIn("localStorage.setItem", block.group(1))
 
 
+class VersionDisplayTests(unittest.TestCase):
+    """The More-menu version rows must exist and be fed real constants.
+
+    Reported confusion: App/Audio still displayed the OLD date after the fixes
+    went in, because only DashboardPrefs' VERSION had been bumped. Keeping all
+    three constants + their DOM ids under test makes "which build am I running"
+    answerable at a glance.
+    """
+
+    DASH = ROOT / "frontend" / "pages" / "dashboard.html"
+
+    def _version_of(self, js_path: Path, pattern: str):
+        m = re.search(pattern, _read(js_path))
+        self.assertIsNotNone(m, f"VERSION not found in {js_path.name}")
+        return m.group(1)
+
+    def test_all_three_versions_are_date_stamped(self):
+        app_v = self._version_of(APP_JS, r"VERSION:\s*'(v[^']+)'")
+        audio_v = self._version_of(AUDIO_JS, r"VERSION:\s*'(v[^']+)'")
+        prefs_v = self._version_of(ROOT / "frontend" / "js" / "dashboard_prefs.js",
+                                   r"const VERSION = '([^']+)'")
+        for label, value in (("App", app_v), ("Audio", audio_v), ("Prefs", prefs_v)):
+            # Every build tag carries a date (2026.11.01 or 2026-11-01) so a
+            # stale value is obvious at a glance. App/Audio use dots
+            # ("v1.13-2026.11.01"), Prefs uses "2026.11.01-v3".
+            self.assertRegex(value, r"\d{4}[.-]\d{2}[.-]\d{2}",
+                             f"{label} VERSION has no date: {value!r}")
+
+    def test_dashboard_has_the_three_version_rows(self):
+        html = _read(self.DASH)
+        for el_id in ("ver-app", "ver-audio", "ver-prefs"):
+            self.assertIn(f'id="{el_id}"', html,
+                          f"dashboard is missing the #{el_id} version row")
+
+    def test_update_version_info_wires_all_three(self):
+        src = _read(APP_JS)
+        block = re.search(r"updateVersionInfo\(\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block, "updateVersionInfo not found")
+        body = block.group(1)
+        for el_id, ref in (("ver-app", "this.VERSION"),
+                           ("ver-audio", "LiveAudio"),
+                           ("ver-prefs", "DashboardPrefs")):
+            self.assertIn(el_id, body, f"{el_id} is not populated")
+            self.assertIn(ref, body, f"{el_id} does not read {ref}")
+
+    def test_asset_query_versions_are_present(self):
+        """A cached JS file is the usual reason a fix looks absent."""
+        html = _read(self.DASH)
+        for name in ("app.js", "audio.js", "dashboard_prefs.js"):
+            self.assertRegex(html, rf"{re.escape(name)}\?v=\d+",
+                             f"{name} has no cache-busting ?v= tag")
+
+
 if __name__ == "__main__":
     unittest.main()

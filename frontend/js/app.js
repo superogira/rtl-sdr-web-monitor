@@ -2,12 +2,17 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.12-2026.10.29',  // Signal TAG now appends the bookmark name
-                               // ("168.4700 · วิทยุตำรวจ") and re-resolves it when
-                               // a bookmark is added/renamed/deleted. Earlier:
-                               // squelch + BW audit (per-chunk level, fast-attack
-                               // EMA, AUTO long-TX fix, Weaver SSB, per-mode BW)
-                               // and the shared VFO passband limit.
+    VERSION: 'v1.13-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+                               // a .bw-btn now exists for every width in
+                               // _BW_CHOICES (6.25k / 12.5k were missing, which
+                               // hid the whole BW row in every digital mode),
+                               // mode/BW are no longer written to the GLOBAL SDR
+                               // settings during boot, and the 1 Hz status
+                               // broadcast no longer overwrites a per-user mode.
+                               // Earlier: Signal TAG bookmark names; squelch +
+                               // BW audit (per-chunk level, fast-attack EMA,
+                               // AUTO long-TX fix, Weaver SSB, per-mode BW) and
+                               // the shared VFO passband limit.
     currentFreq: 145500000,  // Hz
     currentMode: 'FM',
     currentSignal: -100,     // dBm
