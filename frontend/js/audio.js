@@ -210,6 +210,9 @@ const LiveAudio = {
     /** Start the ACTIVE VFO first, then every other ENABLED VFO that isn't
      * already playing. VFOs beyond the active count are not started. */
     async start() {
+        try {
+            if (typeof App !== 'undefined') App._audioEverStarted = true;
+        } catch (e) {}
         await this.startVfo(this._activeIdx);
         for (let i = 0; i < this._vfos.length; i++) {
             const v = this._vfos[i];
@@ -287,7 +290,16 @@ const LiveAudio = {
         if (!this.anyPlaying) this._updateStatus("");
     },
 
-    toggle() { this.anyPlaying ? this.stop() : this.start(); },
+    toggle() {
+        if (this.anyPlaying) { this.stop(); return; }
+        // A real listen session has started: from now on a mode/BW change is no
+        // longer a "pending preference" and may be written to the global SDR
+        // settings (see App.setMode / App._setChannelBw).
+        try {
+            if (typeof App !== 'undefined') App._audioEverStarted = true;
+        } catch (e) {}
+        this.start();
+    },
 
     // ------------------------------------------------------------------
     // Speaker routing (per VFO)

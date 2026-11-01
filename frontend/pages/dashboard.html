@@ -60,6 +60,14 @@
                         <button class="bw-btn" data-bw="1800" title="SSB Narrow (1.8 kHz)">1.8k</button>
                         <button class="bw-btn" data-bw="2400" title="SSB Voice (2.4 kHz) - USB/LSB voice">2.4k</button>
                         <button class="bw-btn" data-bw="3000" title="SSB Wide (3 kHz)">3k</button>
+                        <!-- Digital channel widths. These MUST exist in the DOM:
+                             _BW_CHOICES maps D-STAR/dPMR to 6250 and P25/DMR/NXDN
+                             to 12500, and _applyBwChoicesForMode() hides every
+                             button that is not in the active mode's list. With no
+                             button for 6250/12500 the whole row was hidden, so the
+                             BW control looked dead in every digital mode. -->
+                        <button class="bw-btn" data-bw="6250" title="Digital Narrow (6.25 kHz) - D-STAR / dPMR">6.25k</button>
+                        <button class="bw-btn" data-bw="12500" title="Digital (12.5 kHz) - P25 P1 / DMR / NXDN">12.5k</button>
                         <button class="bw-btn" data-bw="6000" title="Narrow (6 kHz) - NBFM/CW">6k</button>
                         <button class="bw-btn active" data-bw="12000" title="Normal (12 kHz) - NBFM voice">12k</button>
                         <button class="bw-btn" data-bw="25000" title="Wide (25 kHz)">25k</button>
@@ -454,10 +462,10 @@
     <script src="/js/auth.js?v=5"></script>
     <script src="/js/selected_device.js?v=1"></script>
     <script src="/js/websocket.js?v=9"></script>
-<script src="/js/audio.js?v=23"></script>
+<script src="/js/audio.js?v=24"></script>
 <script src="/js/waterfall3d.js?v=2"></script>
 <script src="/js/dashboard_prefs.js?v=10"></script>
-<script src="/js/app.js?v=88"></script>
+<script src="/js/app.js?v=89"></script>
     <script src="/js/dashboard_jobs.js?v=7"></script>
 <script src="/js/recording_jobs.js?v=8"></script>
 </body>

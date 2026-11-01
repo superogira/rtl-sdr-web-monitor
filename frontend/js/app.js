@@ -66,7 +66,14 @@ const App = {
         // AFTER syncState (so backend center-freq is known) and AFTER
         // setupWSListeners (so audio WS control messages route correctly).
         if (typeof DashboardPrefs !== 'undefined') {
+            // Suppress global writes while the saved prefs are being applied:
+            // setMode()/_setChannelBw() are called from inside apply(), and
+            // without this flag each restore pushed the user's saved mode and
+            // bandwidth onto the WHOLE server (all other users, and the
+            // center-channel recording) instead of only this tab.
+            this._prefsRestoring = true;
             try { DashboardPrefs.apply(); } catch (e) { console.warn('Prefs apply:', e); }
+            this._prefsRestoring = false;
             // Reflect the restored auto-record / auto-squelch choices on the
             // buttons immediately (they are applied to the server listeners
             // again by _applyAudioPrefsToVfo on each WS connect).
@@ -87,6 +94,7 @@ const App = {
                 // during DashboardPrefs.apply() have a chance to land.
                 setTimeout(() => {
                     try {
+                        this._audioEverStarted = true;
                         LiveAudio.start().catch(e => console.warn('Auto-resume failed:', e));
                     } catch (e) { console.warn('Auto-resume error:', e); }
                 }, 600);
@@ -161,7 +169,13 @@ const App = {
             this.isConnected = status.connected || false;
             this.isStreaming = status.streaming || false;
             this.currentFreq = status.frequency || 145500000;
-            this.currentMode = status.mode || 'FM';
+            // Adopt the server's mode, but ONLY when this tab is not listening
+            // live: while listening the mode is per-listener and a status sync
+            // must not snap the user's choice back to the global value.
+            const _listeningForMode = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+            if (!_listeningForMode) {
+                this.currentMode = status.mode || 'FM';
+            }
             this.currentSignal = status.signal_level_db || -120;
             // Apply per-device waterfall dB range BEFORE syncing controls and
             // BEFORE WS.connect() (this is awaited in init()). This guarantees
@@ -174,6 +188,12 @@ const App = {
             // Sync sliders + SRATE button active state from backend reality
             this.syncControlsFromStatus(status);
             this.updateUI();
+            // Make the BW button row match the mode we just adopted. Nothing
+            // else runs on a cold boot (DashboardPrefs has no saved value on a
+            // first visit), so the row stayed on the FM default and, for a
+            // digital global mode, every button ended up hidden — the control
+            // looked dead until the operator happened to press a mode button.
+            this._applyBwChoicesForMode(this.currentMode);
             // Always render default SRATE buttons so the UI isn't empty
             // before connecting. When connected, loadCapabilities() will
             // overwrite with the device's actual supported rates/gains.
@@ -258,7 +278,15 @@ const App = {
         // NOT listening live.
         if (data.channel_bw !== undefined) {
             const listeningBw = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
-            if (!listeningBw) {
+            // Same rule as the mode above: off-air the bandwidth is a PER-USER
+            // preference. Without this the global value overwrote the restored
+            // one ~1s after a refresh, leaving the label at 12k while the mode
+            // was DMR.
+            const _bwRestored = this._prefsRestoredAt &&
+                (Date.now() - this._prefsRestoredAt < 5000);
+            const _hasUserBw = typeof DashboardPrefs !== 'undefined'
+                && DashboardPrefs.get('channelBw') !== undefined;
+            if (!listeningBw && !_bwRestored && !_hasUserBw) {
                 this._channelBw = data.channel_bw;
                 const bwButtons = document.getElementById('bw-buttons');
                 if (bwButtons) {
@@ -488,10 +516,22 @@ const App = {
         const list = this._BW_CHOICES[String(mode || 'FM').toUpperCase()];
         const container = document.getElementById('bw-buttons');
         if (!list || !container) return;
+        let shown = 0;
         container.querySelectorAll('.bw-btn').forEach(btn => {
             const bw = parseInt(btn.dataset.bw);
-            btn.style.display = list.includes(bw) ? '' : 'none';
+            const on = list.includes(bw);
+            btn.style.display = on ? '' : 'none';
+            if (on) shown++;
         });
+        // Safety net: a mode can name a width this page has no button for (a
+        // preset added without its matching .bw-btn). Hiding every button made
+        // the whole BW control look dead — in every digital mode the row went
+        // empty and nothing could be clicked. Showing them all is strictly
+        // better than showing none.
+        if (shown === 0) {
+            container.querySelectorAll('.bw-btn').forEach(b => { b.style.display = ''; });
+            console.warn(`[BW] no .bw-btn for ${mode} (${list.join(', ')}) — showing all`);
+        }
         // If the current BW is not valid for this mode, switch to its default.
         if (!list.includes(this._channelBw)) {
             this._setChannelBw(this._BW_DEFAULT[String(mode).toUpperCase()] || 12000);
@@ -521,9 +561,18 @@ const App = {
             // for new listeners, so only admins may change it (the endpoint is
             // admin-only). A regular user's choice is remembered locally and is
             // pushed to their own listener as soon as they press ฟังสด.
+            //
+            // Same boot guard as setMode: during a restore / before the first
+            // ฟังสด the value is a per-user preference, and writing it globally
+            // is what let a refresh overwrite the server's channel bandwidth.
+            if (this._prefsRestoring || !this._audioEverStarted) {
+                this._pendingBw = newBw;
+                return;
+            }
             API.sdr.setBandwidth(newBw).catch(err => console.error('Set bandwidth failed:', err));
         }
     },
+    _pendingBw: null,
 
     setupModeSelector() {
         const selector = document.getElementById('mode-selector');
@@ -624,10 +673,28 @@ const App = {
         // Global mode is admin-only (it drives the center-channel recording and
         // the default for new listeners). A regular user's choice is remembered
         // and pushed to their own listener when they press ฟังสด.
+        //
+        // GUARD: while a restore is in flight, or before the audio side has ever
+        // started, this is still a PER-USER choice. Writing it to the global mode
+        // made a page refresh push the user's last-selected mode onto the whole
+        // server, so the NEXT refresh read it back — a digital mode appeared to
+        // "come back" after the user had switched to FM.
+        if (this._prefsRestoring || !this._audioEverStarted) {
+            this._pendingMode = mode;
+            console.log(`🎛️ Mode ${mode} held as per-user (no global write during boot)`);
+            return;
+        }
         if (Auth.isAdmin && Auth.isAdmin()) {
             try { await API.sdr.setMode(mode); } catch (err) { console.error('Set mode failed:', err); }
         }
     },
+
+    // Set to true once LiveAudio has ever been started in this page life. Until
+    // then, mode/BW changes are per-user preferences and must not touch the
+    // global SDR settings (see setMode).
+    _audioEverStarted: false,
+    _prefsRestoring: false,
+    _pendingMode: null,
 
     // === Radio Controls ===
     _stepSize: 1000,  // Default step: 1 kHz
@@ -2598,10 +2665,21 @@ const App = {
                 // user picks their own mode via the audio WS). The global
                 // center-channel `data.mode` is NOT this user's mode, so
                 // adopting it here would snap the active mode button back to
-                // the global value every ~1s (the "เด้งกลับ" symptom). Only
-                // adopt the global mode when NOT listening live.
+                // the global value every ~1s (the "เด้งกลับ" symptom).
+                //
+                // Off-air the mode is a PER-USER PREFERENCE (DashboardPrefs),
+                // not the server's global setting: the mode the operator last
+                // chose in THIS tab is what the mode selector and the BW row
+                // must show, and it is what _pushModeAndBw sends when a
+                // listener starts. Adopting the global value here (even after
+                // the restore grace window) silently reverted a reloaded page
+                // from DMR back to FM while the BW row stayed painted for DMR.
                 const listeningMode = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
-                if (!listeningMode) {
+                const _justRestored = this._prefsRestoredAt &&
+                    (Date.now() - this._prefsRestoredAt < 5000);
+                const _hasUserMode = typeof DashboardPrefs !== 'undefined'
+                    && !!DashboardPrefs.get('mode');
+                if (!listeningMode && !_justRestored && !_hasUserMode) {
                     this.currentMode = data.mode;
                     this._syncModeSelector(data.mode);
                     const rm = document.getElementById('radio-mode');
