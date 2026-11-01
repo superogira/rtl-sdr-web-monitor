@@ -148,5 +148,49 @@ class StatusBroadcastTests(unittest.TestCase):
                          "must fall back to showing every button")
 
 
+class PrefsStoreTests(unittest.TestCase):
+    """DashboardPrefs must not lose a write made inside its 150 ms debounce.
+
+    REGRESSION: every set() re-read localStorage to merge into, but the write is
+    debounced. Two setters called within the window both read the same
+    pre-debounce snapshot, so the second discarded the first (measured:
+    set('mode','BBB') then set('other',2) left the stored mode unchanged). Boot
+    writes mode and bandwidth back-to-back, so a refresh could restore a stale
+    mode even though the UI showed the new one.
+    """
+
+    PREFS_JS = ROOT / "frontend" / "js" / "dashboard_prefs.js"
+
+    def setUp(self):
+        self.src = _read(self.PREFS_JS)
+
+    def test_writes_go_through_a_cache(self):
+        self.assertIn("let _cache = null", self.src,
+                      "prefs need an in-memory mirror to merge pending writes")
+        self.assertRegex(
+            self.src, r"function readAll\(\)",
+            "set()/get() must read the cache, not raw localStorage",
+        )
+
+    def test_setters_use_read_all(self):
+        for fn in ("set(key, value)", "setMany(updates)", "remove(key)"):
+            block = re.search(re.escape(fn) + r"\s*\{(.*?)\n        \},", self.src, re.S)
+            self.assertIsNotNone(block, f"{fn} not found")
+            self.assertIn("readAll()", block.group(1),
+                          f"{fn} must merge into the cache")
+
+    def test_pending_write_is_flushed_on_unload(self):
+        self.assertIn("flush", self.src, "must expose a flush()")
+        self.assertRegex(
+            self.src, r"addEventListener\('pagehide', flush\)",
+            "a refresh must flush the pending debounced write",
+        )
+
+    def test_flush_writes_the_cache(self):
+        block = re.search(r"function flush\(\)\s*\{(.*?)\n    \}", self.src, re.S)
+        self.assertIsNotNone(block, "flush() not found")
+        self.assertIn("localStorage.setItem", block.group(1))
+
+
 if __name__ == "__main__":
     unittest.main()

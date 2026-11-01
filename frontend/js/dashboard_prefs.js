@@ -13,7 +13,7 @@
 (function (global) {
     // VERSION — bump on every code change so the console log confirms the
     // browser loaded the latest file (catches stale-cache issues).
-    const VERSION = '2026.06.29-v2';
+    const VERSION = '2026.11.01-v3';
 
     const STORAGE_KEY = 'rtl_sdr_dashboard_prefs_v2';
 
@@ -39,16 +39,50 @@
         } catch { return {}; }
     }
 
+    // In-memory mirror of the last write.
+    //
+    // WHY: saveAll() is debounced (150 ms), but every set() re-reads
+    // localStorage to merge into. Two setters called within that window each
+    // read the SAME pre-debounce snapshot, so the second one silently discarded
+    // the first one's value (measured: set('mode','BBB') then set('other',2)
+    // left the stored mode at the previous value). That lost updates from
+    // real boot sequences, where setMode()/_setChannelBw() write back-to-back —
+    // so a refresh could restore a stale mode even though the UI showed the new
+    // one. Writing through one cache fixes it, and it also lets loadAll() see a
+    // pending value.
+    let _cache = null;
+    let _cacheKey = null;
+
+    function readAll() {
+        const k = scopedKey();
+        if (_cache !== null && _cacheKey === k) return _cache;
+        _cache = loadAll();
+        _cacheKey = k;
+        return _cache;
+    }
+
     let _saveTimer = null;
     function saveAll(obj) {
         try {
+            _cache = obj;                 // subsequent set() merge into this
+            _cacheKey = scopedKey();
             if (_saveTimer) clearTimeout(_saveTimer);
             _saveTimer = setTimeout(() => {
-                try { localStorage.setItem(scopedKey(), JSON.stringify(obj)); }
+                try { localStorage.setItem(scopedKey(), JSON.stringify(_cache)); }
                 catch (e) { console.warn('DashboardPrefs: save failed', e); }
                 _saveTimer = null;
             }, 150);
         } catch (e) { console.warn('DashboardPrefs: saveAll error', e); }
+    }
+
+    /** Flush any pending debounced write (used before a reload-sensitive read). */
+    function flush() {
+        if (_saveTimer && _cache !== null) {
+            clearTimeout(_saveTimer);
+            _saveTimer = null;
+            try { localStorage.setItem(_cacheKey, JSON.stringify(_cache)); }
+            catch (e) { console.warn('DashboardPrefs: flush failed', e); }
+        }
     }
 
     // ---- Core API ----
@@ -59,33 +93,36 @@
         save: saveAll,
 
         get(key, fallback) {
-            const all = loadAll();
+            const all = readAll();
             const val = all[key];
             return (val === undefined || val === null) ? fallback : val;
         },
 
         set(key, value) {
-            const all = loadAll();
+            const all = readAll();
             all[key] = value;
             saveAll(all);
         },
 
         setMany(updates) {
-            const all = loadAll();
+            const all = readAll();
             Object.assign(all, updates);
             saveAll(all);
         },
 
         remove(key) {
-            const all = loadAll();
+            const all = readAll();
             delete all[key];
             saveAll(all);
         },
 
-        clear() { saveAll({}); },
+        clear() { _cache = null; _cacheKey = null; saveAll({}); },
+
+        /** Write any pending debounced change to localStorage immediately. */
+        flush,
 
         apply() {
-            const p = loadAll();
+            const p = readAll();
             // app.js / audio.js declare 'const App' / 'const LiveAudio' at the
             // top level of their <script>. These create SCRIPT-scope globals
             // that are NOT properties of window (unlike 'var' would be), so
@@ -292,6 +329,17 @@
     // Log on load so the console shows exactly which version is running
     // (makes it easy to spot a stale cached copy).
     console.log(`%c[DashboardPrefs v${VERSION}] script loaded`, 'color:#4af');
+
+    // Flush on unload: the debounce is 150 ms, so a refresh (or tab close)
+    // right after a mode/bandwidth change could drop that write and the next
+    // load would restore the previous value. pagehide fires on reload, tab
+    // close and bfcache eviction — the cases that matter here.
+    try {
+        window.addEventListener('pagehide', flush);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') flush();
+        });
+    } catch { /* very old browsers */ }
 
     global.DashboardPrefs = Prefs;
 })(window);
