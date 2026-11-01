@@ -34,7 +34,7 @@ const LiveAudio = {
     // Version of this file. Bumped on every change (same convention as App's
     // VERSION) so the dashboard can show which build the browser actually
     // loaded — useful to confirm a hard refresh picked up new code.
-    VERSION: 'v1.2-2026.11.01',
+    VERSION: 'v1.3-2026.11.01',
     // v1.2: _audioEverStarted is raised by start() and toggle(), so App can
     // tell "no listener yet" (per-user preference, do not touch global SDR
     // settings) from "listening" (per-listener overrides are safe).
@@ -471,8 +471,48 @@ const LiveAudio = {
     setVFO(freqHz) { return this.sendControl({ type: "vfo", frequency: freqHz }); },
     setVfoVfo(idx, freqHz) { return this._sendControlVfo(idx, { type: "vfo", frequency: freqHz }); },
     // mode/bandwidth/squelch/auto-* apply to ALL VFOs (shared UI controls).
-    setMode(mode) { return this.sendControlAll({ type: "mode", mode: String(mode).toUpperCase() }); },
-    setBandwidth(bwHz) { return this.sendControlAll({ type: "bandwidth", bandwidth: bwHz }); },
+    setMode(mode) {
+        const sent = this.sendControlAll({ type: "mode", mode: String(mode).toUpperCase() });
+        // Drop audio already queued for the OLD mode.
+        //
+        // The client schedules up to ~30 buffers ahead (≈3 s of audio), so a
+        // mode switch changed the server-side demodulator while the browser was
+        // still playing the previous mode's sound — reported as "the UI says DMR
+        // but I still hear FM hiss". Digital modes emit nothing until a burst
+        // passes FEC, so the queued analog audio was all the user heard.
+        this._flushQueuedAudio();
+        return sent;
+    },
+    setBandwidth(bwHz) {
+        const sent = this.sendControlAll({ type: "bandwidth", bandwidth: bwHz });
+        // Same reason as setMode: buffered audio was produced with the old
+        // channel filter.
+        this._flushQueuedAudio();
+        return sent;
+    },
+
+    /** Stop and discard every queued source node, for every VFO.
+     *
+     *  Called after a mode / bandwidth change so the operator hears the NEW
+     *  signal immediately instead of the tail of the previous one, and resets
+     *  nextStartTime so playback re-anchors to "now" instead of continuing to
+     *  schedule into the future.
+     */
+    _flushQueuedAudio() {
+        for (let i = 0; i < this._vfos.length; i++) {
+            const v = this._vfos[i];
+            if (!v) continue;
+            for (const node of v.sourceNodes) {
+                try { node.onended = null; } catch (e) {}
+                try { node.stop(); } catch (e) {}
+                try { node.disconnect(); } catch (e) {}
+            }
+            v.sourceNodes = [];
+            // Re-anchor: 0 means "start at now + targetLatency" next time.
+            v.nextStartTime = 0;
+        }
+        console.log('🔇 [audio] flushed queued audio after a mode/bandwidth change');
+    },
     /** Push the dashboard's current mode + channel BW to ONE listener.
      *
      *  Called on every WS (re)connect: the server-side listener is created with

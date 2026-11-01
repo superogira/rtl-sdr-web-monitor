@@ -337,6 +337,16 @@ class Listener:
         """
         if self.mode in DIGITAL_MODES:
             if not settings.DIGITAL_DECODE_ENABLED:
+                # Silently returning here is what made "no audio" impossible to
+                # diagnose: the listener was in a digital mode, nothing was
+                # decoded, and nothing was logged.
+                if not getattr(self, "_warned_disabled", False):
+                    self._warned_disabled = True
+                    logger.warning(
+                        "listener %s: %s requested but DIGITAL_DECODE_ENABLED "
+                        "is false — staying silent", self.id[:8],
+                        self.mode.value,
+                    )
                 return
             # A retune must rebuild the decoder: dsd-neo keeps symbol timing,
             # FEC history and vocoder state belonging to the OLD signal, so the

@@ -245,5 +245,78 @@ class VersionDisplayTests(unittest.TestCase):
                              f"{name} has no cache-busting ?v= tag")
 
 
+class AudioBufferingTests(unittest.TestCase):
+    """A mode/bandwidth change must drop audio queued for the OLD setting.
+
+    Reported: "the UI says DMR but I still hear FM hiss". The client schedules
+    up to 30 buffers ahead (~3 s), so after a mode switch the browser kept
+    playing the previous mode's audio while the server had already changed
+    demodulator. Digital modes stay silent until a burst passes FEC, so that
+    stale tail was ALL the operator heard (measured on production: the listener
+    really was DMR with decoder state ok and zero audio frames).
+    """
+
+    def test_setmode_flushes_queued_audio(self):
+        src = _read(AUDIO_JS)
+        block = re.search(r"setMode\(mode\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block, "setMode not found")
+        self.assertIn("_flushQueuedAudio", block.group(1),
+                      "setMode must drop audio queued for the old mode")
+
+    def test_setbandwidth_flushes_queued_audio(self):
+        src = _read(AUDIO_JS)
+        block = re.search(r"setBandwidth\(bwHz\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block, "setBandwidth not found")
+        self.assertIn("_flushQueuedAudio", block.group(1),
+                      "setBandwidth must drop audio produced with the old filter")
+
+    def test_flush_stops_and_resets_every_vfo(self):
+        src = _read(AUDIO_JS)
+        block = re.search(r"_flushQueuedAudio\(\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block, "_flushQueuedAudio not found")
+        body = block.group(1)
+        for token in ("sourceNodes", "nextStartTime", ".stop()"):
+            self.assertIn(token, body, f"flush must handle {token}")
+
+
+class LoggingConfigTests(unittest.TestCase):
+    """Application loggers must not inherit WARNING-only output.
+
+    Nothing configured logging, so every `logger.info(...)` in the backend was
+    dropped and journalctl never showed "🎧 digital decode started" — which made
+    it look like dsd-neo was never launched. uvicorn only configures its own
+    loggers.
+    """
+
+    MAIN_PY = ROOT / "backend" / "main.py"
+
+    def test_basic_config_is_called(self):
+        src = _read(self.MAIN_PY)
+        self.assertIn("logging.basicConfig(", src,
+                      "backend/main.py must configure logging")
+
+    def test_level_is_info_or_better(self):
+        src = _read(self.MAIN_PY)
+        self.assertRegex(
+            src, r"level=logging\.DEBUG if settings\.DEBUG else logging\.INFO",
+            "INFO must be enabled so decode/stream diagnostics reach journalctl",
+        )
+
+    def test_backend_logger_level_is_set(self):
+        src = _read(self.MAIN_PY)
+        self.assertIn('logging.getLogger("backend")', src)
+
+    def test_disabled_digital_decode_is_logged(self):
+        src = _read(ROOT / "backend" / "audio" / "broadcaster.py")
+        # The guard must log instead of returning silently. The message is a
+        # wrapped string literal, so match the distinctive phrase only.
+        self.assertIn("DIGITAL_DECODE_ENABLED ", src,
+                      "the disabled-decode guard must name the setting")
+        self.assertRegex(
+            src, r"is false\s*[—-]\s*staying silent",
+            "a digital listener with decoding disabled must say so in the log",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

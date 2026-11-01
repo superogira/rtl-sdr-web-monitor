@@ -1,6 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+import logging
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,24 @@ from backend.sdr.router import (
 )
 from backend.sdr.recording_jobs_router import recording_jobs_router
 from backend.sdr.vfo_limit import clamp_vfo_offset_hz
+
+# === Logging setup ===
+# Without this, every module's `logger` inherits the root logger's default
+# level (WARNING), so all of our INFO diagnostics were silently dropped — e.g.
+# "🎧 digital decode started" never appeared in journalctl, which made it
+# impossible to tell whether dsd-neo had even been launched. uvicorn only
+# configures ITS OWN loggers, not the application's.
+logging.basicConfig(
+    level=logging.DEBUG if settings.DEBUG else logging.INFO,
+    format="%(levelname)s:     %(message)s",
+    force=True,
+)
+# Keep third-party libraries at WARNING so INFO stays readable.
+for _noisy in ("httpx", "httpcore", "urllib3", "asyncio", "multipart"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+logging.getLogger("backend").setLevel(
+    logging.DEBUG if settings.DEBUG else logging.INFO
+)
 
 
 @asynccontextmanager
