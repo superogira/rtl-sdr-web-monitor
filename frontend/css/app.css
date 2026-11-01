@@ -2486,8 +2486,18 @@ a:hover {
 .vfo-sig {
     color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
-    min-width: 52px;
     text-align: right;
+    /* FIXED width, not min-width. The label grows when the effective squelch
+       threshold is appended ("-65 dB" -> "-65 dB · SQL -83" -> "-65 dB · AUTO
+       -83"), and .vfo-freq is flex:1, so every frame that carried a threshold
+       shoved the frequency text ~53 px left and the next frame pulled it back —
+       that is the "S-meter bouncing" the operator sees. Reserving the widest
+       form keeps the row geometry stable at any level/threshold combination. */
+    width: 118px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Digital decoder state on a VFO row. Two states on purpose:

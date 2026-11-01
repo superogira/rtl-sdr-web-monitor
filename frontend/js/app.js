@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.13-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+    VERSION: 'v1.14-2026.11.01',  // Digital-mode BW row + refresh state fixes:
                                // a .bw-btn now exists for every width in
                                // _BW_CHOICES (6.25k / 12.5k were missing, which
                                // hid the whole BW row in every digital mode),
@@ -770,6 +770,11 @@ const App = {
     // whether it came from AUTO squelch. null = not reported yet.
     _vfoThr: [null, null, null, null],
     _vfoThrAuto: [false, false, false, false],
+    // Display-only smoothed level per VFO. The server's EMA is tuned for the
+    // squelch gate (fast attack), so the raw value still jitters ±1-2 dB every
+    // 100 ms frame; this slower pass keeps the meter readable. It never feeds
+    // back into squelch decisions.
+    _vfoSigShown: [-120, -120, -120, -120],
     // Backwards-compat: code that checked _vfoMode === 'dual'.
     get _vfoMode() { return this._vfoCount > 1 ? 'dual' : 'single'; },
     // Set of control values the user is CURRENTLY editing (e.g. 'gain',
@@ -2016,9 +2021,24 @@ const App = {
         const container = document.getElementById(`vfo-${lo}-sig-bars`);
         const label = document.getElementById(`vfo-${lo}-sig`);
         if (!container) return;
-        const v = (db === undefined) ? -120 : db;
+
+        // DISPLAY-ONLY smoothing, deliberately slower than the server's.
+        //
+        // The server EMA is tuned for the SQUELCH (attack 0.7 so the gate opens
+        // within one 50 ms chunk, release 0.4), which leaves a steady carrier
+        // jittering ±1-2 dB every frame. At 10 sig frames/second that reads as
+        // the meter bouncing. This second pass only affects what the operator
+        // sees; it must never influence the gate, so it lives here and not in
+        // the backend.
+        const raw = (db === undefined) ? -120 : db;
+        const prev = this._vfoSigShown[idx];
+        const shown = (prev === undefined || prev <= -120 || raw <= -120)
+            ? raw                                  // (re)acquire immediately
+            : (0.82 * prev + 0.18 * raw);
+        this._vfoSigShown[idx] = shown;
+
         const bars = container.querySelectorAll('.vfo-bar');
-        const normalized = Math.max(0, Math.min(10, (v + 120) / 9));
+        const normalized = Math.max(0, Math.min(10, (shown + 120) / 9));
         const activeBars = Math.round(normalized);
         bars.forEach((bar, i) => {
             bar.className = 'vfo-bar';
@@ -2034,12 +2054,17 @@ const App = {
             // place the operator can see what threshold the server is using.
             const thr = (this._vfoThr && this._vfoThr[idx] !== null && this._vfoThr[idx] !== undefined)
                 ? this._vfoThr[idx] : null;
+            let text;
             if (thr !== null && thr > -120) {
                 const tag = (this._vfoThrAuto && this._vfoThrAuto[idx]) ? 'AUTO' : 'SQL';
-                label.textContent = `${v.toFixed(0)} dB · ${tag} ${thr.toFixed(0)}`;
+                text = `${shown.toFixed(0)} dB · ${tag} ${thr.toFixed(0)}`;
             } else {
-                label.textContent = `${v.toFixed(0)} dB`;
+                text = `${shown.toFixed(0)} dB`;
             }
+            // Only touch the DOM when the string actually changes: a needless
+            // write per frame is wasted work AND (before the fixed width above)
+            // a layout thrash on every tick.
+            if (label.textContent !== text) label.textContent = text;
         }
     },
 

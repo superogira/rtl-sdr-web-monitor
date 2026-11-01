@@ -1252,6 +1252,21 @@ class AudioBroadcaster:
             await dec.feed(baseband)
 
         audio = dec.read()
+
+        # Keep the squelch STATE coherent for digital listeners.
+        #
+        # `_apply_squelch()` is what normally maintains `_sq_open` and
+        # `_sq_threshold_db`, but digital audio bypasses it (there is no carrier
+        # to gate on). Left untouched, `_sq_threshold_db` stayed at its -120
+        # sentinel while `_sq_open` stayed False, so the SIG frame told the
+        # dashboard "squelch disabled, gate closed" forever — the row never
+        # showed the RX-active flash and the threshold text disagreed with the
+        # level. Digital has no gate: report it as permanently open with squelch
+        # disabled so the UI stops guessing.
+        ln._sq_open = True
+        ln._sq_threshold_db = -120.0
+        ln._sq_hang_left = 0.0
+
         if len(audio) == 0:
             # No completed voice frame this tick: still push a SIG frame so the
             # meter and the RX indicator stay live while the user waits.

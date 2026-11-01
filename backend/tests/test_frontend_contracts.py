@@ -318,5 +318,99 @@ class LoggingConfigTests(unittest.TestCase):
         )
 
 
+class SigMeterStabilityTests(unittest.TestCase):
+    """The per-VFO S-meter must not visibly bounce.
+
+    Measured on production before the fix: appending the effective squelch
+    threshold to the label ("-65 dB" -> "-65 dB · SQL -83") grew .vfo-sig from
+    52 px to 105 px, and because .vfo-freq is flex:1 the frequency text shifted
+    53 px left on every frame that carried a threshold and back again on the
+    next. Combined with the server EMA (tuned for the squelch gate: attack 0.7)
+    the displayed number also stepped ±1-2 dB ten times a second.
+    """
+
+    CSS = ROOT / "frontend" / "css" / "app.css"
+
+    def _vfo_sig_rule(self) -> str:
+        css = _read(self.CSS)
+        m = re.search(r"\.vfo-sig\s*\{(.*?)\}", css, re.S)
+        self.assertIsNotNone(m, ".vfo-sig rule not found")
+        return m.group(1)
+
+    def test_sig_label_has_a_fixed_width(self):
+        rule = self._vfo_sig_rule()
+        self.assertRegex(rule, r"width:\s*\d+px",
+                         ".vfo-sig needs a fixed width, not min-width: the label "
+                         "grows when SQL/AUTO is appended")
+        self.assertNotRegex(rule, r"min-width:\s*\d+px\s*;\s*$",
+                            "min-width alone lets the row shift when the text grows")
+
+    def test_sig_label_does_not_flex(self):
+        rule = self._vfo_sig_rule()
+        self.assertIn("flex: 0 0 auto", rule,
+                      ".vfo-sig must not flex, or .vfo-freq moves with the text")
+
+    def test_label_is_nowrap(self):
+        self.assertIn("white-space: nowrap", self._vfo_sig_rule())
+
+    def test_display_smoothing_state_exists(self):
+        src = _read(APP_JS)
+        self.assertIn("_vfoSigShown", src,
+                      "a display-only smoothed level must be kept per VFO")
+
+    def test_display_smoothing_is_slower_than_server_ema(self):
+        """Display alpha must be well below the squelch attack (0.7)."""
+        src = _read(APP_JS)
+        m = re.search(r"const shown = .*?\n.*?\(([0-9.]+) \* prev \+ ([0-9.]+) \* raw\)",
+                      src, re.S)
+        self.assertIsNotNone(m, "display EMA expression not found")
+        alpha = float(m.group(2))
+        self.assertLess(alpha, 0.3,
+                        f"display alpha {alpha} is too high to steady the meter")
+
+    def test_label_only_written_when_changed(self):
+        src = _read(APP_JS)
+        self.assertRegex(
+            src, r"if \(label\.textContent !== text\) label\.textContent = text",
+            "the label must not be rewritten when the value is unchanged",
+        )
+
+    def test_bars_use_the_smoothed_value(self):
+        src = _read(APP_JS)
+        block = re.search(r"_updateVfoBars\(idx, db\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block)
+        body = block.group(1)
+        # Both the bars and the text must read `shown`, not the raw `db`.
+        self.assertIn("(shown + 120) / 9", body, "bars must use the smoothed level")
+        self.assertIn("shown.toFixed(0)", body, "label must use the smoothed level")
+
+
+class DigitalSquelchStateTests(unittest.TestCase):
+    """Digital listeners bypass _apply_squelch, so its state must be set here.
+
+    `_apply_squelch()` is the only place that maintains `_sq_open` /
+    `_sq_threshold_db`. Digital audio skips it (no carrier to gate on), so both
+    kept their initial values: threshold at the -120 "disabled" sentinel and the
+    gate closed. The dashboard therefore never flashed RX-active and could not
+    show a threshold that agreed with the level.
+    """
+
+    BC = ROOT / "backend" / "audio" / "broadcaster.py"
+
+    def test_digital_path_sets_squelch_state(self):
+        src = _read(self.BC)
+        start = src.find("async def _process_digital_packet(")
+        self.assertGreater(start, 0, "_process_digital_packet not found")
+        # Up to the next top-level method definition.
+        nxt = src.find("\n    async def ", start + 10)
+        if nxt < 0:
+            nxt = src.find("\n    def ", start + 10)
+        self.assertGreater(nxt, start, "could not delimit the method body")
+        body = src[start:nxt]
+        for token in ("_sq_open", "_sq_threshold_db", "_sq_hang_left"):
+            self.assertIn(token, body,
+                          f"digital path must set {token} (bypasses _apply_squelch)")
+
+
 if __name__ == "__main__":
     unittest.main()
