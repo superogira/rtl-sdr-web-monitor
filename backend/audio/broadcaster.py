@@ -450,8 +450,19 @@ class Listener:
         this threshold is muted to silence.
         """
         self.squelch_db = max(-200.0, min(0.0, float(level_db)))
-        # Force a re-evaluation on the next chunk by leaving _sq_open as-is;
-        # the hysteresis logic in _apply_squelch will settle correctly.
+        # Publish the new threshold NOW rather than waiting for a chunk that
+        # actually carries audio.
+        #
+        # `_apply_squelch()` is the only other writer of `_sq_threshold_db`, and
+        # the worker skips it whenever a chunk produced no audio. The SIG frame
+        # is emitted from several places, so between the moment the operator
+        # moved the SQL slider and the next chunk WITH audio, the frame kept
+        # reporting the previous threshold — the row's "-65 dB · SQL -56" label
+        # then flickered between the old and new value.
+        #
+        # With AUTO squelch the estimator owns the threshold, so leave it alone.
+        if not self.auto_squelch:
+            self._sq_threshold_db = self.squelch_db
 
     def _smooth_level(self, level_db: float) -> float:
         """Update and return the EMA-smoothed signal level (asymmetric EMA).
@@ -976,6 +987,13 @@ class AudioBroadcaster:
                             di += 1
 
                         if audio is None or len(audio) == 0:
+                            # Keep the reported squelch threshold current even
+                            # on a chunk with no audio: _apply_squelch() below is
+                            # the only other writer, so skipping it here left the
+                            # SIG frame reporting a stale threshold and the row's
+                            # "… · SQL -56" label flickered.
+                            if ln.mode not in DIGITAL_MODES and not ln.auto_squelch:
+                                ln._sq_threshold_db = ln.squelch_db
                             continue
 
                         # Keep the squelch fade/hang timing in sync with the
@@ -1210,6 +1228,10 @@ class AudioBroadcaster:
         await ln.apply_mode_side_effects()
         dec = ln.decoder
         if dec is None:
+            # Still emit a SIG frame: without one the dashboard never learns
+            # this listener is in a digital mode, so the row shows NOTHING (no
+            # "waiting for signal" chip, no decoder warning) and looks broken.
+            self._emit_sig_frame(ln)
             return
 
         # --- 1. baseband (executor: numpy releases the GIL) ---

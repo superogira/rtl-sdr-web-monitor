@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.15-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+    VERSION: 'v1.16-2026.11.01',  // Digital-mode BW row + refresh state fixes:
                                // a .bw-btn now exists for every width in
                                // _BW_CHOICES (6.25k / 12.5k were missing, which
                                // hid the whole BW row in every digital mode),
@@ -1962,15 +1962,25 @@ const App = {
         const el = document.getElementById(`vfo-digital-${lo}`);
         if (!el) return;
         const dec = this._vfoDec[idx];
-        if (!this._vfoDigital[idx] || !dec) {
-            // Back in an analog mode (or the decoder state is unknown): the chip
-            // must disappear completely. Clear the title too — leaving it set
-            // kept the old "the decoder is running but no burst…" tooltip alive
-            // on a hidden element.
+        if (!this._vfoDigital[idx]) {
+            // Back in an analog mode: the chip must disappear completely. Clear
+            // the title too — leaving it set kept the old "the decoder is
+            // running but no burst…" tooltip alive on a hidden element.
             el.style.display = 'none';
             el.textContent = '';
             el.title = '';
             el.className = 'vfo-digital-status';
+            return;
+        }
+        if (!dec) {
+            // Digital mode, but the decoder state has not arrived yet (the very
+            // first frames after a switch). Showing nothing at all made the row
+            // look dead — the operator could not tell "waiting for a burst"
+            // from "this row is broken". Report the normal idle state instead.
+            el.style.display = '';
+            el.className = 'vfo-digital-status is-idle';
+            el.textContent = I18n.t('dash.digitalIdle');
+            el.title = I18n.t('dash.digitalIdleTitle');
             return;
         }
         el.style.display = '';

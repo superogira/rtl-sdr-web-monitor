@@ -511,5 +511,103 @@ class AutoRecordButtonStateTests(unittest.TestCase):
                       "armed and active")
 
 
+class SquelchThresholdReportingTests(unittest.TestCase):
+    """The reported squelch threshold must track the slider immediately.
+
+    `_apply_squelch()` was the only writer of `_sq_threshold_db`, and the worker
+    skips it whenever a chunk produced no audio. Between the operator moving the
+    SQL slider and the next chunk WITH audio, every SIG frame kept reporting the
+    previous threshold, so the row's "-65 dB · SQL -56" label flickered between
+    the old and the new value.
+    """
+
+    BC = ROOT / "backend" / "audio" / "broadcaster.py"
+
+    def _set_squelch_body(self) -> str:
+        src = _read(self.BC)
+        start = src.find("def set_squelch(")
+        self.assertGreater(start, 0, "set_squelch not found")
+        nxt = src.find("\n    def ", start + 10)
+        return src[start:nxt]
+
+    def test_set_squelch_publishes_the_threshold(self):
+        body = self._set_squelch_body()
+        # Must ASSIGN the threshold (not merely mention it in a comment).
+        self.assertRegex(
+            body,
+            r"self\._sq_threshold_db\s*=\s*self\.squelch_db",
+            "set_squelch must assign _sq_threshold_db = squelch_db so the next "
+            "SIG frame reports the new value instead of the previous one",
+        )
+
+    def test_set_squelch_defers_to_auto_squelch(self):
+        body = self._set_squelch_body()
+        # The assignment must be guarded by `not self.auto_squelch`.
+        self.assertRegex(
+            body,
+            r"if not self\.auto_squelch:\s*\n\s*self\._sq_threshold_db",
+            "AUTO squelch owns the threshold; the manual setter must not "
+            "overwrite what the estimator picked",
+        )
+
+    def test_no_audio_chunk_still_refreshes_the_threshold(self):
+        src = _read(self.BC)
+        idx = src.find("if audio is None or len(audio) == 0:")
+        self.assertGreater(idx, 0)
+        window = src[idx:idx + 700]
+        self.assertIn("_sq_threshold_db", window,
+                      "a chunk without audio must still refresh the threshold, "
+                      "otherwise the SIG frame reports a stale value")
+
+
+class DigitalChipVisibilityTests(unittest.TestCase):
+    """A digital row must say "waiting for signal" even before the decoder
+    state arrives, and must show nothing at all in an analog mode.
+    """
+
+    def test_chip_shown_when_dec_state_missing(self):
+        src = _read(APP_JS)
+        start = src.find("_renderDigitalStatus(idx) {")
+        self.assertGreater(start, 0, "_renderDigitalStatus not found")
+        nxt = src.find("\n    /**", start + 10)
+        body = src[start:nxt]
+        # The `!dec` branch must SHOW the idle chip, not hide the element.
+        self.assertRegex(
+            body,
+            r"if \(!dec\)\s*\{[^}]*display = ''",
+            "a digital row with no decoder state yet must show the idle chip",
+        )
+        self.assertRegex(
+            body,
+            r"if \(!dec\)\s*\{[^}]*digitalIdle",
+            "the idle chip text must be used when the decoder state is unknown",
+        )
+
+    def test_chip_hidden_for_analog(self):
+        src = _read(APP_JS)
+        start = src.find("_renderDigitalStatus(idx) {")
+        nxt = src.find("\n    /**", start + 10)
+        body = src[start:nxt]
+        self.assertRegex(
+            body,
+            r"if \(!this\._vfoDigital\[idx\]\)\s*\{[^}]*display = 'none'",
+            "an analog row must hide the digital chip",
+        )
+
+    def test_sig_frame_sent_when_decoder_missing(self):
+        src = _read(ROOT / "backend" / "audio" / "broadcaster.py")
+        start = src.find("async def _process_digital_packet(")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    async def ", start + 10)
+        body = src[start:nxt]
+        # The early return for `dec is None` must emit a SIG frame first.
+        self.assertRegex(
+            body,
+            r"if dec is None:\s*\n(?:.*\n){0,4}?\s*self\._emit_sig_frame\(ln\)",
+            "a listener with no decoder must still send a SIG frame, or the "
+            "dashboard never learns the row is digital",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
