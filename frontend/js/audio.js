@@ -898,6 +898,12 @@ const LiveAudio = {
         }
         if (indicator) indicator.style.display = playing ? "" : "none";
         if (typeof App !== 'undefined' && App._updateVfoRows) App._updateVfoRows();
+        // The auto-record button has an ARMED state (enabled, but nothing
+        // recording because no listener runs) and an ACTIVE state (pulsing).
+        // Starting/stopping listening is exactly what moves it between them.
+        if (typeof App !== 'undefined' && App._updateAutoRecordBtn) {
+            try { App._updateAutoRecordBtn(); } catch (e) {}
+        }
     },
 
     _updateStatus(icon) {

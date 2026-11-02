@@ -191,6 +191,13 @@
             if (p.autoRecord !== undefined) {
                 console.log(`[DashboardPrefs] restore autoRecord=${p.autoRecord}`);
                 app._autoRecordOn = !!p.autoRecord;
+                // Repaint immediately: without this the button kept whatever
+                // state the HTML shipped with until something else touched it,
+                // so a restored "armed" preference could look active (or vice
+                // versa) right after a refresh.
+                if (typeof app._updateAutoRecordBtn === 'function') {
+                    try { app._updateAutoRecordBtn(); } catch { /* ignore */ }
+                }
             }
             // Auto-squelch
             if (p.autoSquelch !== undefined) {

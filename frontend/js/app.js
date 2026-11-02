@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.14-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+    VERSION: 'v1.15-2026.11.01',  // Digital-mode BW row + refresh state fixes:
                                // a .bw-btn now exists for every width in
                                // _BW_CHOICES (6.25k / 12.5k were missing, which
                                // hid the whole BW row in every digital mode),
@@ -1765,18 +1765,37 @@ const App = {
      */
     _autoRecordOn: false,
     toggleAutoRecord() {
-        // Auto-record (per-user) rides on the live audio WebSocket, so it
-        // requires "ฟังสด" to be active first.
+        const next = !this._autoRecordOn;
+
+        // Turning OFF must ALWAYS work. It only clears client state and tells
+        // any live listener to stop — none of that needs a listener to exist.
+        // Requiring ฟังสด first meant a preference saved in an earlier session
+        // left the button pulsing with no way to switch it off before listening.
+        if (!next) {
+            this._autoRecordOn = false;
+            if (typeof DashboardPrefs !== 'undefined') {
+                DashboardPrefs.set('autoRecord', false);
+            }
+            // Best-effort: no-op when nothing is live (returns false).
+            this._sendAutoRecordState(false);
+            this._updateAutoRecordBtn();
+            console.log('🔄 Per-user auto-record → OFF (disarmed)');
+            return;
+        }
+
+        // Turning ON does need a live listener: the feature rides the per-user
+        // audio WebSocket, so there is nothing to record until one exists.
         if (typeof LiveAudio === 'undefined' || !LiveAudio.anyPlaying) {
             alert(I18n.t('dash.errNeedListenAutoRec'));
             return;
         }
-        const next = !this._autoRecordOn;
-        if (this._sendAutoRecordState(next)) {
+        if (this._sendAutoRecordState(true)) {
             // Persist the choice (restored on refresh / re-listen).
-            if (typeof DashboardPrefs !== 'undefined') DashboardPrefs.set('autoRecord', next);
+            if (typeof DashboardPrefs !== 'undefined') {
+                DashboardPrefs.set('autoRecord', true);
+            }
             // Optimistic UI; _onAutoRecordAck confirms (and reverts if refused).
-            this._autoRecordOn = next;
+            this._autoRecordOn = true;
             this._updateAutoRecordBtn();
         }
         // UI state is finalized in _onAutoRecordAck (server confirms).
@@ -1795,14 +1814,29 @@ const App = {
         return LiveAudio.setAutoRecord(!!enabled, isNaN(squelch) ? -120 : squelch);
     },
 
-    /** Reflect _autoRecordOn / _autoSquelchOn on the dashboard buttons. */
+    /** Reflect _autoRecordOn / _autoSquelchOn on the dashboard buttons.
+     *
+     *  Two distinct states on purpose:
+     *    ARMED  — the operator asked for auto-record (persisted, survives a
+     *             refresh) but no listener is running, so nothing is recording.
+     *             Static tint, NO pulse.
+     *    ACTIVE — a live listener is actually auto-recording. Pulsing.
+     *  Collapsing both into one class made the button blink on a fresh page
+     *  load with nothing recording at all, and (before the toggle fix) the
+     *  operator could not switch that misleading state off.
+     */
     _updateAutoRecordBtn() {
         const btn = document.getElementById('btn-auto-record');
         if (btn) {
-            btn.classList.toggle('auto-rec-active', this._autoRecordOn);
-            btn.title = this._autoRecordOn
-                ? I18n.t('dash.autoRecOnTitle')
-                : I18n.t('dash.autoRecOffTitle');
+            const live = (typeof LiveAudio !== 'undefined' && LiveAudio.anyPlaying);
+            const active = this._autoRecordOn && live;
+            const armed = this._autoRecordOn && !live;
+            btn.classList.toggle('auto-rec-active', active);
+            btn.classList.toggle('auto-rec-armed', armed);
+            btn.title = !this._autoRecordOn
+                ? I18n.t('dash.autoRecOffTitle')
+                : (live ? I18n.t('dash.autoRecOnTitle')
+                        : I18n.t('dash.autoRecArmedTitle'));
             btn.textContent = '🔄';
         }
         this._updateRecordButton();

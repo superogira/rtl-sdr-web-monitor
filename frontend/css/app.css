@@ -2731,3 +2731,12 @@ a:hover {
 #btn-auto-record.auto-rec-active {
     animation: rec-auto-pulse 1.2s ease-in-out infinite;
 }
+/* ARMED: the operator enabled auto-record (persisted across refreshes) but no
+   listener is running, so nothing is being recorded. Static tint only — the
+   pulse must mean "recording right now", otherwise a fresh page load shows a
+   blinking button with no recording at all. */
+#btn-auto-record.auto-rec-armed {
+    border-color: rgba(234, 179, 8, 0.55) !important;
+    color: var(--accent-yellow, #eab308) !important;
+    animation: none !important;
+}

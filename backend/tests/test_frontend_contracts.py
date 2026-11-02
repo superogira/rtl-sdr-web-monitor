@@ -412,5 +412,104 @@ class DigitalSquelchStateTests(unittest.TestCase):
                           f"digital path must set {token} (bypasses _apply_squelch)")
 
 
+class AutoRecordToggleTests(unittest.TestCase):
+    """Turning auto-record OFF must not require a live listener.
+
+    Reported: on a fresh page the auto-record button was already pulsing (a
+    preference saved in an earlier session) and clicking it showed
+    "กรุณากด ฟังสด ก่อนเปิดอัดอัตโนมัติ" — refusing to turn it OFF.
+
+    The guard belongs only on the ON path: enabling rides the per-user audio
+    WebSocket, but disabling just clears client state and tells any live
+    listener to stop, which needs no listener at all.
+    """
+
+    def _toggle_body(self) -> str:
+        src = _read(APP_JS)
+        m = re.search(r"toggleAutoRecord\(\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(m, "toggleAutoRecord not found")
+        return m.group(1)
+
+    def test_off_path_runs_before_the_listen_guard(self):
+        body = self._toggle_body()
+        # `if (!next)` (the OFF branch) must appear BEFORE the anyPlaying check.
+        off_idx = body.find("if (!next)")
+        guard_idx = body.find("anyPlaying")
+        self.assertGreater(off_idx, 0, "the OFF branch (if (!next)) is missing")
+        self.assertGreater(guard_idx, 0, "the listen guard is missing")
+        self.assertLess(off_idx, guard_idx,
+                        "the OFF branch must be handled before the listen guard, "
+                        "otherwise turning it off requires ฟังสด")
+
+    def test_off_path_clears_state_and_persists(self):
+        body = self._toggle_body()
+        off_branch = body[body.find("if (!next)"):body.find("// Turning ON")]
+        self.assertIn("_autoRecordOn = false", off_branch)
+        self.assertIn("DashboardPrefs.set('autoRecord', false)", off_branch)
+        self.assertIn("_updateAutoRecordBtn()", off_branch)
+
+    def test_on_path_still_requires_listening(self):
+        body = self._toggle_body()
+        on_part = body[body.find("// Turning ON"):]
+        self.assertIn("anyPlaying", on_part,
+                      "enabling must still require a live listener")
+        self.assertIn("errNeedListenAutoRec", on_part)
+
+
+class AutoRecordButtonStateTests(unittest.TestCase):
+    """The button must separate 'armed' (preference) from 'active' (recording).
+
+    Collapsing them into one class made a fresh page load pulse with nothing
+    being recorded at all.
+    """
+
+    CSS = ROOT / "frontend" / "css" / "app.css"
+
+    def test_button_uses_both_classes(self):
+        src = _read(APP_JS)
+        block = re.search(r"_updateAutoRecordBtn\(\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block)
+        body = block.group(1)
+        self.assertIn("'auto-rec-active'", body, "active class missing")
+        self.assertIn("'auto-rec-armed'", body, "armed class missing")
+        # Active must be gated on listening, armed on NOT listening.
+        self.assertRegex(body, r"active\s*=\s*this\._autoRecordOn\s*&&\s*live")
+        self.assertRegex(body, r"armed\s*=\s*this\._autoRecordOn\s*&&\s*!live")
+
+    def test_armed_state_has_no_animation(self):
+        css = _read(self.CSS)
+        m = re.search(r"#btn-auto-record\.auto-rec-armed\s*\{(.*?)\}", css, re.S)
+        self.assertIsNotNone(m, ".auto-rec-armed rule missing")
+        rule = m.group(1)
+        self.assertIn("animation: none", rule,
+                      "the armed state must not pulse — pulsing means recording")
+
+    def test_active_state_does_pulse(self):
+        css = _read(self.CSS)
+        m = re.search(r"#btn-auto-record\.auto-rec-active\s*\{(.*?)\}", css, re.S)
+        self.assertIsNotNone(m, ".auto-rec-active rule missing")
+        self.assertIn("animation:", m.group(1))
+
+    def test_armed_title_exists_in_both_languages(self):
+        src = _read(ROOT / "frontend" / "js" / "i18n.js")
+        self.assertGreaterEqual(src.count("'dash.autoRecArmedTitle'"), 2,
+                                "armed tooltip must exist in TH and EN")
+
+    def test_prefs_restore_repaints_the_button(self):
+        src = _read(ROOT / "frontend" / "js" / "dashboard_prefs.js")
+        block = src[src.find("p.autoRecord !== undefined"):]
+        block = block[:block.find("\n            }")]
+        self.assertIn("_updateAutoRecordBtn", block,
+                      "restoring autoRecord must repaint the button immediately")
+
+    def test_listen_toggle_repaints_the_button(self):
+        src = _read(AUDIO_JS)
+        block = re.search(r"_updateUI\(\)\s*\{(.*?)\n    \},", src, re.S)
+        self.assertIsNotNone(block)
+        self.assertIn("_updateAutoRecordBtn", block.group(1),
+                      "starting/stopping listening must move the button between "
+                      "armed and active")
+
+
 if __name__ == "__main__":
     unittest.main()
