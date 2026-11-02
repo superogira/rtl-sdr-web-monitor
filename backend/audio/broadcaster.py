@@ -384,23 +384,32 @@ class Listener:
             # Respect the global process cap. The decoder is per-listener, so
             # without this N listeners cost N processes and N x ~30 MB; the cap
             # is the difference between "fine" and OOM on a small box.
-            used = Listener.decoder_process_count()
-            if settings.DIGITAL_DECODE_MAX_PROC > 0 \
-                    and used >= settings.DIGITAL_DECODE_MAX_PROC:
+            #
+            # The slot is RESERVED before `await dec.start()`, because several
+            # listeners reach this point concurrently and would otherwise all
+            # read the same count and all pass the check (measured: cap 3 with
+            # four DMR listeners spawned 4 processes).
+            if not Listener.reserve_decoder_slot(self):
                 logger.warning(
                     "listener %s: %s not started — dsd-neo process cap reached "
                     "(%d/%d, see DIGITAL_DECODE_MAX_PROC)",
                     self.id[:8], self.mode.value,
-                    used, settings.DIGITAL_DECODE_MAX_PROC,
+                    Listener.decoder_process_count(),
+                    settings.DIGITAL_DECODE_MAX_PROC,
                 )
                 return
 
-            dec = DigitalDecoder(
-                self.mode,
-                binary=settings.DSD_NEO_BIN,
-                max_restarts=settings.DIGITAL_DECODE_RESTART_MAX,
-            )
-            started = await dec.start()
+            try:
+                dec = DigitalDecoder(
+                    self.mode,
+                    binary=settings.DSD_NEO_BIN,
+                    max_restarts=settings.DIGITAL_DECODE_RESTART_MAX,
+                )
+                started = await dec.start()
+            finally:
+                # The reservation exists only for the duration of the spawn;
+                # from here the live registry counts this decoder.
+                Listener.release_decoder_slot(self)
             # Keep the object even when the binary is missing: the worker can
             # then report "decoder unavailable" instead of silently producing
             # analog noise for a digital channel.
@@ -432,6 +441,15 @@ class Listener:
     # unnecessary: entries are added on start and removed on stop, both driven
     # by the listener lifecycle.
     _live_decoders: "set" = set()
+    # Slots claimed by a listener that is INSIDE `await dec.start()` right now.
+    #
+    # Without this the cap was racy: every listener entering
+    # apply_mode_side_effects() concurrently read the same `used` count before
+    # any of them had registered, so all of them passed the check. Measured with
+    # DIGITAL_DECODE_MAX_PROC=3 and four simultaneous DMR listeners: 4 processes
+    # were spawned. Reserving the slot BEFORE the await makes check+claim atomic
+    # with respect to the event loop.
+    _reserved_slots: "set" = set()
 
     @classmethod
     def register_decoder(cls, dec) -> None:
@@ -442,9 +460,22 @@ class Listener:
         cls._live_decoders.discard(id(dec))
 
     @classmethod
+    def reserve_decoder_slot(cls, owner) -> bool:
+        """Claim one slot under the cap. False when the cap is already used."""
+        cap = settings.DIGITAL_DECODE_MAX_PROC
+        if cap > 0 and (len(cls._live_decoders) + len(cls._reserved_slots)) >= cap:
+            return False
+        cls._reserved_slots.add(id(owner))
+        return True
+
+    @classmethod
+    def release_decoder_slot(cls, owner) -> None:
+        cls._reserved_slots.discard(id(owner))
+
+    @classmethod
     def decoder_process_count(cls) -> int:
-        """How many dsd-neo processes this process has started."""
-        return len(cls._live_decoders)
+        """How many dsd-neo processes this process has started (or is starting)."""
+        return len(cls._live_decoders) + len(cls._reserved_slots)
 
     def digital_ready(self) -> bool:
         """True when this listener can actually produce decoded audio."""
@@ -989,6 +1020,18 @@ class AudioBroadcaster:
                             await self._process_digital_packet(
                                 ln, step[1], last_sample_rate)
                             continue
+                        # ANALOG step: release any decoder this listener still
+                        # holds.
+                        #
+                        # `apply_mode_side_effects()` is otherwise only reached
+                        # from `_process_digital_packet()`, which stops being
+                        # called the moment the mode goes analog — so switching
+                        # DMR -> FM left the dsd-neo process running forever:
+                        # ~30 MB per listener, and it kept holding a slot under
+                        # DIGITAL_DECODE_MAX_PROC so other listeners could not
+                        # decode at all.
+                        if ln.decoder is not None:
+                            await ln.apply_mode_side_effects()
                         # The plan was built before this batch's control messages
                         # could land, so a step can still be analog audio for a
                         # listener that has JUST switched to a digital mode.

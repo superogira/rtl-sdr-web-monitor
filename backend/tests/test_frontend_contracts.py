@@ -626,7 +626,8 @@ class ModeSwitchAudioLeakTests(unittest.TestCase):
         src = _read(self.BC)
         start = src.find('for step in plan:')
         self.assertGreater(start, 0, "plan loop not found")
-        window = src[start:start + 1200]
+        # Wide enough to cover the analog-release block that now precedes it.
+        window = src[start:start + 2600]
         self.assertIn("_mode_changed_at", window,
                       "the plan loop must drop analog chunks planned before a "
                       "switch to a digital mode")
@@ -714,6 +715,96 @@ class SigEmaModeResetTests(unittest.TestCase):
             r"this\._vfoSigShown\[idx\] = -120;",
             "the display EMA must re-acquire inside the flag-change branch",
         )
+
+
+class DecoderLifecycleLeakTests(unittest.TestCase):
+    """A decoder must be released when its listener leaves the digital modes.
+
+    Measured before the fix: DMR -> FM left `procs=1, decoder=DigitalDecoder`.
+    `apply_mode_side_effects()` was only reachable from
+    `_process_digital_packet()`, which stops being called the moment the mode
+    goes analog — so the dsd-neo process lived forever (~30 MB per listener) and
+    kept holding a slot under DIGITAL_DECODE_MAX_PROC, which starved every other
+    listener's decoding.
+    """
+
+    BC = ROOT / "backend" / "audio" / "broadcaster.py"
+
+    def test_plan_loop_releases_the_decoder_on_analog_steps(self):
+        src = _read(self.BC)
+        start = src.find('for step in plan:')
+        self.assertGreater(start, 0, "plan loop not found")
+        window = src[start:start + 1800]
+        self.assertIn("if ln.decoder is not None:", window,
+                      "an analog step must check for a leftover decoder")
+        self.assertIn("apply_mode_side_effects", window,
+                      "an analog step must call apply_mode_side_effects() so the "
+                      "decoder is stopped")
+
+
+class ProcessCapRaceTests(unittest.TestCase):
+    """The dsd-neo process cap must hold when listeners start concurrently.
+
+    Measured before the fix: DIGITAL_DECODE_MAX_PROC=3 with four simultaneous
+    DMR listeners spawned 4 processes, because every listener read the same
+    `used` count before any of them had registered (the registration happens
+    after `await dec.start()`).
+    """
+
+    BC = ROOT / "backend" / "audio" / "broadcaster.py"
+
+    def test_slot_is_reserved_before_the_await(self):
+        src = _read(self.BC)
+        start = src.find("async def apply_mode_side_effects(")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    async def ", start + 10)
+        body = src[start:nxt]
+        # Look for the CALL (not the mention inside the explanatory comment).
+        reserve = body.find("Listener.reserve_decoder_slot(self)")
+        self.assertGreater(reserve, 0, "the slot must be reserved before spawning")
+        # The spawn that matters is the one AFTER the reservation; an earlier
+        # `decoder.restart()` in the same method is a different code path.
+        spawn = body.find("await dec.start()", reserve)
+        self.assertGreater(spawn, reserve,
+                           "`await dec.start()` must follow the reservation, "
+                           "otherwise concurrent listeners all pass the cap check")
+
+    def test_reservation_is_released_in_a_finally(self):
+        src = _read(self.BC)
+        start = src.find("async def apply_mode_side_effects(")
+        nxt = src.find("\n    async def ", start + 10)
+        body = src[start:nxt]
+        # BOTH the reservation and its release must be present and paired,
+        # otherwise a listener whose spawn is refused/fails leaks the slot
+        # forever and the cap silently shrinks.
+        reserve = body.find("Listener.reserve_decoder_slot(self)")
+        self.assertGreater(reserve, 0, "reserve_decoder_slot call missing")
+        self.assertIn("finally:", body,
+                      "a failed spawn must not leak the reserved slot")
+        release = body.find("Listener.release_decoder_slot(self)", reserve)
+        self.assertGreater(release, reserve,
+                           "release_decoder_slot must be called after the "
+                           "reservation (in the finally block)")
+
+    def test_count_includes_reservations(self):
+        src = _read(self.BC)
+        start = src.find("def decoder_process_count(")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    def ", start + 10)
+        body = src[start:nxt]
+        self.assertIn("_reserved_slots", body,
+                      "the reported count must include in-flight reservations, "
+                      "or the cap check sees a stale number")
+
+    def test_reserve_respects_the_cap(self):
+        src = _read(self.BC)
+        start = src.find("def reserve_decoder_slot(")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    @classmethod", start + 10)
+        body = src[start:nxt]
+        self.assertIn("DIGITAL_DECODE_MAX_PROC", body)
+        self.assertIn("return False", body,
+                      "reserve must refuse when the cap is already reached")
 
 
 if __name__ == "__main__":
