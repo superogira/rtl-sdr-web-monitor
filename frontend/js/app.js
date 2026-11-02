@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.16-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+    VERSION: 'v1.17-2026.11.01',  // Digital-mode BW row + refresh state fixes:
                                // a .bw-btn now exists for every width in
                                // _BW_CHOICES (6.25k / 12.5k were missing, which
                                // hid the whole BW row in every digital mode),
@@ -1909,8 +1909,16 @@ const App = {
         // Digital decoder health (only present on digital modes). Stored so the
         // status line can distinguish "idle channel" from "decoder broken".
         if (idx >= 0) {
+            const wasDigital = this._vfoDigital[idx];
             this._vfoDigital[idx] = !!digital;
             this._vfoDec[idx] = digital ? (dec || null) : null;
+            if (wasDigital !== !!digital) {
+                // The mode changed under this row: the smoothed level still
+                // carries the PREVIOUS mode's readings (an FM noise floor vs a
+                // DMR channel power), so blending across the switch made the
+                // number drift for a second. Re-acquire from the next frame.
+                this._vfoSigShown[idx] = -120;
+            }
         }
         // Effective squelch threshold in force (manual SQL, or what AUTO picked
         // from the noise floor). Shown next to the SIG bars as "SQL -83" so the

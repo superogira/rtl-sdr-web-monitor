@@ -609,5 +609,112 @@ class DigitalChipVisibilityTests(unittest.TestCase):
         )
 
 
+class ModeSwitchAudioLeakTests(unittest.TestCase):
+    """Switching to a digital mode must not emit the previous mode's audio.
+
+    Reported: with 2 VFOs already set to DMR, one row's level text bounced and
+    FM hiss was audible. The batch plan is built BEFORE the control message that
+    changes the mode can land, so the worker still had analog chunks queued for
+    a listener that had just turned digital — one burst of FM noise exactly as
+    the row switched. On the client the same thing happened with audio already
+    scheduled in the Web Audio queue.
+    """
+
+    BC = ROOT / "backend" / "audio" / "broadcaster.py"
+
+    def test_worker_drops_analog_after_a_switch_to_digital(self):
+        src = _read(self.BC)
+        start = src.find('for step in plan:')
+        self.assertGreater(start, 0, "plan loop not found")
+        window = src[start:start + 1200]
+        self.assertIn("_mode_changed_at", window,
+                      "the plan loop must drop analog chunks planned before a "
+                      "switch to a digital mode")
+        self.assertIn("DIGITAL_MODES", window)
+
+    def test_grace_constant_is_defined(self):
+        src = _read(self.BC)
+        m = re.search(r"_MODE_SWITCH_GRACE_S\s*=\s*([0-9.]+)", src)
+        self.assertIsNotNone(m, "_MODE_SWITCH_GRACE_S must be defined")
+        self.assertGreater(float(m.group(1)), 0.0)
+
+    def test_set_mode_records_the_change_time(self):
+        src = _read(self.BC)
+        start = src.find("def set_mode(self, mode)")
+        self.assertGreater(start, 0, "Listener.set_mode not found")
+        nxt = src.find("\n    async def ", start + 10)
+        body = src[start:nxt]
+        self.assertIn("_mode_changed_at", body,
+                      "set_mode must timestamp the change for the worker guard")
+
+    def test_listener_initialises_the_timestamp(self):
+        src = _read(self.BC)
+        self.assertRegex(src, r"self\._mode_changed_at\s*=\s*0\.0",
+                         "Listener.__init__ must initialise _mode_changed_at")
+
+
+class ClientQueueFlushTests(unittest.TestCase):
+    """The client must drop scheduled audio whenever the stream's mode changes.
+
+    The browser schedules up to ~30 buffers ahead (~3 s). Anything queued was
+    produced for the previous mode, so keeping it means hearing FM hiss while
+    the row already says DMR.
+    """
+
+    def test_push_mode_and_bw_flushes(self):
+        src = _read(AUDIO_JS)
+        start = src.find("_pushModeAndBw(idx) {")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    },", start)
+        body = src[start:nxt]
+        self.assertIn("_flushQueuedAudio()", body,
+                      "_pushModeAndBw must flush: it is the path that switches a "
+                      "brand-new listener off the global mode")
+
+    def test_ws_onopen_flushes(self):
+        src = _read(AUDIO_JS)
+        start = src.find("v.ws.onopen = () => {")
+        self.assertGreater(start, 0)
+        nxt = src.find("};", start)
+        body = src[start:nxt]
+        self.assertIn("_flushQueuedAudio()", body,
+                      "a (re)opened socket means a new listener: drop the audio "
+                      "scheduled for the previous one")
+
+    def test_flush_stops_nodes_and_reanchors(self):
+        src = _read(AUDIO_JS)
+        start = src.find("_flushQueuedAudio() {")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    },", start)
+        body = src[start:nxt]
+        for token in ("sourceNodes", "nextStartTime", ".stop()"):
+            self.assertIn(token, body, f"flush must handle {token}")
+
+
+class SigEmaModeResetTests(unittest.TestCase):
+    """The display EMA must restart when the row's mode changes.
+
+    Blending an FM noise-floor reading with a DMR channel-power reading made the
+    number drift for about a second after a switch.
+    """
+
+    def test_ema_resets_on_digital_flag_change(self):
+        src = _read(APP_JS)
+        start = src.find("_onVfoSig(idx, db, sqOpen, thr, auto, digital, dec) {")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    },", start)
+        body = src[start:nxt]
+        self.assertIn("wasDigital", body,
+                      "the handler must detect a digital-flag change")
+        # The reset must be INSIDE a real comparison of the flag, not merely
+        # present somewhere in the handler.
+        self.assertRegex(
+            body,
+            r"if \(wasDigital !== !!digital\) \{\s*\n(?:.*\n){0,8}?\s*"
+            r"this\._vfoSigShown\[idx\] = -120;",
+            "the display EMA must re-acquire inside the flag-change branch",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

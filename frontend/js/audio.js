@@ -34,7 +34,7 @@ const LiveAudio = {
     // Version of this file. Bumped on every change (same convention as App's
     // VERSION) so the dashboard can show which build the browser actually
     // loaded — useful to confirm a hard refresh picked up new code.
-    VERSION: 'v1.3-2026.11.01',
+    VERSION: 'v1.4-2026.11.01',
     // v1.2: _audioEverStarted is raised by start() and toggle(), so App can
     // tell "no listener yet" (per-user preference, do not touch global SDR
     // settings) from "listening" (per-listener overrides are safe).
@@ -530,6 +530,15 @@ const LiveAudio = {
         if (!isNaN(bw) && bw > 0) {
             this._sendControlVfo(idx, { type: "bandwidth", bandwidth: bw });
         }
+        // Drop audio queued under the OLD mode.
+        //
+        // A freshly created server-side listener starts on the SDR's GLOBAL mode
+        // (usually FM) and is only now told to switch, so anything already
+        // scheduled for this VFO was produced by the previous mode. Keeping it
+        // meant the operator heard FM hiss for up to ~3 s while the row already
+        // showed DMR — and which VFO exhibited it depended on how much audio
+        // that particular VFO had buffered.
+        this._flushQueuedAudio();
     },
     setSquelch(levelDb) { return this.sendControlAll({ type: "squelch", level: Number(levelDb) }); },
     setAutoSquelch(enabled) { return this.sendControlAll({ type: "auto_squelch", enabled: Boolean(enabled) }); },
@@ -610,6 +619,12 @@ const LiveAudio = {
 
             v.ws.onopen = () => {
                 this._updateStatus("🟢");
+                // A (re)opened socket means a BRAND-NEW server-side listener,
+                // which starts on the global mode and is only switched by the
+                // control messages below. Anything still scheduled was produced
+                // for the previous listener/mode, so drop it before the first
+                // frame of the new stream is queued.
+                this._flushQueuedAudio();
                 // Claim THIS listener at this VFO's cursor so it does not fall
                 // back to the server's global VFO (center).
                 if (typeof App !== 'undefined') {

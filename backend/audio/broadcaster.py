@@ -114,6 +114,13 @@ _IQ_QUEUE_MAX = 16
 # without flooding the WebSocket. The level itself is updated every chunk; we
 # only THROTTLE the wire send.
 _SIG_FRAME_INTERVAL = 0.10
+# How long after a mode change the worker keeps dropping ANALOG audio for a
+# listener that is now digital. The batch plan is built before control messages
+# can land, so a chunk demodulated as FM can otherwise be emitted right after the
+# switch — an audible burst of noise as the row turns digital. One batch is
+# ~0.4 s at the 50 ms IQ cadence; 0.6 s covers it with margin without muting a
+# real transmission (digital audio comes from the decoder, not this path).
+_MODE_SWITCH_GRACE_S = 0.6
 # Max number of IQ packets the per-listener worker merges into ONE demod call.
 # Demod has a large per-call overhead (executor submit + filter warmup), so
 # batching N chunks into one call is much cheaper than N separate calls. 8 is
@@ -206,6 +213,9 @@ class Listener:
         # on the next worker tick, because its internal state belongs to the
         # signal heard at the OLD frequency.
         self._decoder_restart_pending = False
+        # monotonic() timestamp of the last mode change. The worker uses it to
+        # drop analog audio planned before a switch to a digital mode.
+        self._mode_changed_at = 0.0
         # Rate of the audio this listener currently produces. It is NOT always
         # `audio_rate`: in a digital mode the decoder emits 8 kHz, and durations
         # and WAV headers must use the real one (see stop_listener_recording).
@@ -319,6 +329,12 @@ class Listener:
         starts or stops the decoder as required.
         """
         m = mode if isinstance(mode, DemodMode) else DemodMode(mode)
+        if m is not self.mode:
+            # Remember that the mode just changed. The worker caches a plan for
+            # a whole batch of IQ packets BEFORE this call can land, so without
+            # a marker it would still emit one analog chunk after the switch —
+            # an audible burst of FM noise right as the row turns digital.
+            self._mode_changed_at = time.monotonic()
         self.mode = m
         # StreamingDemodulator auto-resets its filter state on mode change
         # inside process(), so no explicit reset is needed here.
@@ -972,6 +988,14 @@ class AudioBroadcaster:
                         if step[0] == "digital":
                             await self._process_digital_packet(
                                 ln, step[1], last_sample_rate)
+                            continue
+                        # The plan was built before this batch's control messages
+                        # could land, so a step can still be analog audio for a
+                        # listener that has JUST switched to a digital mode.
+                        # Emitting it plays one burst of FM noise exactly when the
+                        # row turns digital. Drop those chunks.
+                        if ln.mode in DIGITAL_MODES and \
+                                (time.monotonic() - ln._mode_changed_at) < _MODE_SWITCH_GRACE_S:
                             continue
                         if step[0] == "reuse":
                             _, audio, gsig = step
