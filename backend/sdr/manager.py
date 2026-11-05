@@ -43,6 +43,23 @@ from backend.sdr.vfo_limit import (  # noqa: E402  (kept next to its users)
 
 # Persisted SDR settings (host/port/freq/etc.) so UI changes survive restarts.
 SDR_SETTINGS_FILE = Path("data/sdr_settings.json")
+
+# Sanity ranges for the tuner values stored in a device's config.
+#
+# _apply_device_config() trusts the device row as that device's own tuner
+# defaults (Devices & Settings), but a stale/blank entry must never be pushed
+# into the client: applying a 0 Hz frequency or a 0 SPS rate is exactly the
+# "Failed to connect to RTL-TCP" failure that made these fields be skipped
+# before. Anything outside these bounds is ignored, leaving the last good value.
+_FREQ_MIN_HZ = 24_000_000          # R820T/R828D practical lower limit
+_FREQ_MAX_HZ = 1_766_000_000       # ... and upper limit
+_SAMPLE_RATE_MIN = 225_001         # librtlsdr minimum
+_SAMPLE_RATE_MAX = 3_200_000       # librtlsdr maximum
+_GAIN_MIN_DB = 0
+_GAIN_MAX_DB = 60
+_PPM_MIN = -200
+_PPM_MAX = 200
+
 # Default values mirroring settings.* so a missing file still works.
 _DEFAULT_SDR_SETTINGS = {
     "host": settings.RTL_TCP_HOST,
@@ -160,6 +177,11 @@ class SDRManager:
         # Controls how far from center the VFO can tune (max_offset = sample_rate * ratio).
         self._vfo_margin_ratio: float = 0.40
         self._active_device_id: Optional[str] = None
+        # True while _apply_device_config() is pushing a device row into the
+        # client. sync_active_device_config() skips its write-back during this
+        # window so activate_device() cannot echo the row straight back (which
+        # would hide validation issues and fight freshly saved values).
+        self._applying_device_config: bool = False
         # Per-device waterfall dB range (cached from active device config).
         # When None, the frontend falls back to its global/localStorage values.
         self._device_waterfall_db_min: Optional[int] = None
@@ -411,19 +433,37 @@ class SDRManager:
             )
             return result.scalar_one_or_none()
 
+    @staticmethod
+    def _coerce_int(value) -> Optional[int]:
+        """Best-effort int() that returns None for blank/garbage input.
+
+        Device config comes from a JSON blob the operator can edit and from rows
+        written by older versions, so a value can be "", null, "abc" or a float.
+        None means "no usable value" and the caller keeps what it already has.
+        """
+        if value is None or value == "" or isinstance(value, bool):
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
     def _apply_device_config(self, device) -> None:
-        """Apply a device's connection config to the client.
+        """Apply a device's connection config + tuner defaults to the client.
 
-        For rtl_tcp devices: stores host/port.
-        For usb devices: stores device_index/serial.
+        For rtl_tcp devices: host/port.
+        For usb devices: device_index/serial.
 
-        Per the new recording-jobs design, device config stores ONLY
-        connection parameters (+ optional note). Tuner parameters
-        (frequency/sample_rate/gain/ppm) are intentionally NOT part of the
-        device config anymore — they are managed per recording-job window
-        and via the legacy live tuner endpoints. We keep the current client
-        tuner values untouched here so switching active devices does not
-        clobber the live frequency with a stale/dummy value.
+        The device row is the SOURCE OF TRUTH for its OWN tuner defaults (the
+        operator set them in Devices & Settings), so switching the active device
+        applies that device's frequency / sample rate / gain / ppm — otherwise
+        the dashboard kept showing the PREVIOUS device's values and a save from
+        one tab could land on another device's row (see
+        sync_active_device_config).
+
+        Values are validated before use: a stale 0 / out-of-range entry must not
+        break the connection. That failure mode is why these were originally
+        skipped ("apply an old/dummy frequency and break the live connection").
 
         Sync; only updates the in-memory client target. The caller is
         responsible for (re)connecting if desired.
@@ -431,57 +471,52 @@ class SDRManager:
         cfg = device.get_config()
         device_type = getattr(device, 'type', None) or 'rtl_tcp'
 
-        # Cache the active device type + USB params for connect()
-        self._active_device_type = device_type
-        self._active_device_index = None
-        self._active_serial = None
-
-        if device_type == "usb":
-            # USB device: cache device_index / serial
-            serial = str(cfg.get("serial") or "").strip()
-            try:
-                device_index = int(cfg.get("device_index", 0))
-            except (TypeError, ValueError):
-                device_index = 0
-            if serial:
-                self._active_serial = serial
-            self._active_device_index = device_index
-        else:
-            # rtl_tcp device: set host/port on the client
-            host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
-            port = int(cfg.get("port") or settings.RTL_TCP_PORT)
-            self.client.set_connection(host, port)
-
-        # NOTE: We deliberately do NOT overwrite frequency/sample_rate/gain/ppm
-        # from the device config. Those values are now per-recording-job.
-        # We do, however, accept them if present (backward compat with rows
-        # created before the schema change) — but never with a 0/falsey value.
-        if cfg.get("frequency"):
-            self.client._frequency = int(cfg["frequency"])
-        if cfg.get("sample_rate"):
-            self.client._sample_rate = int(cfg["sample_rate"])
-        if cfg.get("gain") is not None and cfg.get("gain") != "":
-            try:
-                self.client._gain = int(cfg["gain"])
-            except (TypeError, ValueError):
-                pass
-        if cfg.get("freq_correction_ppm") is not None and cfg.get("freq_correction_ppm") != "":
-            try:
-                self.client._ppm = int(cfg["freq_correction_ppm"])
-            except (TypeError, ValueError):
-                pass
-        # Cache per-device waterfall dB range (frontend applies device-specific
-        # color scale on "ฟังสด"). None/missing → frontend uses global/localStorage.
+        # Suppress the write-back while we are the ones mutating the client.
+        prev_flag = self._applying_device_config
+        self._applying_device_config = True
         try:
-            _wmin = cfg.get("waterfall_db_min")
-            self._device_waterfall_db_min = int(_wmin) if _wmin is not None else None
-        except (TypeError, ValueError):
-            self._device_waterfall_db_min = None
-        try:
-            _wmax = cfg.get("waterfall_db_max")
-            self._device_waterfall_db_max = int(_wmax) if _wmax is not None else None
-        except (TypeError, ValueError):
-            self._device_waterfall_db_max = None
+            # Cache the active device type + USB params for connect()
+            self._active_device_type = device_type
+            self._active_device_index = None
+            self._active_serial = None
+
+            if device_type == "usb":
+                # USB device: cache device_index / serial
+                serial = str(cfg.get("serial") or "").strip()
+                try:
+                    device_index = int(cfg.get("device_index", 0))
+                except (TypeError, ValueError):
+                    device_index = 0
+                if serial:
+                    self._active_serial = serial
+                self._active_device_index = device_index
+            else:
+                # rtl_tcp device: set host/port on the client
+                host = str(cfg.get("host") or settings.RTL_TCP_HOST).strip()
+                port = int(cfg.get("port") or settings.RTL_TCP_PORT)
+                self.client.set_connection(host, port)
+
+            # Apply the device's own tuner defaults, validated.
+            freq = self._coerce_int(cfg.get("frequency"))
+            if freq is not None and _FREQ_MIN_HZ <= freq <= _FREQ_MAX_HZ:
+                self.client._frequency = freq
+            sr = self._coerce_int(cfg.get("sample_rate"))
+            if sr is not None and _SAMPLE_RATE_MIN <= sr <= _SAMPLE_RATE_MAX:
+                self.client._sample_rate = sr
+            gain = self._coerce_int(cfg.get("gain"))
+            if gain is not None and _GAIN_MIN_DB <= gain <= _GAIN_MAX_DB:
+                self.client._gain = gain
+            ppm = self._coerce_int(cfg.get("freq_correction_ppm"))
+            if ppm is not None and _PPM_MIN <= ppm <= _PPM_MAX:
+                self.client._ppm = ppm
+
+            # Cache per-device waterfall dB range (frontend applies a
+            # device-specific color scale on "ฟังสด"). None/missing → the
+            # frontend falls back to its global/per-tab value.
+            self._device_waterfall_db_min = self._coerce_int(cfg.get("waterfall_db_min"))
+            self._device_waterfall_db_max = self._coerce_int(cfg.get("waterfall_db_max"))
+        finally:
+            self._applying_device_config = prev_flag
         # Keep legacy sdr_settings.json in sync
         self._save_persisted_settings()
         if device_type == "usb":
@@ -582,19 +617,31 @@ class SDRManager:
         return {"success": True, "device": device_dict, "status": self.status}
 
     async def sync_active_device_config(self) -> None:
-        """Persist current client tuner values back to the active device.
+        """Persist the live tuner values back to THIS RUNTIME's device.
 
-        Called whenever host/port/freq/gain/ppm change via the legacy endpoints
-        so the active device row stays in sync with the live client state.
-        Silently no-ops if there is no active device.
+        Was: `select(...).where(is_active == True)` — the single DB-active row.
+        A per-device runtime (see live_runtime.py) serves a device that is NOT
+        the DB-active one, so its tuner changes were written onto somebody
+        else's row: that is how RTL_TCP-007's settings ended up on RTL-TCP-005
+        (both rows showed gain=49 / ppm=27, the live client's values).
+
+        The legacy global runtime (`_active_device_id` unset) owns no row, so
+        there is nothing to persist — the legacy sdr_settings.json file already
+        covers it via _save_persisted_settings().
         """
         try:
             from backend.models.sdr_device import SdrDevice
+            target_id = self._active_device_id
+            if not target_id or target_id == "_legacy":
+                return
+            # Never write back while WE are the ones applying a device config:
+            # activate_device() sets the client from the row, and echoing that
+            # straight back would mask validation problems and fight the user's
+            # freshly saved values.
+            if getattr(self, "_applying_device_config", False):
+                return
             async with async_session() as session:
-                result = await session.execute(
-                    select(SdrDevice).where(SdrDevice.is_active == True)  # noqa: E712
-                )
-                device = result.scalar_one_or_none()
+                device = await session.get(SdrDevice, target_id)
                 if device is None:
                     return
                 cfg = device.get_config()
@@ -606,6 +653,11 @@ class SDRManager:
                 cfg["freq_correction_ppm"] = self.client._ppm
                 device.set_config(cfg)
                 await session.commit()
+                logger.debug(
+                    "Synced tuner values to device '%s' (%s): freq=%s sr=%s gain=%s ppm=%s",
+                    device.name, target_id, self.client._frequency,
+                    self.client._sample_rate, self.client._gain, self.client._ppm,
+                )
         except Exception as e:
             logger.warning(f"Failed to sync active device config: {e}")
 
