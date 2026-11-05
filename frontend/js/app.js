@@ -2,7 +2,7 @@
  * Main Application - RTL-SDR Monitor Dashboard
  */
 const App = {
-    VERSION: 'v1.17-2026.11.01',  // Digital-mode BW row + refresh state fixes:
+    VERSION: 'v1.18-2026.11.01',  // Digital-mode BW row + refresh state fixes:
                                // a .bw-btn now exists for every width in
                                // _BW_CHOICES (6.25k / 12.5k were missing, which
                                // hid the whole BW row in every digital mode),
@@ -3068,6 +3068,19 @@ const App = {
         this.waterfallCanvas = canvas;
         this.waterfallCtx = canvas.getContext('2d');
 
+        // Start this tab from ITS OWN saved scale when it has one (a reload of
+        // a window that used AUTO), otherwise from the global Display-tab
+        // default. Without this a reloaded tab would be snapped back to the
+        // shared value on the very first frame.
+        const _tabRange0 = this._getTabRange();
+        if (_tabRange0) {
+            this._dbMin = _tabRange0.min;
+            this._dbMax = _tabRange0.max;
+            this._colorLUTDbMin = null;
+            this._colorLUTDbMax = null;
+            console.log(`🌊 Waterfall dB range restored for this tab: [${this._dbMin}, ${this._dbMax}]`);
+        }
+
         // Offscreen back buffer holds only waterfall pixels (no grid).
         this._waterfallBackBuffer = document.createElement('canvas');
         this._waterfallBackCtx = this._waterfallBackBuffer.getContext('2d');
@@ -3404,10 +3417,16 @@ const App = {
         return true;
     },
 
-    /** Persist the current AUTO range so manual mode keeps it. */
+    /** Persist the current range for THIS TAB so manual mode keeps it.
+     *
+     *  Deliberately sessionStorage, not localStorage: writing the shared key
+     *  here is exactly what made pressing AUTO in one window recolour every
+     *  other window (they re-read `waterfall_db_min/max` on every frame). The
+     *  global Display-tab value stays untouched, so a NEW tab still starts from
+     *  the operator's configured scale.
+     */
     _saveAutoRange() {
-        localStorage.setItem('waterfall_db_min', String(this._dbMin));
-        localStorage.setItem('waterfall_db_max', String(this._dbMax));
+        this._setTabRange(this._dbMin, this._dbMax);
     },
 
     _colorLUT: null,  // Color Lookup Table (256 entries) for fast rendering
@@ -3479,10 +3498,12 @@ const App = {
     },
 
     _renderWaterfall() {
-        // Read live settings from localStorage when not in auto mode.
-        // The colour range is GLOBAL (Settings → Display) by design: the
-        // per-device override was removed on purpose in commit 9d86190, so
-        // there is no device flag to consider here.
+        // Keep the live range in sync when AUTO is not driving it.
+        //
+        // These getters return THIS TAB's saved range (sessionStorage) when it
+        // has one, otherwise the global Display-tab default (localStorage).
+        // AUTO in another window therefore no longer changes the colour scale
+        // here — see _getTabRange() / _saveAutoRange().
         if (this._autoMode === 'off') {
             this._dbMin = this.waterfallDbMin;
             this._dbMax = this.waterfallDbMax;
@@ -4007,17 +4028,53 @@ const App = {
         localStorage.setItem('signal_tag_enabled', String(val));
     },
 
-    // Waterfall dB range (global, from localStorage / Display tab).
-    // NOTE: Per-device values from the active device's config take priority
-    // when "ฟังสด" is active — see _applyDeviceWaterfallRange().
+    // === Per-TAB waterfall dB range ===
+    //
+    // localStorage is SHARED by every tab of a browser, so pressing AUTO in one
+    // window used to recolour the waterfall in all the others: AUTO wrote
+    // `waterfall_db_min/max` there and every other tab re-read those keys on
+    // each frame. sessionStorage is per-tab (Chrome/Firefox/Safari all scope it
+    // to the tab), so each window keeps its own scale.
+    //
+    // The localStorage keys stay as the DEFAULT a fresh tab starts from, and as
+    // the global value written by Settings → Display.
+    _getTabRange() {
+        try {
+            const lo = sessionStorage.getItem('wf_db_min_tab');
+            const hi = sessionStorage.getItem('wf_db_max_tab');
+            if (lo === null || hi === null) return null;
+            const min = Number(lo);
+            const max = Number(hi);
+            if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+                return null;
+            }
+            return { min, max };
+        } catch { return null; }
+    },
+    _setTabRange(min, max) {
+        try {
+            sessionStorage.setItem('wf_db_min_tab', String(min));
+            sessionStorage.setItem('wf_db_max_tab', String(max));
+        } catch { /* private mode / quota — fall back to in-memory only */ }
+    },
+
+    // Waterfall dB range. Priority:
+    //   1. this tab's own AUTO/manual range (sessionStorage) — see _saveAutoRange
+    //   2. the global default from Settings → Display (localStorage)
     get waterfallDbMin() {
+        const tab = this._getTabRange();
+        if (tab) return tab.min;
         return parseInt(localStorage.getItem('waterfall_db_min') || '-110');
     },
     set waterfallDbMin(val) {
+        // Written by Settings → Display: that is the GLOBAL default, so it goes
+        // to localStorage. The running tab keeps its own value in sessionStorage.
         localStorage.setItem('waterfall_db_min', val);
         this._dbMin = val;
     },
     get waterfallDbMax() {
+        const tab = this._getTabRange();
+        if (tab) return tab.max;
         return parseInt(localStorage.getItem('waterfall_db_max') || '-55');
     },
     set waterfallDbMax(val) {

@@ -807,5 +807,83 @@ class ProcessCapRaceTests(unittest.TestCase):
                       "reserve must refuse when the cap is already reached")
 
 
+class PerTabWaterfallRangeTests(unittest.TestCase):
+    """AUTO in one browser window must not recolour another window's waterfall.
+
+    Reported: two windows, pressing AUTO in one changed the colours in the
+    other. `localStorage` is shared by every tab of a browser and the pre-fix
+    code wrote the computed range there (`_saveAutoRange`) while
+    `_renderWaterfall()` re-read the same keys on every frame.
+
+    The fix keeps the live range in sessionStorage (per-tab) and leaves the
+    localStorage keys as the global default a NEW tab starts from, plus the
+    value Settings -> Display writes.
+    """
+
+    def test_save_auto_range_uses_session_storage(self):
+        src = _read(APP_JS)
+        start = src.find("_saveAutoRange() {")
+        self.assertGreater(start, 0, "_saveAutoRange not found")
+        nxt = src.find("\n    },", start)
+        body = src[start:nxt]
+        self.assertIn("_setTabRange", body,
+                      "AUTO must persist to this tab's own range")
+        self.assertNotIn("localStorage.setItem('waterfall_db_min'", body,
+                         "AUTO must NOT write the shared localStorage key — that "
+                         "is what recoloured every other window")
+
+    def test_getters_prefer_the_tab_range(self):
+        src = _read(APP_JS)
+        for name in ("get waterfallDbMin()", "get waterfallDbMax()"):
+            start = src.find(name)
+            self.assertGreater(start, 0, f"{name} not found")
+            nxt = src.find("\n    },", start)
+            body = src[start:nxt]
+            self.assertIn("_getTabRange", body,
+                          f"{name} must consult the per-tab range first")
+            self.assertIn("localStorage.getItem", body,
+                          f"{name} must fall back to the global default")
+
+    def test_tab_range_helpers_use_session_storage(self):
+        src = _read(APP_JS)
+        for fn in ("_getTabRange() {", "_setTabRange(min, max) {"):
+            start = src.find(fn)
+            self.assertGreater(start, 0, f"{fn} not found")
+            nxt = src.find("\n    },", start)
+            self.assertIn("sessionStorage", src[start:nxt],
+                          f"{fn} must use sessionStorage (per-tab)")
+
+    def test_boot_restores_the_tab_range(self):
+        src = _read(APP_JS)
+        start = src.find("initWaterfall() {")
+        self.assertGreater(start, 0)
+        nxt = src.find("\n    },", start + 10)
+        body = src[start:nxt]
+        self.assertIn("_getTabRange", body,
+                      "a reloaded tab must start from its own saved range")
+        self.assertIn("_dbMin", body)
+
+    def test_settings_setters_still_write_the_global_default(self):
+        src = _read(APP_JS)
+        for name in ("set waterfallDbMin(val) {", "set waterfallDbMax(val) {"):
+            start = src.find(name)
+            self.assertGreater(start, 0, f"{name} not found")
+            nxt = src.find("\n    },", start)
+            body = src[start:nxt]
+            self.assertIn("localStorage.setItem", body,
+                          f"{name} is the Settings -> Display write path and must "
+                          f"keep updating the global default")
+
+    def test_tab_range_rejects_invalid_values(self):
+        src = _read(APP_JS)
+        start = src.find("_getTabRange() {")
+        nxt = src.find("\n    },", start)
+        body = src[start:nxt]
+        self.assertIn("Number.isFinite", body,
+                      "corrupt sessionStorage must not poison the colour scale")
+        self.assertIn("max <= min", body,
+                      "an inverted range must be rejected")
+
+
 if __name__ == "__main__":
     unittest.main()
