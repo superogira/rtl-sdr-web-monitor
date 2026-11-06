@@ -214,6 +214,32 @@ async def set_vfo_margin(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class SquelchGateRequest(BaseModel):
+    hysteresis_db: Optional[float] = None   # 0–12 dB
+    release_alpha: Optional[float] = None   # 0.05–0.90
+
+
+@router.post("/squelch-gate")
+async def set_squelch_gate(
+    req: SquelchGateRequest,
+    current_user: User = Depends(require_admin),
+):
+    """Set the squelch gate shape (admin only).
+
+    `hysteresis_db` — how far BELOW the SQL threshold the level must fall before
+    audio mutes. Was hardcoded at 4.0 dB, so SQL -60 only went quiet at -64.
+
+    `release_alpha` — how fast the measured level follows a fading signal
+    (higher = tighter gate, livelier meter).
+
+    Both apply immediately to every connected listener and persist across
+    restarts (app settings sdr_squelch_hysteresis_db / sdr_squelch_release_alpha).
+    """
+    return await sdr_manager.set_squelch_gate(
+        hysteresis_db=req.hysteresis_db, release_alpha=req.release_alpha,
+    )
+
+
 class MaxListenersRequest(BaseModel):
     max_listeners: int  # 1–128
 

@@ -108,8 +108,8 @@ class ManualSquelchTests(unittest.TestCase):
     def test_hysteresis_prevents_chatter(self):
         """A level inside the hysteresis band must not re-open a closed gate."""
         ln = _listener(-70.0)
-        # SQL -70, hysteresis 4 dB → the gate only opens at >= -70.
-        # -72 dB must never open it, no matter how long it lasts.
+        # SQL -70; below the OPEN threshold (-70) the gate must stay shut no
+        # matter how long the level lasts.
         self.assertFalse(any(_feed(ln, -72.0, 20)))
 
     def test_disabled_sentinel_passes_everything(self):

@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
     # Load configurable VFO passband margin from app settings
     from backend.sdr.manager import sdr_manager
     await sdr_manager.load_vfo_margin_ratio()
+    await sdr_manager.load_squelch_gate()
     # Load configurable max concurrent listeners from app settings
     await sdr_manager.load_max_listeners()
     # Load the active SDR device's config from the registry (overrides the

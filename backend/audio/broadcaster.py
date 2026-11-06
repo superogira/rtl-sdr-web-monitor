@@ -77,7 +77,19 @@ _SQUELCH_EMA = _SQUELCH_EMA_RELEASE
 # Hysteresis in dB: once the gate is open, the signal must drop this far BELOW
 # the squelch threshold before it closes again. Prevents rapid open/close
 # "chatter" when the signal hovers right at the threshold (classic squelch tail).
-_SQUELCH_HYSTERESIS_DB = 4.0
+#
+# Operator-configurable (System Policy -> Squelch Hysteresis, stored as
+# "sdr_squelch_hysteresis_db"). Was a hardcoded 4.0, which meant SQL -60 only
+# muted at -64 -- reported as "the gap feels too wide". 2.0 keeps the tail short
+# while still damping chatter on a signal that straddles the threshold.
+_SQUELCH_HYSTERESIS_DB = 2.0
+# Accepted range for the setting. 0 disables it (a signal sitting exactly on the
+# threshold will chatter); 12 is very sticky.
+SQUELCH_HYSTERESIS_MIN_DB = 0.0
+SQUELCH_HYSTERESIS_MAX_DB = 12.0
+# Accepted range for the EMA release factor (System Policy -> Squelch Speed).
+RELEASE_ALPHA_MIN = 0.05
+RELEASE_ALPHA_MAX = 0.90
 # Hang time (seconds): after the signal drops below the close threshold the gate
 # stays open this long before muting. Covers the gap between words/syllables and
 # the short pauses in a conversation, so speech does not stutter on/off.
@@ -253,6 +265,14 @@ class Listener:
         # the noise floor / เสียงซ่า) so existing listeners are unaffected
         # unless a squelch value is explicitly set.
         self.squelch_db = -120.0
+        # How far BELOW squelch_db the level must fall before the gate closes.
+        # Per listener so a running change can be pushed to every listener; the
+        # broadcaster seeds it from the global value at subscribe time.
+        self.squelch_hysteresis_db = _SQUELCH_HYSTERESIS_DB
+        # EMA release factor for the level that drives the gate. Lower = the
+        # measured level follows a fading signal faster (shorter effective tail)
+        # but reacts more to noise. See _SQUELCH_EMA_RELEASE.
+        self.squelch_release_alpha = _SQUELCH_EMA_RELEASE
         # Auto-squelch (per-listener): when on, the threshold tracks the noise
         # floor adaptively via AutoSquelchEstimator (same estimator the JOB
         # path uses). Off by default; toggled from the Dashboard.
@@ -528,7 +548,7 @@ class Listener:
             self._sig_fresh = False
             return self._sig_smoothed
         alpha = (_SQUELCH_EMA_ATTACK if level_db > self._sig_smoothed
-                 else _SQUELCH_EMA_RELEASE)
+                 else self.squelch_release_alpha)
         self._sig_smoothed = alpha * level_db + (1.0 - alpha) * self._sig_smoothed
         return self._sig_smoothed
 
@@ -616,6 +636,11 @@ class AudioBroadcaster:
         # VFO passband margin ratio (kept in sync by SDRManager from app
         # settings). Listener offsets are clamped to ±sample_rate * ratio.
         self.vfo_margin_ratio = 0.40
+        # Global squelch hysteresis (dB) applied to every listener. Configurable
+        # from System Policy; new listeners are seeded from it in subscribe().
+        self.squelch_hysteresis_db = _SQUELCH_HYSTERESIS_DB
+        # EMA release factor seeded into each new listener (squelch speed).
+        self.squelch_release_alpha = _SQUELCH_EMA_RELEASE
         # Configurable maximum simultaneous listeners (set by admin via
         # settings page). Defaults to a conservative 8; range 1–128.
         self.max_listeners = 8
@@ -706,6 +731,48 @@ class AudioBroadcaster:
         self.max_listeners = n
         return n
 
+    def set_squelch_hysteresis(self, value: float) -> float:
+        """Set the squelch close-hysteresis (dB) for every listener.
+
+        How far BELOW the SQL threshold the level must fall before audio mutes.
+        Clamped to [SQUELCH_HYSTERESIS_MIN_DB, SQUELCH_HYSTERESIS_MAX_DB] and
+        returned so the caller can confirm what was applied.
+
+        Was a hardcoded 4.0 dB, so SQL -60 only went quiet at -64; the operator
+        reported that gap as too wide. 0 disables it (the gate then closes
+        exactly at the threshold and chatters on a signal hovering there).
+        """
+        v = float(value)
+        if v < SQUELCH_HYSTERESIS_MIN_DB:
+            v = SQUELCH_HYSTERESIS_MIN_DB
+        elif v > SQUELCH_HYSTERESIS_MAX_DB:
+            v = SQUELCH_HYSTERESIS_MAX_DB
+        self.squelch_hysteresis_db = v
+        # Apply to listeners that already exist so the change takes effect on
+        # the next chunk instead of only for new connections.
+        for ln in self._listeners.values():
+            ln.squelch_hysteresis_db = v
+        return v
+
+    def set_squelch_release_alpha(self, value: float) -> float:
+        """Set the EMA release factor used by the squelch gate (0.05-0.90).
+
+        The gap between the SQL threshold and where audio actually mutes is the
+        hysteresis PLUS the time this filter needs to follow the fading signal.
+        With the old 0.4 the smoothed level needed ~0.5 s to reach the close
+        threshold, which read as several extra dB of tail. Higher = follows
+        faster (tighter gate, livelier meter); lower = smoother but slower.
+        """
+        v = float(value)
+        if v < RELEASE_ALPHA_MIN:
+            v = RELEASE_ALPHA_MIN
+        elif v > RELEASE_ALPHA_MAX:
+            v = RELEASE_ALPHA_MAX
+        self.squelch_release_alpha = v
+        for ln in self._listeners.values():
+            ln.squelch_release_alpha = v
+        return v
+
     @property
     def listener_count(self) -> int:
         return len(self._listeners)
@@ -757,6 +824,11 @@ class AudioBroadcaster:
             connection_id=connection_id,
             username=username,
         )
+        # Seed this listener with the current global hysteresis so it behaves
+        # like the others from its first chunk (System Policy can change it at
+        # run time; set_squelch_hysteresis() updates live listeners too).
+        listener.squelch_hysteresis_db = self.squelch_hysteresis_db
+        listener.squelch_release_alpha = self.squelch_release_alpha
         # Seed the tuner center so recording labels/splits are correct from the
         # very first chunk (SDRManager keeps it updated afterwards).
         if center_freq_hz:
@@ -1481,7 +1553,7 @@ class AudioBroadcaster:
             return audio
         else:
             open_thr = listener.squelch_db
-            close_thr = listener.squelch_db - _SQUELCH_HYSTERESIS_DB
+            close_thr = listener.squelch_db - listener.squelch_hysteresis_db
             listener._sq_threshold_db = listener.squelch_db
 
         level = listener._sig_smoothed
@@ -1660,7 +1732,7 @@ class AudioBroadcaster:
             gate_open = True
         else:
             open_thr = ln.record_squelch_db
-            close_thr = ln.record_squelch_db - _SQUELCH_HYSTERESIS_DB
+            close_thr = ln.record_squelch_db - ln.squelch_hysteresis_db
             gate_open = (level >= open_thr) if not ln._ar_recording else (level >= close_thr)
 
         if gate_open:

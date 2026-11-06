@@ -713,6 +713,12 @@ const I18n = {
             'set.pol.save': '💾 บันทึกนโยบายระบบ',
             'set.pol.saveSuccess': '✅ บันทึกนโยบายระบบเรียบร้อย!',
             'set.pol.vfoFail': '⚠️ ตั้ง VFO Margin ไม่สำเร็จ: ',
+            'set.pol.sqHystLabel': 'Squelch Hysteresis (dB)',
+            'set.pol.sqHystHint': 'ระยะที่สัญญาณต้องต่ำกว่า SQL ก่อนเสียงจะเงียบ — ค่าน้อยตัดเสียงเร็ว ค่ามากทน noise แต่ tail ยาว',
+            'set.pol.sqHystCurrent': 'ปัจจุบัน: {db} dB',
+            'set.pol.sqSpeedLabel': 'Squelch Speed (release alpha)',
+            'set.pol.sqSpeedHint': 'ความเร็วที่ระดับสัญญาณจะลดตามสัญญาณที่ fading — ค่าสูงตัดไวขึ้น',
+            'set.pol.sqFail': '⚠️ ตั้ง Squelch Gate ไม่สำเร็จ: ',
             'set.pol.listenersFail': '⚠️ ตั้ง Max Listeners ไม่สำเร็จ: ',
 
             /* Users section */
@@ -1773,6 +1779,12 @@ const I18n = {
             'set.pol.save': '💾 Save System Policy',
             'set.pol.saveSuccess': '✅ System policy saved!',
             'set.pol.vfoFail': '⚠️ Failed to set VFO Margin: ',
+            'set.pol.sqHystLabel': 'Squelch Hysteresis (dB)',
+            'set.pol.sqHystHint': 'How far below the SQL threshold the signal must fall before audio mutes — lower mutes sooner, higher rides out noise but leaves a longer tail',
+            'set.pol.sqHystCurrent': 'Current: {db} dB',
+            'set.pol.sqSpeedLabel': 'Squelch Speed (release alpha)',
+            'set.pol.sqSpeedHint': 'How fast the measured level follows a fading signal — higher mutes sooner',
+            'set.pol.sqFail': '⚠️ Failed to set Squelch Gate: ',
             'set.pol.listenersFail': '⚠️ Failed to set Max Listeners: ',
 
             /* Users section */

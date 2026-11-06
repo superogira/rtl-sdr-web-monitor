@@ -284,6 +284,12 @@ class SDRManager:
             ), 1),
             "listeners": self._broadcaster.listener_count,
             "max_listeners": self._broadcaster.max_listeners,
+            # Squelch gate shape (System Policy). hysteresis = how far BELOW the
+            # SQL threshold the level must fall; release_alpha = how quickly the
+            # measured level follows a fading signal. Together they decide where
+            # audio actually mutes.
+            "squelch_hysteresis_db": round(self._broadcaster.squelch_hysteresis_db, 1),
+            "squelch_release_alpha": round(self._broadcaster.squelch_release_alpha, 2),
             "device_id": self._active_device_id,
             # Per-device waterfall dB range (None = use frontend global/localStorage).
             "waterfall_db_min": self._device_waterfall_db_min,
@@ -964,6 +970,53 @@ class SDRManager:
         """Set VFO by absolute frequency. Computes offset from center freq."""
         offset = float(freq_hz) - float(self.client._frequency)
         return self.set_vfo_offset(offset)
+
+    async def load_squelch_gate(self) -> None:
+        """Load the squelch gate shape from app settings (startup).
+
+        Two knobs, both in System Policy:
+          sdr_squelch_hysteresis_db : dB below the SQL threshold before muting
+          sdr_squelch_release_alpha : EMA follow speed for the measured level
+        Missing/invalid values fall back to the module defaults.
+        """
+        from backend.audio.broadcaster import (
+            _SQUELCH_EMA_RELEASE, _SQUELCH_HYSTERESIS_DB,
+        )
+        try:
+            raw = await get_setting("sdr_squelch_hysteresis_db",
+                                    f"{_SQUELCH_HYSTERESIS_DB:.1f}")
+            self._broadcaster.set_squelch_hysteresis(float(raw))
+        except Exception as e:
+            logger.warning(f"Failed to load squelch hysteresis, using default: {e}")
+            self._broadcaster.set_squelch_hysteresis(_SQUELCH_HYSTERESIS_DB)
+        try:
+            raw = await get_setting("sdr_squelch_release_alpha",
+                                    f"{_SQUELCH_EMA_RELEASE:.2f}")
+            self._broadcaster.set_squelch_release_alpha(float(raw))
+        except Exception as e:
+            logger.warning(f"Failed to load squelch release alpha, using default: {e}")
+            self._broadcaster.set_squelch_release_alpha(_SQUELCH_EMA_RELEASE)
+        logger.info(
+            "Squelch gate loaded: hysteresis=%.1f dB, release_alpha=%.2f",
+            self._broadcaster.squelch_hysteresis_db,
+            self._broadcaster.squelch_release_alpha,
+        )
+
+    async def set_squelch_gate(self, hysteresis_db=None, release_alpha=None) -> dict:
+        """Apply + persist the squelch gate shape. Returns what was applied."""
+        out = {
+            "squelch_hysteresis_db": self._broadcaster.squelch_hysteresis_db,
+            "squelch_release_alpha": self._broadcaster.squelch_release_alpha,
+        }
+        if hysteresis_db is not None:
+            v = self._broadcaster.set_squelch_hysteresis(float(hysteresis_db))
+            await set_setting("sdr_squelch_hysteresis_db", f"{v:.1f}")
+            out["squelch_hysteresis_db"] = v
+        if release_alpha is not None:
+            v = self._broadcaster.set_squelch_release_alpha(float(release_alpha))
+            await set_setting("sdr_squelch_release_alpha", f"{v:.2f}")
+            out["squelch_release_alpha"] = v
+        return out
 
     async def load_vfo_margin_ratio(self) -> None:
         """Load VFO passband margin ratio from app settings (startup).

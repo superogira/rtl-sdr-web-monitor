@@ -128,6 +128,19 @@ const API = {
         async setVFOMargin(ratio) {
             return API.request('POST', API.sdr._url('/api/sdr/vfo-margin'), { ratio: parseFloat(ratio) });
         },
+        /* Squelch gate shape (System Policy). hysteresis_db = how far BELOW the
+           SQL threshold audio mutes; release_alpha = how fast the measured
+           level follows a fading signal. */
+        async setSquelchGate(hysteresisDb, releaseAlpha) {
+            const body = {};
+            if (hysteresisDb !== undefined && hysteresisDb !== null) {
+                body.hysteresis_db = parseFloat(hysteresisDb);
+            }
+            if (releaseAlpha !== undefined && releaseAlpha !== null) {
+                body.release_alpha = parseFloat(releaseAlpha);
+            }
+            return API.request('POST', API.sdr._url('/api/sdr/squelch-gate'), body);
+        },
         async getCapabilities() {
             return API.request('GET', API.sdr._url('/api/sdr/capabilities'));
         },
